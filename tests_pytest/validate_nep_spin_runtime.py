@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Standalone NEP_Spin validation for minimal CUDA hosts without pytest."""
 
+import argparse
+import concurrent.futures
 import json
 import math
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -15,6 +18,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin" / "spin_chiral_protocol"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", ROOT / "src" / "gpumd"))
+GPU_IDS = [
+    item.strip()
+    for item in os.environ.get("GPUMD_VALIDATOR_GPU_IDS", "").split(",")
+    if item.strip()
+]
+GPU_POOL = queue.Queue()
+for gpu_id in GPU_IDS:
+    GPU_POOL.put(gpu_id)
 
 
 def run_case(root, name, model_text, xyz_text, run_text=None):
@@ -31,8 +42,21 @@ def run_case(root, name, model_text, xyz_text, run_text=None):
             "dump_xyz -1 0 1 result.xyz force potential spin mforce virial\n"
             "run 1\n")
     (case / "run.in").write_text(run_text)
-    result = subprocess.run(
-        [str(GPUMD)], cwd=case, capture_output=True, text=True, check=False)
+    gpu_id = GPU_POOL.get() if GPU_IDS else None
+    try:
+        environment = os.environ.copy()
+        if gpu_id is not None:
+            environment["CUDA_VISIBLE_DEVICES"] = gpu_id
+        result = subprocess.run(
+            [str(GPUMD)],
+            cwd=case,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False)
+    finally:
+        if gpu_id is not None:
+            GPU_POOL.put(gpu_id)
     return case, result
 
 
@@ -94,17 +118,27 @@ def strain_xyz(text, position_axis, force_axis, epsilon):
     return "\n".join(lines) + "\n"
 
 
-def plateau_derivative(root, prefix, model, make_xyz, steps):
+def plateau_derivative(root, prefix, model, make_xyz, steps, executor):
+    futures = {}
+    for index, step in enumerate(steps):
+        futures[(index, 1)] = executor.submit(
+            run_case, root, f"{prefix}_p_{index}", model, make_xyz(step))
+        futures[(index, -1)] = executor.submit(
+            run_case, root, f"{prefix}_m_{index}", model, make_xyz(-step))
+
+    energies = {}
+    for key, future in futures.items():
+        directory, result = future.result()
+        energies[key] = read_frame(directory / "result.xyz")["energy"][0]
+        if result.returncode:
+            raise RuntimeError(
+                f"{prefix} finite-difference run failed:\n"
+                f"{result.stdout}{result.stderr}")
+
     derivatives = []
     for index, step in enumerate(steps):
-        plus_dir, plus_result = run_case(
-            root, f"{prefix}_p_{index}", model, make_xyz(step))
-        minus_dir, minus_result = run_case(
-            root, f"{prefix}_m_{index}", model, make_xyz(-step))
-        if plus_result.returncode or minus_result.returncode:
-            raise RuntimeError(f"{prefix} finite-difference run failed")
-        plus_energy = read_frame(plus_dir / "result.xyz")["energy"][0]
-        minus_energy = read_frame(minus_dir / "result.xyz")["energy"][0]
+        plus_energy = energies[(index, 1)]
+        minus_energy = energies[(index, -1)]
         derivatives.append(-(plus_energy - minus_energy) / (2 * step))
     adjacent = [
         abs(derivatives[index] - derivatives[index + 1])
@@ -162,7 +196,28 @@ def zero_model(compress, l_max, chiral, basis_size):
     return header + "0\n" * numeric_count
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mode",
+        choices=("quick", "full"),
+        default="full",
+        help="quick checks one atom's position/spin derivatives; full checks all 3N components")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=len(GPU_IDS) if GPU_IDS else 1,
+        help="maximum concurrent GPUMD subprocesses across the assigned GPU pool")
+    return parser.parse_args()
+
+
 def main():
+    arguments = parse_arguments()
+    if arguments.workers < 1:
+        raise ValueError("--workers must be positive")
+    if GPU_IDS and arguments.workers > len(GPU_IDS):
+        raise ValueError(
+            "--workers cannot exceed GPUMD_VALIDATOR_GPU_IDS count")
     model = (FIXTURE / "nep.txt").read_text()
     oracle = json.loads((FIXTURE / "fp64_oracle.json").read_text())
     report = {
@@ -171,8 +226,15 @@ def main():
         "parser_negative": {},
         "preflight_negative": {},
         "finite_difference": {},
+        "mode": arguments.mode,
+        "workers": arguments.workers,
+        "gpu_count": len(set(GPU_IDS)) if GPU_IDS else 1,
     }
-    with tempfile.TemporaryDirectory(prefix="gpumd-nep-spin-") as temporary:
+    with (
+        tempfile.TemporaryDirectory(prefix="gpumd-nep-spin-") as temporary,
+        concurrent.futures.ThreadPoolExecutor(
+            max_workers=arguments.workers) as executor,
+    ):
         root = Path(temporary)
         frames = {}
         for case, xyz_name in (
@@ -281,21 +343,45 @@ def main():
             if result.returncode == 0:
                 raise AssertionError(f"parser accepted {name}")
 
-        variant_count = 0
-        for compress in range(1, 5):
-            for l_max in range(5):
-                for chiral in (0, 1):
-                    basis_size = compress - 1 + ((compress + l_max + chiral) % (5 - compress))
-                    _, result = run_case(
-                        root,
-                        f"variant_{compress}_{l_max}_{chiral}",
-                        zero_model(compress, l_max, chiral, basis_size),
-                        large_xyz)
-                    if result.returncode:
-                        raise AssertionError(
-                            f"valid C={compress}, L={l_max}, chiral={chiral}, "
-                            f"basis={basis_size} failed:\n{result.stdout}{result.stderr}")
-                    variant_count += 1
+        variants = [
+            (compress, l_max, chiral)
+            for compress in range(1, 5)
+            for l_max in range(5)
+            for chiral in (0, 1)
+        ]
+        if arguments.mode == "quick":
+            variants = [
+                (1, 0, 0),
+                (1, 4, 1),
+                (2, 2, 0),
+                (3, 3, 1),
+                (4, 0, 1),
+                (4, 4, 0),
+            ]
+        variant_futures = []
+        for compress, l_max, chiral in variants:
+            basis_size = (
+                compress - 1 +
+                ((compress + l_max + chiral) % (5 - compress)))
+            variant_futures.append((
+                compress,
+                l_max,
+                chiral,
+                basis_size,
+                executor.submit(
+                    run_case,
+                    root,
+                    f"variant_{compress}_{l_max}_{chiral}",
+                    zero_model(compress, l_max, chiral, basis_size),
+                    large_xyz),
+            ))
+        for compress, l_max, chiral, basis_size, future in variant_futures:
+            _, result = future.result()
+            if result.returncode:
+                raise AssertionError(
+                    f"valid C={compress}, L={l_max}, chiral={chiral}, "
+                    f"basis={basis_size} failed:\n{result.stdout}{result.stderr}")
+        variant_count = len(variant_futures)
         report["parser_positive"]["shape_variants"] = variant_count
 
         baseline = frames["large_box"]
@@ -384,7 +470,8 @@ def main():
         mforce_errors = []
         mforce_ratios = []
         selected_steps = []
-        for atom in range(4):
+        atoms_to_check = range(4) if arguments.mode == "full" else (0,)
+        for atom in atoms_to_check:
             base_fields = large_xyz.splitlines()[atom + 2].split()
             for axis in range(3):
                 position = float(base_fields[1 + axis])
@@ -392,7 +479,8 @@ def main():
                     root, f"position_{atom}_{axis}", model,
                     lambda h, a=atom, d=axis, value=position:
                         replace_xyz_value(large_xyz, a, 1 + d, value + h),
-                    steps)
+                    steps,
+                    executor)
                 error, ratio = check_self_fd(
                     derivative, baseline["force"][atom][axis])
                 force_errors.append(error)
@@ -404,7 +492,8 @@ def main():
                     root, f"spin_{atom}_{axis}", model,
                     lambda h, a=atom, d=axis, value=spin:
                         replace_xyz_value(large_xyz, a, 4 + d, value + h),
-                    steps)
+                    steps,
+                    executor)
                 error, ratio = check_self_fd(
                     derivative, baseline["mforce"][atom][axis])
                 mforce_errors.append(error)
@@ -422,7 +511,8 @@ def main():
                     root, f"strain_{position_axis}_{force_axis}", model,
                     lambda h, p=position_axis, f=force_axis:
                         strain_xyz(large_xyz, p, f, h),
-                    steps)
+                    steps,
+                    executor)
                 error, ratio = check_self_fd(derivative, total_raw9[component])
                 virial_errors.append(error)
                 virial_ratios.append(ratio)

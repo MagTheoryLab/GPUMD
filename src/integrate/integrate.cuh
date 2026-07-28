@@ -19,6 +19,7 @@
 #include "ensemble_ttm.cuh"
 #include "model/box.cuh"
 #include "model/group.cuh"
+#include "spin_integrator.cuh"
 #include <memory>
 #include <vector>
 
@@ -28,6 +29,7 @@ class Integrate
 {
 public:
   std::unique_ptr<Ensemble> ensemble;
+  std::unique_ptr<Spin_Integrator> spin_integrator;
 
   void initialize(
     double time_step,
@@ -86,6 +88,9 @@ public:
   double target_pressure[6];
   int num_target_pressure_components;
   double temperature_coupling;
+  bool use_spin_tspin = false;
+  double spin_mass_factor = 1.0;
+  int spin_seed = 12345;
   double qtb_f_max = 200.0; // in ps^-1
   int qtb_n_f = 100;
   double tau_p;

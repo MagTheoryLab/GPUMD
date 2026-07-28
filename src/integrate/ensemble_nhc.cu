@@ -20,6 +20,7 @@ Oxford University Press, 2010.
 ------------------------------------------------------------------------------*/
 
 #include "ensemble_nhc.cuh"
+#include "nhc.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_macro.cuh"
 #include <cmath>
@@ -93,81 +94,6 @@ Ensemble_NHC::Ensemble_NHC(
 Ensemble_NHC::~Ensemble_NHC(void)
 {
   // nothing now
-}
-
-// The Nose-Hover thermostat integrator
-// Run it on the CPU, which requires copying the kinetic energy
-// from the GPU to the CPU
-static double nhc(
-  int M,
-  double* pos_eta,
-  double* vel_eta,
-  double* mas_eta,
-  double Ek2,
-  double kT,
-  double dN,
-  double dt2_particle)
-{
-  // These constants are taken from Tuckerman's book
-  int n_sy = 7;
-  int n_respa = 4;
-  const double w[7] = {
-    0.784513610477560,
-    0.235573213359357,
-    -1.17767998417887,
-    1.31518632068391,
-    -1.17767998417887,
-    0.235573213359357,
-    0.784513610477560};
-
-  double factor = 1.0; // to be accumulated
-
-  for (int n1 = 0; n1 < n_sy; n1++) {
-    double dt2 = dt2_particle * w[n1] / n_respa;
-    double dt4 = dt2 * 0.5;
-    double dt8 = dt4 * 0.5;
-    for (int n2 = 0; n2 < n_respa; n2++) {
-
-      // update velocity of the last (M - 1) thermostat:
-      double G = vel_eta[M - 2] * vel_eta[M - 2] / mas_eta[M - 2] - kT;
-      vel_eta[M - 1] += dt4 * G;
-
-      // update thermostat velocities from M - 2 to 0:
-      for (int m = M - 2; m >= 0; m--) {
-        double tmp = exp(-dt8 * vel_eta[m + 1] / mas_eta[m + 1]);
-        G = vel_eta[m - 1] * vel_eta[m - 1] / mas_eta[m - 1] - kT;
-        if (m == 0) {
-          G = Ek2 - dN * kT;
-        }
-        vel_eta[m] = tmp * (tmp * vel_eta[m] + dt4 * G);
-      }
-
-      // update thermostat positions from M - 1 to 0:
-      for (int m = M - 1; m >= 0; m--) {
-        pos_eta[m] += dt2 * vel_eta[m] / mas_eta[m];
-      }
-
-      // compute the scale factor
-      double factor_local = exp(-dt2 * vel_eta[0] / mas_eta[0]);
-      Ek2 *= factor_local * factor_local;
-      factor *= factor_local;
-
-      // update thermostat velocities from 0 to M - 2:
-      for (int m = 0; m < M - 1; m++) {
-        double tmp = exp(-dt8 * vel_eta[m + 1] / mas_eta[m + 1]);
-        G = vel_eta[m - 1] * vel_eta[m - 1] / mas_eta[m - 1] - kT;
-        if (m == 0) {
-          G = Ek2 - dN * kT;
-        }
-        vel_eta[m] = tmp * (tmp * vel_eta[m] + dt4 * G);
-      }
-
-      // update velocity of the last (M - 1) thermostat:
-      G = vel_eta[M - 2] * vel_eta[M - 2] / mas_eta[M - 2] - kT;
-      vel_eta[M - 1] += dt4 * G;
-    }
-  }
-  return factor;
 }
 
 void Ensemble_NHC::integrate_nvt_nhc_1(

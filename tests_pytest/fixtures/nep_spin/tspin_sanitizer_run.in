@@ -1,0 +1,5 @@
+replicate 2 2 2
+potential nep.txt
+ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 13579
+time_step 0.1
+run 5

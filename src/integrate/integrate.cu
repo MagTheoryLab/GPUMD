@@ -41,9 +41,11 @@ The driver class for the various integrators.
 #include "ensemble_wall_piston.cuh"
 #include "integrate.cuh"
 #include "model/atom.cuh"
+#include "spin_tspin.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_macro.cuh"
 #include "utilities/read_file.cuh"
+#include <cmath>
 #include <cstring>
 
 void Integrate::initialize(
@@ -56,6 +58,7 @@ void Integrate::initialize(
 {
   this->total_steps = total_steps;
   int number_of_atoms = atom.number_of_atoms;
+  spin_integrator.reset();
   if (move_group >= 0) {
     if (fixed_group < 0) {
       PRINT_INPUT_ERROR("It is not allowed to have moving group but no fixed group.");
@@ -279,6 +282,17 @@ void Integrate::initialize(
   ensemble->fixed_group = fixed_group;
   ensemble->fixed_grouping_method = fixed_grouping_method;
   ensemble->move_grouping_method = move_grouping_method;
+
+  if (use_spin_tspin) {
+    spin_integrator.reset(new Spin_TSPIN(
+      temperature1,
+      temperature_coupling,
+      time_step,
+      spin_mass_factor,
+      spin_seed,
+      atom));
+    spin_integrator->temperature = temperature;
+  }
 }
 
 void Integrate::finalize()
@@ -337,11 +351,17 @@ void Integrate::compute1(
   Atom& atom,
   GPU_Vector<double>& thermo)
 {
+  double target_temperature = ensemble->temperature;
   if (type == 0 || type == 31 || type == 32) {
-    ensemble->temperature = temperature2;
+    target_temperature = temperature2;
   } else if (type > 0 && (type <= 20 || type == 33)) {
-    ensemble->temperature =
+    target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
+  }
+  ensemble->temperature = target_temperature;
+  if (spin_integrator) {
+    spin_integrator->temperature = target_temperature;
+    spin_integrator->compute1(time_step, atom);
   }
 
   if (atom.unwrapped_position.size() > 0) {
@@ -383,17 +403,25 @@ void Integrate::compute2(
   GPU_Vector<double>& thermo,
   Force& force)
 {
+  double target_temperature = ensemble->temperature;
   if (type == 0 || type == 31 || type == 32) {
-    ensemble->temperature = temperature2;
+    target_temperature = temperature2;
   } else if (type > 0 && (type <= 20 || type == 33)) {
-    ensemble->temperature =
+    target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
   } else if (type == -11) {
     ensemble->compute3(time_step, group, box, atom, thermo, force);
     return;
   }
+  ensemble->temperature = target_temperature;
+  if (spin_integrator) {
+    spin_integrator->temperature = target_temperature;
+  }
 
   ensemble->compute2(time_step, group, box, atom, thermo);
+  if (spin_integrator) {
+    spin_integrator->compute2(time_step, atom);
+  }
 }
 
 // coding conventions:
@@ -414,6 +442,9 @@ void Integrate::parse_ensemble(
 {
   qtb_f_max = 200.0;
   qtb_n_f = 100;
+  use_spin_tspin = false;
+  spin_mass_factor = 1.0;
+  spin_seed = 12345;
 
   // 1. Determine the integration method
   if (strcmp(param[1], "nve") == 0) {
@@ -430,6 +461,14 @@ void Integrate::parse_ensemble(
     type = 2;
     if (num_param != 5) {
       PRINT_INPUT_ERROR("ensemble nvt_nhc should have 3 parameters.");
+    }
+  } else if (strcmp(param[1], "nvt_tspin") == 0) {
+    type = 2;
+    use_spin_tspin = true;
+    if (num_param < 5 || num_param > 9 || num_param % 2 == 0) {
+      PRINT_INPUT_ERROR(
+        "ensemble nvt_tspin should have 3 required parameters plus "
+        "optional key-value pairs.");
     }
   } else if (strcmp(param[1], "nvt_lan") == 0) {
     type = 3;
@@ -598,6 +637,33 @@ void Integrate::parse_ensemble(
           "input starting from GPUMD-V3.0; See the manual for details.)");
       } else {
         PRINT_INPUT_ERROR("Temperature coupling should >= 1.");
+      }
+    }
+  }
+
+  if (use_spin_tspin) {
+    bool has_mass_factor = false;
+    bool has_seed = false;
+    for (int index = 5; index < num_param; index += 2) {
+      if (strcmp(param[index], "mass_factor") == 0) {
+        if (has_mass_factor) {
+          PRINT_INPUT_ERROR("nvt_tspin mass_factor cannot be repeated.");
+        }
+        has_mass_factor = true;
+        if (!is_valid_real(param[index + 1], &spin_mass_factor) ||
+            !std::isfinite(spin_mass_factor) || spin_mass_factor <= 0.0) {
+          PRINT_INPUT_ERROR("nvt_tspin mass_factor should be finite and > 0.");
+        }
+      } else if (strcmp(param[index], "seed") == 0) {
+        if (has_seed) {
+          PRINT_INPUT_ERROR("nvt_tspin seed cannot be repeated.");
+        }
+        has_seed = true;
+        if (!is_valid_int(param[index + 1], &spin_seed) || spin_seed <= 0) {
+          PRINT_INPUT_ERROR("nvt_tspin seed should be a positive integer.");
+        }
+      } else {
+        PRINT_INPUT_ERROR("Unknown nvt_tspin optional keyword.");
       }
     }
   }
@@ -1073,6 +1139,11 @@ void Integrate::parse_ensemble(
     case 2:
       printf("Use NVT ensemble for this run.\n");
       printf("    choose the Nose-Hoover chain method.\n");
+      if (use_spin_tspin) {
+        printf("    integrate spins with TSPIN.\n");
+        printf("    spin mass factor is %g.\n", spin_mass_factor);
+        printf("    spin velocity seed is %d.\n", spin_seed);
+      }
       printf("    initial temperature is %g K.\n", temperature1);
       printf("    final temperature is %g K.\n", temperature2);
       printf("    tau_T is %g time_step.\n", temperature_coupling);
