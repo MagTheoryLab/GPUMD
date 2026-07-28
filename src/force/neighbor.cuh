@@ -207,6 +207,11 @@ public:
     const GPU_Vector<double>& position_per_atom,
     GPU_Vector<int>& NN_local,
     GPU_Vector<int>& NL_local);
+  int capacity(void) const { return MN_global; }
+  double minimum_safe_box_thickness(const double rc) const
+  {
+    return 2.5 * (rc + skin);
+  }
 
 private:
   double skin = 1.0;              // skin distance
@@ -214,5 +219,6 @@ private:
   GPU_Vector<int> cell_count_sum; // for cell list
   GPU_Vector<int> cell_contents;  // for cell list
   GPU_Vector<double> x0, y0, z0;  // for checking atom distance
+  int MN_global = 0;
   int check_atom_distance(Box& box, const double* x, const double* y, const double* z);
 };

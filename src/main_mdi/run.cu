@@ -160,10 +160,7 @@ Run::Run(bool skip_run, const std::string& run_input_path)
   velocity.initialize(
     has_velocity_in_xyz,
     300,
-    atom.cpu_mass,
-    atom.cpu_position_per_atom,
-    atom.cpu_velocity_per_atom,
-    atom.velocity_per_atom,
+    atom,
     false,
     123);
   if (has_velocity_in_xyz) {
@@ -255,14 +252,7 @@ void Run::perform_a_run()
 
   for (int step = 0; step < number_of_steps; ++step) {
 
-    velocity.correct_velocity(
-      step,
-      group,
-      atom.cpu_mass,
-      atom.position_per_atom,
-      atom.cpu_position_per_atom,
-      atom.cpu_velocity_per_atom,
-      atom.velocity_per_atom);
+    velocity.correct_velocity(step, group, atom);
 
     calculate_time_step(
       max_distance_per_step, atom.velocity_per_atom, initial_time_step, time_step);
@@ -468,14 +458,7 @@ void Run::mdi_step_one()
   // Notes:
   // - We intentionally do not call the internal potential when external forces are provided.
   // - measure.process is called every step, enabling dump_* keywords to write outputs.
-  velocity.correct_velocity(
-    mdi_step_counter,
-    group,
-    atom.cpu_mass,
-    atom.position_per_atom,
-    atom.cpu_position_per_atom,
-    atom.cpu_velocity_per_atom,
-    atom.velocity_per_atom);
+  velocity.correct_velocity(mdi_step_counter, group, atom);
 
   integrate.current_step = mdi_step_counter;
   global_time += time_step;
@@ -566,6 +549,9 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
 
   if (strcmp(param[0], "potential") == 0) {
     force.parse_potential(param, num_param, box, atom.type.size());
+    if (force.has_spin_potential()) {
+      PRINT_INPUT_ERROR("NEP_Spin is not supported by the MDI runtime.");
+    }
   } else if (strcmp(param[0], "replicate") == 0) {
     Replicate(param, num_param, box, atom, group);
     allocate_memory_gpu(group, atom, thermo);
@@ -578,49 +564,20 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
       integrate.fixed_grouping_method,
       force,
       box,
-      atom.position_per_atom,
-      atom.type,
-      group,
-      atom.potential_per_atom,
-      atom.force_per_atom,
-      atom.virial_per_atom);
+      atom,
+      group);
   } else if (strcmp(param[0], "compute_phonon") == 0) {
     Hessian hessian;
     hessian.parse(param, num_param);
-    hessian.compute(
-      force,
-      box,
-      atom.cpu_position_per_atom,
-      atom.position_per_atom,
-      atom.type,
-      group,
-      atom.potential_per_atom,
-      atom.force_per_atom,
-      atom.virial_per_atom);
+    hessian.compute(force, box, atom, group);
   } else if (strcmp(param[0], "compute_cohesive") == 0) {
     Cohesive cohesive;
     cohesive.parse(param, num_param, 0);
-    cohesive.compute(
-      box,
-      atom.position_per_atom,
-      atom.type,
-      group,
-      atom.potential_per_atom,
-      atom.force_per_atom,
-      atom.virial_per_atom,
-      force);
+    cohesive.compute(box, atom, group, force);
   } else if (strcmp(param[0], "compute_elastic") == 0) {
     Cohesive cohesive;
     cohesive.parse(param, num_param, 1);
-    cohesive.compute(
-      box,
-      atom.position_per_atom,
-      atom.type,
-      group,
-      atom.potential_per_atom,
-      atom.force_per_atom,
-      atom.virial_per_atom,
-      force);
+    cohesive.compute(box, atom, group, force);
   } else if (strcmp(param[0], "change_box") == 0) {
     parse_change_box(param, num_param);
   } else if (strcmp(param[0], "velocity") == 0) {
@@ -829,10 +786,7 @@ void Run::parse_velocity(const char** param, int num_param)
   velocity.initialize(
     has_velocity_in_xyz,
     initial_temperature,
-    atom.cpu_mass,
-    atom.cpu_position_per_atom,
-    atom.cpu_velocity_per_atom,
-    atom.velocity_per_atom,
+    atom,
     use_seed,
     seed);
   if (!has_velocity_in_xyz) {

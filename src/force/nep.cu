@@ -658,7 +658,7 @@ static __global__ void find_descriptor(
   }
 }
 
-static __global__ void find_force_radial(
+__global__ void find_force_radial(
   NEP::ParaMB paramb,
   NEP::ANN annmb,
   const int N,
@@ -771,7 +771,7 @@ static __global__ void find_force_radial(
   }
 }
 
-static __global__ void find_partial_force_angular(
+__global__ void find_partial_force_angular(
   NEP::ParaMB paramb,
   NEP::ANN annmb,
   const int N,

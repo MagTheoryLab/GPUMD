@@ -61,6 +61,9 @@ public:
   struct Quantities {
     bool has_velocity_ = false;
     bool has_force_ = false;
+    bool has_spin_ = false;
+    bool has_mforce_ = false;
+    bool has_spin_velocity_ = false;
     bool has_potential_ = false;
     bool has_unwrapped_position_ = false;
     bool has_mass_ = false;
@@ -83,6 +86,9 @@ private:
 
   std::vector<double> cpu_unwrapped_position_;
   std::vector<double> cpu_force_per_atom_;
+  std::vector<double> cpu_spin_per_atom_;
+  std::vector<double> cpu_mforce_per_atom_;
+  std::vector<double> cpu_spin_velocity_per_atom_;
   std::vector<double> cpu_potential_per_atom_;
   std::vector<double> cpu_virial_per_atom_;
   GPU_Vector<double> gpu_total_virial_;

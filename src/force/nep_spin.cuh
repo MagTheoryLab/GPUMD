@@ -1,0 +1,155 @@
+/*
+    Copyright 2017 Zheyong Fan and GPUMD development team
+    Copyright 2026 NEPAdapters contributors
+    This file is part of GPUMD and is distributed under GPLv3 or later.
+*/
+
+#pragma once
+
+#include "neighbor.cuh"
+#include "nep.cuh"
+#include "potential.cuh"
+#include "utilities/common.cuh"
+#include "utilities/gpu_vector.cuh"
+#include <cstddef>
+#include <string>
+#include <vector>
+
+struct NEP_Spin_Data {
+  GPU_Vector<float> parameters;
+  GPU_Vector<float> descriptor_parameters_type_pair;
+  GPU_Vector<float> descriptor;
+  GPU_Vector<float> Fp;
+  GPU_Vector<float> sum_fxyz;
+  GPU_Vector<float> f12x;
+  GPU_Vector<float> f12y;
+  GPU_Vector<float> f12z;
+  GPU_Vector<float> spin_baseline;
+  GPU_Vector<float> rho0;
+  GPU_Vector<float> raw1;
+  GPU_Vector<float> angular2;
+  GPU_Vector<float> angular3;
+  GPU_Vector<float> angular4;
+  GPU_Vector<float> geom;
+  GPU_Vector<float> rho0_dot;
+  GPU_Vector<float> raw1_dot;
+  GPU_Vector<float> polar;
+  GPU_Vector<float> octupole;
+  GPU_Vector<float> hexadecapole;
+  GPU_Vector<float> chirals;
+  GPU_Vector<int> NN_radial;
+  GPU_Vector<int> NL_radial;
+  GPU_Vector<int> NN_angular;
+  GPU_Vector<int> NL_angular;
+  GPU_Vector<int> NN_spin;
+  GPU_Vector<int> NL_spin;
+  GPU_Vector<double> r12_radial;
+  GPU_Vector<double> r12_angular;
+  GPU_Vector<double> r12_spin;
+};
+
+class NEP_Spin : public Potential
+{
+public:
+  struct Body_Channels {
+    int l_max_3body = 0;
+    bool has_q_222 = false;
+    bool has_q_1111 = false;
+    bool has_q_112 = false;
+    bool has_q_123 = false;
+    bool has_q_233 = false;
+    bool has_q_134 = false;
+
+    int count(void) const;
+  };
+
+  struct Spin_Layout {
+    int channels = 0;
+    int basis_count = 0;
+    int l_max = 0;
+    int chi_channels = 0;
+    int rho0_offset = -1;
+    int l1_rdot_offset = -1;
+    int l1_cross_offset = -1;
+    int l1_stf_offset = -1;
+    int angular2_offset = -1;
+    int angular3_offset = -1;
+    int angular4_offset = -1;
+    int geom_offset = -1;
+    int rho0_dot_offset = -1;
+    int raw1_dot_offset = -1;
+    int chiral_offset = -1;
+    int descriptor_dim = 0;
+  };
+
+  struct Model {
+    int num_types = 0;
+    int n_max_radial = 0;
+    int n_max_angular = 0;
+    int basis_size_radial = 0;
+    int basis_size_angular = 0;
+    int hidden_neurons = 0;
+    int max_neighbors_global = 0;
+    int max_neighbors_angular = 0;
+    int neighbor_capacity = 0;
+    int spin_n_max[2] = {0, 0};
+    int spin_basis_size[2] = {0, 0};
+    int spin_l_max[3] = {0, 0, 0};
+    int spin_compress = 0;
+    int spin_chiral = 0;
+    double cutoff_radial = 0.0;
+    double cutoff_angular = 0.0;
+    double spin_cutoff[2] = {0.0, 0.0};
+    int struct_descriptor_dim = 0;
+    int spin_descriptor_dim = 0;
+    int descriptor_dim = 0;
+    std::size_t ann_parameter_count = 0;
+    std::size_t radial_parameter_count = 0;
+    std::size_t angular_parameter_count = 0;
+    std::size_t spin_parameter_count = 0;
+    std::size_t model_parameter_count = 0;
+    std::vector<std::string> elements;
+    std::vector<double> spin_baseline;
+    Body_Channels body;
+    Spin_Layout spin_layout;
+  };
+
+  NEP_Spin(const char* file_potential, const int num_atoms);
+  virtual ~NEP_Spin(void) = default;
+
+  using Potential::compute;
+
+  void compute(
+    Box& box,
+    const GPU_Vector<int>& type,
+    const GPU_Vector<double>& position,
+    GPU_Vector<double>& potential,
+    GPU_Vector<double>& force,
+    GPU_Vector<double>& virial) override;
+
+  void compute(
+    Box& box,
+    const GPU_Vector<int>& type,
+    const GPU_Vector<double>& position,
+    const GPU_Vector<double>& spin,
+    GPU_Vector<double>& potential,
+    GPU_Vector<double>& force,
+    GPU_Vector<double>& virial,
+    GPU_Vector<double>& mforce) override;
+
+  const Model& model(void) const { return model_; }
+
+private:
+  Model model_;
+  NEP_Spin_Data data_;
+  Neighbor neighbor_;
+  NEP::ParaMB paramb_;
+  NEP::ANN ann_;
+  int num_atoms_ = 0;
+  bool small_box_initialized_ = false;
+  int small_box_capacity_ = 0;
+  NEP::ExpandedBox expanded_box_;
+
+  void read_model(const char* file_potential);
+  void initialize_small_box(const Box& box);
+};

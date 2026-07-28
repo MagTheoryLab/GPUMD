@@ -34,6 +34,7 @@ class Measure;
 #include "utilities/common.cuh"
 #include "utilities/gpu_vector.cuh"
 #include "velocity.cuh"
+#include <string>
 #include <vector>
 
 class Run
@@ -53,6 +54,7 @@ private:
   void parse_correct_velocity(const char** param, int num_param, const std::vector<Group>& group);
   void parse_time_step(const char** param, int num_param);
   void parse_run(const char** param, int num_param);
+  void mark_spin_unsupported(const char* command);
 
   int number_of_types; // number of atom types
   int has_velocity_in_xyz = 0;
@@ -61,6 +63,7 @@ private:
   double initial_temperature; // initial temperature for velocity
   double time_step = 1.0 / TIME_UNIT_CONVERSION;
   double max_distance_per_step = -1.0;
+  std::string spin_unsupported_command;
   Atom atom;
   GPU_Vector<double> thermo; // some thermodynamic quantities
   Velocity velocity;

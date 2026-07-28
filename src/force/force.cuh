@@ -51,6 +51,21 @@ public:
     GPU_Vector<double>& velocity_per_atom,
     GPU_Vector<double>& mass_per_atom);
 
+  void compute(
+    Box& box,
+    GPU_Vector<double>& position_per_atom,
+    GPU_Vector<int>& type,
+    std::vector<Group>& group,
+    GPU_Vector<double>& potential_per_atom,
+    GPU_Vector<double>& force_per_atom,
+    GPU_Vector<double>& virial_per_atom,
+    GPU_Vector<double>& velocity_per_atom,
+    GPU_Vector<double>& mass_per_atom,
+    GPU_Vector<double>& spin_per_atom,
+    GPU_Vector<double>& mforce_per_atom);
+
+  bool has_spin_potential(void) const { return has_spin_potential_; }
+
   void finalize();
 
   int get_number_of_types(FILE* fid_potential);
@@ -78,6 +93,7 @@ private:
   int number_of_atoms_ = -1;
   bool is_fcp = false;
   bool has_non_nep = false;
+  bool has_spin_potential_ = false;
   std::string multiple_potentials_mode_ = "observe"; // "observe" or "average"
   std::string atom_types[NUM_ELEMENTS];
 

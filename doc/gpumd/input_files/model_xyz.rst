@@ -51,6 +51,8 @@ Essentially any keyword is allowed, but we only read the following ones:
   * ``mass:R:1`` mass (*Optional*: default mass values will be used when this is missing)
   * ``charge:R:1`` charge (*Optional*: default charge is zero)  
   * ``vel:R:3`` velocity vector (*Optional*)
+  * ``spin:R:3`` dimensionless spin vector (*Required for NEP_Spin*)
+  * ``spin_vel:R:3`` spin velocity vector (*Optional; requires ``spin:R:3``*)
   * ``group:I:number_of_grouping_methods`` grouping methods (*Optional*)
 
 
@@ -67,6 +69,9 @@ The mass should be given in units of the unified atomic mass unit (amu).
 The charge is in units of e (proton charge).
 The cell dimensions and atom coordinates should be given in units of Ångstrom. 
 Velocities need to be specified in units of Å/fs.
+Spin is dimensionless. Spin velocity is specified in inverse femtoseconds.
+Property names may not be repeated. NEP_Spin fails if ``spin:R:3`` is absent;
+missing spin values are never filled with zeros.
 
 Example
 -------

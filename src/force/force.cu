@@ -33,6 +33,7 @@ The driver class calculating force and related quantities.
 #include "nep.cuh"
 #include "nep_multigpu.cuh"
 #include "nep_charge.cuh"
+#include "nep_spin.cuh"
 #include "potential.cuh"
 #include "tersoff1988.cuh"
 #include "tersoff1989.cuh"
@@ -114,6 +115,22 @@ void Force::parse_potential(
   } else if (strcmp(potential_name, "fcp") == 0) {
     potential.reset(new FCP(fid_potential, num_types, number_of_atoms, box));
     is_fcp = true;
+  } else if (strcmp(potential_name, "nep4_spin1") == 0) {
+    if (!potentials.empty()) {
+      PRINT_INPUT_ERROR("NEP_Spin must be the only potential in a run.");
+    }
+    if (num_param != 2) {
+      PRINT_INPUT_ERROR("NEP_Spin does not accept a partition direction.");
+    }
+    int num_gpus = 0;
+    CHECK(gpuGetDeviceCount(&num_gpus));
+    if (num_gpus != 1) {
+      PRINT_INPUT_ERROR("NEP_Spin requires exactly one visible GPU.");
+    }
+    potential.reset(new NEP_Spin(param[1], number_of_atoms));
+    is_nep = true;
+    has_spin_potential_ = true;
+    check_types(param[1]);
   } else if (
     strcmp(potential_name, "nep4_charge1") == 0 ||
     strcmp(potential_name, "nep4_charge2") == 0 ||
@@ -210,6 +227,9 @@ void Force::parse_potential(
 
   // Move the pointer into the list of potentials
   potentials.push_back(std::move(potential));
+  if (has_spin_potential_ && potentials.size() != 1) {
+    PRINT_INPUT_ERROR("NEP_Spin must be the only potential in a run.");
+  }
   // Check if a non-NEP potential has previously been defined
   has_non_nep = has_non_nep || !is_nep;
   if (potentials.size() > 1 && has_non_nep) {
@@ -629,6 +649,61 @@ void Force::compute(
       GPU_CHECK_KERNEL
     }
   }
+}
+
+void Force::compute(
+  Box& box,
+  GPU_Vector<double>& position_per_atom,
+  GPU_Vector<int>& type,
+  std::vector<Group>&,
+  GPU_Vector<double>& potential_per_atom,
+  GPU_Vector<double>& force_per_atom,
+  GPU_Vector<double>& virial_per_atom,
+  GPU_Vector<double>&,
+  GPU_Vector<double>&,
+  GPU_Vector<double>& spin_per_atom,
+  GPU_Vector<double>& mforce_per_atom)
+{
+  if (!has_spin_potential_ || potentials.size() != 1) {
+    PRINT_INPUT_ERROR("Spin-aware force dispatch requires one NEP_Spin potential.");
+  }
+  if (compute_hnemd_ || compute_hnemdec_ >= 0) {
+    PRINT_INPUT_ERROR("HNEMD and HNEMDEC are not supported by NEP_Spin.");
+  }
+
+  box.set_is_orthogonal();
+  const int number_of_atoms = type.size();
+  if (
+    spin_per_atom.size() != static_cast<std::size_t>(number_of_atoms) * 3 ||
+    mforce_per_atom.size() != static_cast<std::size_t>(number_of_atoms) * 3) {
+    PRINT_INPUT_ERROR("NEP_Spin requires three spin and mforce components per atom.");
+  }
+  gpu_apply_pbc<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
+    number_of_atoms,
+    box,
+    position_per_atom.data(),
+    position_per_atom.data() + number_of_atoms,
+    position_per_atom.data() + number_of_atoms * 2);
+  initialize_properties<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
+    number_of_atoms,
+    force_per_atom.data(),
+    force_per_atom.data() + number_of_atoms,
+    force_per_atom.data() + number_of_atoms * 2,
+    potential_per_atom.data(),
+    virial_per_atom.data());
+  mforce_per_atom.fill(0.0);
+  GPU_CHECK_KERNEL
+
+  temperature += delta_T;
+  potentials[0]->compute(
+    box,
+    type,
+    position_per_atom,
+    spin_per_atom,
+    potential_per_atom,
+    force_per_atom,
+    virial_per_atom,
+    mforce_per_atom);
 }
 
 static __global__ void gpu_find_per_atom_tensor(

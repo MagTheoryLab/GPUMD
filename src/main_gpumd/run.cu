@@ -233,16 +233,34 @@ void Run::perform_a_run()
         atom.mass);
     }
   } else {
-    force.compute(
-      box,
-      atom.position_per_atom,
-      atom.type,
-      group,
-      atom.potential_per_atom,
-      atom.force_per_atom,
-      atom.virial_per_atom,
-      atom.velocity_per_atom,
-      atom.mass);
+    if (force.has_spin_potential()) {
+      if (!atom.has_spin) {
+        PRINT_INPUT_ERROR("NEP_Spin requires spin:R:3 in model.xyz.");
+      }
+      force.compute(
+        box,
+        atom.position_per_atom,
+        atom.type,
+        group,
+        atom.potential_per_atom,
+        atom.force_per_atom,
+        atom.virial_per_atom,
+        atom.velocity_per_atom,
+        atom.mass,
+        atom.spin_per_atom,
+        atom.mforce_per_atom);
+    } else {
+      force.compute(
+        box,
+        atom.position_per_atom,
+        atom.type,
+        group,
+        atom.potential_per_atom,
+        atom.force_per_atom,
+        atom.virial_per_atom,
+        atom.velocity_per_atom,
+        atom.mass);
+    }
   }
 
   double initial_time_step = time_step;
@@ -274,16 +292,31 @@ void Run::perform_a_run()
           atom.mass);
       }
     } else {
-      force.compute(
-        box,
-        atom.position_per_atom,
-        atom.type,
-        group,
-        atom.potential_per_atom,
-        atom.force_per_atom,
-        atom.virial_per_atom,
-        atom.velocity_per_atom,
-        atom.mass);
+      if (force.has_spin_potential()) {
+        force.compute(
+          box,
+          atom.position_per_atom,
+          atom.type,
+          group,
+          atom.potential_per_atom,
+          atom.force_per_atom,
+          atom.virial_per_atom,
+          atom.velocity_per_atom,
+          atom.mass,
+          atom.spin_per_atom,
+          atom.mforce_per_atom);
+      } else {
+        force.compute(
+          box,
+          atom.position_per_atom,
+          atom.type,
+          group,
+          atom.potential_per_atom,
+          atom.force_per_atom,
+          atom.virial_per_atom,
+          atom.velocity_per_atom,
+          atom.mass);
+      }
     }
 
     electron_stop.compute(time_step, atom);
@@ -353,10 +386,15 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
 
   if (strcmp(param[0], "potential") == 0) {
     force.parse_potential(param, num_param, box, atom.type.size());
+    if (force.has_spin_potential() && !spin_unsupported_command.empty()) {
+      PRINT_INPUT_ERROR(
+        ("NEP_Spin does not support command " + spin_unsupported_command + ".").c_str());
+    }
   } else if (strcmp(param[0], "replicate") == 0) {
     Replicate(param, num_param, box, atom, group);
     allocate_memory_gpu(group, atom, thermo);
   } else if (strcmp(param[0], "minimize") == 0) {
+    mark_spin_unsupported(param[0]);
     Minimize minimize;
     minimize.parse_minimize(
       param,
@@ -368,6 +406,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
       atom,
       group);
   } else if (strcmp(param[0], "compute_phonon") == 0) {
+    mark_spin_unsupported(param[0]);
     Hessian hessian;
     hessian.parse(param, num_param);
     hessian.compute(force, box, atom, group);
@@ -376,6 +415,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     cohesive.parse(param, num_param, 0);
     cohesive.compute(box, atom, group, force);
   } else if (strcmp(param[0], "compute_elastic") == 0) {
+    mark_spin_unsupported(param[0]);
     Cohesive cohesive;
     cohesive.parse(param, num_param, 1);
     cohesive.compute(box, atom, group, force);
@@ -384,6 +424,10 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
   } else if (strcmp(param[0], "velocity") == 0) {
     parse_velocity(param, num_param);
   } else if (strcmp(param[0], "ensemble") == 0) {
+    if (num_param < 2 ||
+        (strcmp(param[1], "nve") != 0 && strcmp(param[1], "nvt_nhc") != 0)) {
+      mark_spin_unsupported(param[0]);
+    }
     integrate.parse_ensemble(param, num_param, time_step, atom, box, group, thermo);
   } else if (strcmp(param[0], "time_step") == 0) {
     parse_time_step(param, num_param);
@@ -426,6 +470,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     property.reset(new Dump_Force(param, num_param, group));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "dump_exyz") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new Dump_EXYZ(param, num_param));
     measure.properties.emplace_back(std::move(property));
@@ -442,6 +487,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     property.reset(new Dump_Beads(param, num_param));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "dump_observer") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new Dump_Observer(param, num_param));
     measure.properties.emplace_back(std::move(property));
@@ -506,6 +552,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     property.reset(new Compute_es(param, num_param));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "compute_hac") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new HAC(param, num_param));
     measure.properties.emplace_back(std::move(property));
@@ -514,26 +561,32 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     property.reset(new Viscosity(param, num_param));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "compute_hnemd") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new HNEMD(param, num_param, force));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "compute_hnemdec") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new HNEMDEC(param, num_param, force, atom, integrate.temperature1));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "compute_shc") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new SHC(param, num_param, group));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "compute_gkma") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new MODAL_ANALYSIS(param, num_param, number_of_types, 0, force));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "compute_hnema") == 0) {
+    mark_spin_unsupported(param[0]);
     std::unique_ptr<Property> property;
     property.reset(new MODAL_ANALYSIS(param, num_param, number_of_types, 1, force));
     measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "deform") == 0) {
+    mark_spin_unsupported(param[0]);
     integrate.parse_deform(param, num_param);
   } else if (strcmp(param[0], "compute_chunk") == 0) {
     std::unique_ptr<Property> property;
@@ -558,6 +611,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
   } else if (strcmp(param[0], "add_efield") == 0) {
     add_efield.parse(param, num_param, group);
   } else if (strcmp(param[0], "mc") == 0) {
+    mark_spin_unsupported(param[0]);
     mc.parse_mc(param, num_param, group, atom);
   } else if (strcmp(param[0], "kspace") == 0) {
     // nothing here; will be handled elsewhere
@@ -571,6 +625,16 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     parse_run(param, num_param);
   } else {
     PRINT_KEYWORD_ERROR(param[0]);
+  }
+}
+
+void Run::mark_spin_unsupported(const char* command)
+{
+  if (force.has_spin_potential()) {
+    PRINT_INPUT_ERROR((std::string("NEP_Spin does not support command ") + command + ".").c_str());
+  }
+  if (spin_unsupported_command.empty()) {
+    spin_unsupported_command = command;
   }
 }
 

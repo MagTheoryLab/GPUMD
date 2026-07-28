@@ -24,7 +24,7 @@ If :attr:`grouping_method` is negative, :attr:`group_id` will be ignored and dat
 
 If it is ended by a star (*), the data for one frame will be output to one file, named by changing the star to the step number.
 
-* Then one can write the properties to be output, and the allowed properties include: :attr:`mass`, :attr:`velocity`, :attr:`force`, :attr:`potential`, :attr:`virial`, :attr:`charge`, :attr:`bec`, :attr:`group`, and :attr:`unwrapped_position`.
+* Then one can write the properties to be output, and the allowed properties include: :attr:`mass`, :attr:`velocity`, :attr:`force`, :attr:`potential`, :attr:`virial`, :attr:`charge`, :attr:`bec`, :attr:`group`, :attr:`unwrapped_position`, :attr:`spin`, :attr:`mforce`, and :attr:`spin_velocity`.
 
 * The wrapped positions will always be included in the output.
 
@@ -53,3 +53,9 @@ Caveats
 * For qNEP models, the charge values dumped out are predicted by the qNEP models.
   For other models, the charge values are those specified in :attr:`model.xyz` via :attr:`charge:R:1`.
 * The Born effective charge (:term:`BEC`) is only meaningful for a qNEP model trained with target :term:`BEC`.
+* ``spin`` and ``mforce`` are three-component vectors available when
+  ``model.xyz`` contains ``spin:R:3``. ``spin_velocity`` additionally requires
+  an initialized ``spin_vel:R:3`` property.
+* The per-atom ``virial`` property contains all nine row-major components
+  ``xx xy xz yx yy yz zx zy zz``. NEP_Spin does not symmetrize this per-atom
+  tensor.
