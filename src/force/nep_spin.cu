@@ -147,6 +147,60 @@ __device__ __forceinline__ void add_compensated(
   sum = updated;
 }
 
+__global__ void find_local_neighbors_spin(
+  const int N,
+  const Box box,
+  const float cutoff_radial_square,
+  const float cutoff_angular_square,
+  const float cutoff_spin_square,
+  const double* __restrict__ x,
+  const double* __restrict__ y,
+  const double* __restrict__ z,
+  const int* __restrict__ NN_global,
+  const int* __restrict__ NL_global,
+  int* NN_radial,
+  int* NL_radial,
+  int* NN_angular,
+  int* NL_angular,
+  int* NN_spin,
+  int* NL_spin)
+{
+  const int n1 = blockIdx.x * blockDim.x + threadIdx.x;
+  if (n1 >= N) {
+    return;
+  }
+
+  const double x1 = x[n1];
+  const double y1 = y[n1];
+  const double z1 = z[n1];
+  int count_radial = 0;
+  int count_angular = 0;
+  int count_spin = 0;
+
+  for (int slot = 0; slot < NN_global[n1]; ++slot) {
+    const int n2 = NL_global[static_cast<std::size_t>(N) * slot + n1];
+    float x12 = x[n2] - x1;
+    float y12 = y[n2] - y1;
+    float z12 = z[n2] - z1;
+    apply_mic(box, x12, y12, z12);
+    const float distance_square = x12 * x12 + y12 * y12 + z12 * z12;
+
+    if (distance_square < cutoff_radial_square) {
+      NL_radial[static_cast<std::size_t>(N) * count_radial++ + n1] = n2;
+    }
+    if (distance_square < cutoff_angular_square) {
+      NL_angular[static_cast<std::size_t>(N) * count_angular++ + n1] = n2;
+    }
+    if (distance_square < cutoff_spin_square) {
+      NL_spin[static_cast<std::size_t>(N) * count_spin++ + n1] = n2;
+    }
+  }
+
+  NN_radial[n1] = count_radial;
+  NN_angular[n1] = count_angular;
+  NN_spin[n1] = count_spin;
+}
+
 __device__ __forceinline__ void apply_mic_spin_small_box(
   const Box& box, const NEP::ExpandedBox& ebox, double& x12, double& y12, double& z12)
 {
@@ -1570,12 +1624,26 @@ void NEP_Spin::compute(
   }
 
   neighbor_.find_neighbor_global(rc, box, type, position);
-  neighbor_.find_local_neighbor_from_global(
-    model_.cutoff_radial, box, position, data_.NN_radial, data_.NL_radial);
-  neighbor_.find_local_neighbor_from_global(
-    model_.cutoff_angular, box, position, data_.NN_angular, data_.NL_angular);
-  neighbor_.find_local_neighbor_from_global(
-    model_.spin_cutoff[0], box, position, data_.NN_spin, data_.NL_spin);
+  constexpr int neighbor_block_size = 128;
+  const int neighbor_grid_size = (N - 1) / neighbor_block_size + 1;
+  find_local_neighbors_spin<<<neighbor_grid_size, neighbor_block_size>>>(
+    N,
+    box,
+    static_cast<float>(model_.cutoff_radial * model_.cutoff_radial),
+    static_cast<float>(model_.cutoff_angular * model_.cutoff_angular),
+    static_cast<float>(model_.spin_cutoff[0] * model_.spin_cutoff[0]),
+    position.data(),
+    position.data() + N,
+    position.data() + 2 * N,
+    neighbor_.NN.data(),
+    neighbor_.NL.data(),
+    data_.NN_radial.data(),
+    data_.NL_radial.data(),
+    data_.NN_angular.data(),
+    data_.NL_angular.data(),
+    data_.NN_spin.data(),
+    data_.NL_spin.data());
+  GPU_CHECK_KERNEL
 
   find_structural_descriptor<<<grid_size, block_size>>>(
     paramb_,
