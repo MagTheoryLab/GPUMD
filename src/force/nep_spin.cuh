@@ -25,6 +25,8 @@ struct NEP_Spin_Data {
   GPU_Vector<float> f12y;
   GPU_Vector<float> f12z;
   GPU_Vector<float> spin_baseline;
+  GPU_Vector<int> spin_dof_type_active;
+  GPU_Vector<int> spin_env_type_active;
   GPU_Vector<float> rho0;
   GPU_Vector<float> raw1;
   GPU_Vector<float> angular2;
@@ -110,6 +112,8 @@ public:
     std::size_t model_parameter_count = 0;
     std::vector<std::string> elements;
     std::vector<double> spin_baseline;
+    std::vector<int> spin_dof_type_active;
+    std::vector<int> spin_env_type_active;
     Body_Channels body;
     Spin_Layout spin_layout;
   };

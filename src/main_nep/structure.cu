@@ -52,9 +52,11 @@ static void change_box(const Parameters& para, Structure& structure)
   float c[3] = {structure.box_original[2], structure.box_original[5], structure.box_original[8]};
   float det = get_det(structure.box_original);
   structure.volume = abs(det);
-  structure.num_cell[0] = int(ceil(2.0f * para.rc_radial_max / (structure.volume / get_area(b, c))));
-  structure.num_cell[1] = int(ceil(2.0f * para.rc_radial_max / (structure.volume / get_area(c, a))));
-  structure.num_cell[2] = int(ceil(2.0f * para.rc_radial_max / (structure.volume / get_area(a, b))));
+  const float rc_max =
+    para.spin_mode ? std::max(para.rc_radial_max, para.spin_cutoff[0]) : para.rc_radial_max;
+  structure.num_cell[0] = int(ceil(2.0f * rc_max / (structure.volume / get_area(b, c))));
+  structure.num_cell[1] = int(ceil(2.0f * rc_max / (structure.volume / get_area(c, a))));
+  structure.num_cell[2] = int(ceil(2.0f * rc_max / (structure.volume / get_area(a, b))));
 
   structure.box[0] = structure.box_original[0] * structure.num_cell[0];
   structure.box[3] = structure.box_original[3] * structure.num_cell[0];
@@ -87,6 +89,8 @@ static void read_force(
   const int species_offset,
   const int pos_offset,
   const int force_offset,
+  const int spin_offset,
+  const int mforce_offset,
   const int avirial_offset,
   const int bec_offset,
   std::ifstream& input,
@@ -103,6 +107,14 @@ static void read_force(
   structure.fx.resize(structure.num_atom);
   structure.fy.resize(structure.num_atom);
   structure.fz.resize(structure.num_atom);
+  if (para.spin_mode) {
+    structure.sx.resize(structure.num_atom);
+    structure.sy.resize(structure.num_atom);
+    structure.sz.resize(structure.num_atom);
+    structure.mfx.resize(structure.num_atom, 0.0f);
+    structure.mfy.resize(structure.num_atom, 0.0f);
+    structure.mfz.resize(structure.num_atom, 0.0f);
+  }
   structure.bec.resize(structure.num_atom * 9);
   if (structure.has_atomic_virial) {
     structure.avirialxx.resize(structure.num_atom);
@@ -136,6 +148,22 @@ static void read_force(
         get_double_from_token(tokens[1 + force_offset], xyz_filename.c_str(), line_number);
       structure.fz[na] =
         get_double_from_token(tokens[2 + force_offset], xyz_filename.c_str(), line_number);
+    }
+    if (para.spin_mode) {
+      structure.sx[na] =
+        get_double_from_token(tokens[spin_offset], xyz_filename.c_str(), line_number);
+      structure.sy[na] =
+        get_double_from_token(tokens[spin_offset + 1], xyz_filename.c_str(), line_number);
+      structure.sz[na] =
+        get_double_from_token(tokens[spin_offset + 2], xyz_filename.c_str(), line_number);
+      if (structure.has_mforce) {
+        structure.mfx[na] =
+          get_double_from_token(tokens[mforce_offset], xyz_filename.c_str(), line_number);
+        structure.mfy[na] =
+          get_double_from_token(tokens[mforce_offset + 1], xyz_filename.c_str(), line_number);
+        structure.mfz[na] =
+          get_double_from_token(tokens[mforce_offset + 2], xyz_filename.c_str(), line_number);
+      }
     }
 
     if (num_columns > 4 && structure.has_atomic_virial) {
@@ -413,12 +441,15 @@ static void read_one_structure(
   int species_offset = 0;
   int pos_offset = 0;
   int force_offset = 0;
+  int spin_offset = 0;
+  int mforce_offset = 0;
   int avirial_offset = 0;
   int bec_offset = 0;
   int num_columns = 0;
   structure.has_atomic_virial = false;
   structure.atomic_virial_diag_only = false;
   structure.has_bec = false;
+  structure.has_mforce = false;
   for (int n = 0; n < tokens.size(); ++n) {
     const std::string properties_string = "properties=";
     if (tokens[n].substr(0, properties_string.length()) == properties_string) {
@@ -432,6 +463,8 @@ static void read_one_structure(
       int species_position = -1;
       int pos_position = -1;
       int force_position = -1;
+      int spin_position = -1;
+      int mforce_position = -1;
       int avirial_position = -1;
       int bec_position = -1;
       for (int k = 0; k < sub_tokens.size() / 3; ++k) {
@@ -443,7 +476,46 @@ static void read_one_structure(
         }
         if (sub_tokens[k * 3] == "force" || sub_tokens[k * 3] == "forces") {
           force_position = k;
-        }   
+        }
+        if (
+          sub_tokens[k * 3] == "spin" ||
+          sub_tokens[k * 3] == "spins" ||
+          sub_tokens[k * 3] == "moment" ||
+          sub_tokens[k * 3] == "moments") {
+          if (spin_position >= 0) {
+            PRINT_INPUT_ERROR(
+              "Only one spin/spins/moment/moments property is allowed.\n");
+          }
+          spin_position = k;
+          if (sub_tokens[k * 3 + 1] != "r" ||
+              get_int_from_token(
+                sub_tokens[k * 3 + 2],
+                xyz_filename.c_str(),
+                line_number) != 3) {
+            PRINT_INPUT_ERROR("spin/moment must have property type R:3.\n");
+          }
+        }
+        if (
+          sub_tokens[k * 3] == "mforce" ||
+          sub_tokens[k * 3] == "mforces" ||
+          sub_tokens[k * 3] == "force_mag" ||
+          sub_tokens[k * 3] == "forces_mag" ||
+          sub_tokens[k * 3] == "magnetic_force" ||
+          sub_tokens[k * 3] == "magnetic_forces") {
+          if (mforce_position >= 0) {
+            PRINT_INPUT_ERROR(
+              "Only one magnetic-force property alias is allowed.\n");
+          }
+          mforce_position = k;
+          structure.has_mforce = true;
+          if (sub_tokens[k * 3 + 1] != "r" ||
+              get_int_from_token(
+                sub_tokens[k * 3 + 2],
+                xyz_filename.c_str(),
+                line_number) != 3) {
+            PRINT_INPUT_ERROR("mforce must have property type R:3.\n");
+          }
+        }
         if (sub_tokens[k * 3] == "adipole" || sub_tokens[k * 3] == "atomic_dipole") {
           avirial_position = k;
           structure.has_atomic_virial = true;
@@ -469,6 +541,10 @@ static void read_one_structure(
       if (force_position < 0 && (para.train_mode == 0 || para.train_mode == 3)) {
         PRINT_INPUT_ERROR("'force' or 'forces' is missing in properties.");
       }
+      if (spin_position < 0 && para.spin_mode) {
+        PRINT_INPUT_ERROR(
+          "spin_mode 1 requires spin/spins/moment/moments with property type R:3.\n");
+      }
       if (avirial_position < 0 && para.train_mode == 1 && para.atomic_v == 1) {
         PRINT_INPUT_ERROR("'adipole' or 'atomic_dipole' is missing in properties.");
       }
@@ -486,6 +562,14 @@ static void read_one_structure(
         }
         if (k < force_position) {
           force_offset +=
+            get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
+        }
+        if (k < spin_position) {
+          spin_offset +=
+            get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
+        }
+        if (k < mforce_position) {
+          mforce_offset +=
             get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
         }
         if (k < avirial_position) {
@@ -506,6 +590,8 @@ static void read_one_structure(
     species_offset,
     pos_offset,
     force_offset,
+    spin_offset,
+    mforce_offset,
     avirial_offset,
     bec_offset,
     input,
@@ -599,6 +685,7 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures_copy[nc].weight = structures[nc].weight;
     structures_copy[nc].has_virial = structures[nc].has_virial;
     structures_copy[nc].has_bec = structures[nc].has_bec;
+    structures_copy[nc].has_mforce = structures[nc].has_mforce;
     structures_copy[nc].energy = structures[nc].energy;
     structures_copy[nc].energy_weight = structures[nc].energy_weight;
     structures_copy[nc].has_temperature = structures[nc].has_temperature;
@@ -623,6 +710,12 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures_copy[nc].fx.resize(structures[nc].num_atom);
     structures_copy[nc].fy.resize(structures[nc].num_atom);
     structures_copy[nc].fz.resize(structures[nc].num_atom);
+    structures_copy[nc].sx.resize(structures[nc].sx.size());
+    structures_copy[nc].sy.resize(structures[nc].sy.size());
+    structures_copy[nc].sz.resize(structures[nc].sz.size());
+    structures_copy[nc].mfx.resize(structures[nc].mfx.size());
+    structures_copy[nc].mfy.resize(structures[nc].mfy.size());
+    structures_copy[nc].mfz.resize(structures[nc].mfz.size());
     structures_copy[nc].bec.resize(structures[nc].num_atom * 9);
     for (int na = 0; na < structures[nc].num_atom; ++na) {
       structures_copy[nc].type[na] = structures[nc].type[na];
@@ -632,6 +725,14 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
       structures_copy[nc].fx[na] = structures[nc].fx[na];
       structures_copy[nc].fy[na] = structures[nc].fy[na];
       structures_copy[nc].fz[na] = structures[nc].fz[na];
+      if (!structures[nc].sx.empty()) {
+        structures_copy[nc].sx[na] = structures[nc].sx[na];
+        structures_copy[nc].sy[na] = structures[nc].sy[na];
+        structures_copy[nc].sz[na] = structures[nc].sz[na];
+        structures_copy[nc].mfx[na] = structures[nc].mfx[na];
+        structures_copy[nc].mfy[na] = structures[nc].mfy[na];
+        structures_copy[nc].mfz[na] = structures[nc].mfz[na];
+      }
       for (int d = 0; d < 9; ++d) {
         structures_copy[nc].bec[na * 9 + d] = structures[nc].bec[na * 9 + d];
       }
@@ -643,6 +744,7 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures[nc].weight = structures_copy[configuration_id[nc]].weight;
     structures[nc].has_virial = structures_copy[configuration_id[nc]].has_virial;
     structures[nc].has_bec = structures_copy[configuration_id[nc]].has_bec;
+    structures[nc].has_mforce = structures_copy[configuration_id[nc]].has_mforce;
     structures[nc].energy = structures_copy[configuration_id[nc]].energy;
     structures[nc].energy_weight = structures_copy[configuration_id[nc]].energy_weight;
     structures[nc].has_temperature = structures_copy[configuration_id[nc]].has_temperature;
@@ -667,6 +769,12 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures[nc].fx.resize(structures[nc].num_atom);
     structures[nc].fy.resize(structures[nc].num_atom);
     structures[nc].fz.resize(structures[nc].num_atom);
+    structures[nc].sx.resize(structures_copy[configuration_id[nc]].sx.size());
+    structures[nc].sy.resize(structures_copy[configuration_id[nc]].sy.size());
+    structures[nc].sz.resize(structures_copy[configuration_id[nc]].sz.size());
+    structures[nc].mfx.resize(structures_copy[configuration_id[nc]].mfx.size());
+    structures[nc].mfy.resize(structures_copy[configuration_id[nc]].mfy.size());
+    structures[nc].mfz.resize(structures_copy[configuration_id[nc]].mfz.size());
     structures[nc].bec.resize(structures[nc].num_atom * 9);
     for (int na = 0; na < structures[nc].num_atom; ++na) {
       structures[nc].type[na] = structures_copy[configuration_id[nc]].type[na];
@@ -676,6 +784,14 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
       structures[nc].fx[na] = structures_copy[configuration_id[nc]].fx[na];
       structures[nc].fy[na] = structures_copy[configuration_id[nc]].fy[na];
       structures[nc].fz[na] = structures_copy[configuration_id[nc]].fz[na];
+      if (!structures[nc].sx.empty()) {
+        structures[nc].sx[na] = structures_copy[configuration_id[nc]].sx[na];
+        structures[nc].sy[na] = structures_copy[configuration_id[nc]].sy[na];
+        structures[nc].sz[na] = structures_copy[configuration_id[nc]].sz[na];
+        structures[nc].mfx[na] = structures_copy[configuration_id[nc]].mfx[na];
+        structures[nc].mfy[na] = structures_copy[configuration_id[nc]].mfy[na];
+        structures[nc].mfz[na] = structures_copy[configuration_id[nc]].mfz[na];
+      }
       for (int d = 0; d < 9; ++d) {
         structures[nc].bec[na * 9 + d] = structures_copy[configuration_id[nc]].bec[na * 9 + d];
       }

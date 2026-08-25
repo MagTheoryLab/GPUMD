@@ -358,6 +358,7 @@ __device__ __forceinline__ void fill_spin_primitive_tape(
     float spin_cutoff,
     SimulationBox box,
     const int* __restrict__ types,
+    const int* __restrict__ spin_env_type_active,
     const double* __restrict__ positions_soa3,
     const double* __restrict__ spins_soa3,
     const int* __restrict__ nl_radial,
@@ -372,6 +373,15 @@ __device__ __forceinline__ void fill_spin_primitive_tape(
   float si[3];
   float sj[3];
   const int neighbor = nl_radial[atom + atom_stride * global_slot];
+  if (spin_env_type_active[types[neighbor]] == 0) {
+    for (int row = 0; row < kSpinPrimitiveTapeRows; ++row) {
+      tape[row][local_slot] = 0.0f;
+    }
+    for (int c = 0; c < C; ++c) {
+      weights[c][local_slot] = 0.0f;
+    }
+    return;
+  }
   compute_spin_edge_geometry_f32(
       atom,
       neighbor,
@@ -479,6 +489,8 @@ find_spin_descriptor(
     float spin_cutoff,
     SimulationBox box,
     const int* __restrict__ types,
+    const int* __restrict__ spin_dof_type_active,
+    const int* __restrict__ spin_env_type_active,
     const double* __restrict__ positions_soa3,
     const double* __restrict__ spins_soa3,
     const int* __restrict__ nn_radial,
@@ -520,6 +532,7 @@ find_spin_descriptor(
   if (atom >= atom_count) {
     return;
   }
+  const bool center_active = spin_dof_type_active[types[atom]] != 0;
 
   const float si[3] = {
       static_cast<float>(spins_soa3[atom]),
@@ -527,9 +540,10 @@ find_spin_descriptor(
       static_cast<float>(spins_soa3[2 * atom_stride + atom])};
   if (lane == 0) {
     const float s2 = dot3f(si, si);
-    descriptors[atom + atom_stride * struct_dim] = s2;
+    descriptors[atom + atom_stride * struct_dim] =
+        center_active ? s2 : 0.0f;
     descriptors[atom + atom_stride * (struct_dim + 1)] =
-        s2 * s2;
+        center_active ? s2 * s2 : 0.0f;
   }
 
   constexpr int ScalarTaskBase = 0;
@@ -684,7 +698,7 @@ find_spin_descriptor(
   }
 
   float channel_acc[C] = {};
-  const int count = nn_radial[atom];
+  const int count = center_active ? nn_radial[atom] : 0;
   int chunk_count =
       (count + kSpinPrimitiveTileSlots - 1) / kSpinPrimitiveTileSlots;
   if (chunk_count == 0) {
@@ -714,6 +728,7 @@ find_spin_descriptor(
           spin_cutoff,
           box,
           types,
+          spin_env_type_active,
           positions_soa3,
           spins_soa3,
           nl_radial,

@@ -7,11 +7,16 @@ __global__ void find_mforce_onsite(
     int atom_count,
     int atom_stride,
     int struct_dim,
+    const int* __restrict__ types,
+    const int* __restrict__ spin_dof_type_active,
     const double* __restrict__ spins_soa3,
     const float* __restrict__ fp,
     double* __restrict__ mforce_soa3) {
   const int atom = blockIdx.x * blockDim.x + threadIdx.x;
   if (atom >= atom_count) {
+    return;
+  }
+  if (spin_dof_type_active[types[atom]] == 0) {
     return;
   }
   const double sx = spins_soa3[atom];
@@ -24,6 +29,20 @@ __global__ void find_mforce_onsite(
   mforce_soa3[atom] -= scale * sx;
   mforce_soa3[atom_stride + atom] -= scale * sy;
   mforce_soa3[2 * atom_stride + atom] -= scale * sz;
+}
+
+__global__ void mask_inactive_spin_mforce(
+    int atom_count,
+    int atom_stride,
+    const int* __restrict__ types,
+    const int* __restrict__ spin_dof_type_active,
+    double* __restrict__ mforce_soa3) {
+  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
+  if (atom < atom_count && spin_dof_type_active[types[atom]] == 0) {
+    mforce_soa3[atom] = 0.0;
+    mforce_soa3[atom_stride + atom] = 0.0;
+    mforce_soa3[2 * atom_stride + atom] = 0.0;
+  }
 }
 
 // Float helpers used by the unified density and chiral core.
@@ -67,6 +86,7 @@ __device__ __forceinline__ bool load_spin_edge_f32(
     float spin_cutoff,
     SimulationBox box,
     const int* __restrict__ types,
+    const int* __restrict__ spin_env_type_active,
     const double* __restrict__ positions_soa3,
     const double* __restrict__ spins_soa3,
     const double* __restrict__ slot_r12,
@@ -80,6 +100,9 @@ __device__ __forceinline__ bool load_spin_edge_f32(
     float* sj,
     float* weights,
     float* weight_derivatives) {
+  if (spin_env_type_active[types[neighbor]] == 0) {
+    return false;
+  }
   compute_spin_edge_geometry_f32(
       atom,
       neighbor,
@@ -816,6 +839,8 @@ find_force_spin_density(
     float spin_cutoff,
     SimulationBox box,
     const int* __restrict__ types,
+    const int* __restrict__ spin_dof_type_active,
+    const int* __restrict__ spin_env_type_active,
     const double* __restrict__ positions_soa3,
     const double* __restrict__ spins_soa3,
     const int* __restrict__ nn_radial,
@@ -849,7 +874,8 @@ find_force_spin_density(
   const int atom_in_tile = lane / EdgesPerAtomBatch;
   const int edge_lane = lane - atom_in_tile * EdgesPerAtomBatch;
   const int atom = blockIdx.x * AtomsPerWarp + atom_in_tile;
-  const bool active_atom = atom < atom_count;
+  const bool active_atom =
+      atom < atom_count && spin_dof_type_active[types[atom]] != 0;
   constexpr unsigned int FullWarpMask = 0xffffffffu;
   __shared__ SpinDensityForceTileShared<C, AtomsPerWarp> shared;
   constexpr int cache_stride = 1;
@@ -1053,6 +1079,7 @@ find_force_spin_density(
         spin_cutoff,
         box,
         types,
+        spin_env_type_active,
         positions_soa3,
         spins_soa3,
         slot_r12,
@@ -1517,6 +1544,8 @@ find_force_spin_chiral(
     float spin_cutoff,
     SimulationBox box,
     const int* __restrict__ types,
+    const int* __restrict__ spin_dof_type_active,
+    const int* __restrict__ spin_env_type_active,
     const double* __restrict__ positions_soa3,
     const double* __restrict__ spins_soa3,
     const int* __restrict__ nn_radial,
@@ -1548,7 +1577,8 @@ find_force_spin_chiral(
   const int atom_in_tile = lane / EdgesPerAtomBatch;
   const int edge_lane = lane - atom_in_tile * EdgesPerAtomBatch;
   const int atom = blockIdx.x * AtomsPerWarp + atom_in_tile;
-  const bool active_atom = atom < atom_count;
+  const bool active_atom =
+      atom < atom_count && spin_dof_type_active[types[atom]] != 0;
   constexpr unsigned int FullWarpMask = 0xffffffffu;
   __shared__ SpinChiralForceTileShared<C, AtomsPerWarp> shared;
   SpinChiralPullShared<C>* atom_pulls = &shared.pulls[atom_in_tile];
@@ -1789,6 +1819,7 @@ find_force_spin_chiral(
         spin_cutoff,
         box,
         types,
+        spin_env_type_active,
         positions_soa3,
         spins_soa3,
         slot_r12,

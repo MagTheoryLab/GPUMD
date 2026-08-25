@@ -196,11 +196,120 @@ def zero_model(compress, l_max, chiral, basis_size):
     return header + "0\n" * numeric_count
 
 
+def selective_type_model(spin_env_types="Fe O"):
+    num_types = 2
+    structural_dim = 8
+    spin_dim = 9
+    descriptor_dim = structural_dim + spin_dim
+    hidden = 1
+    parameters = []
+    for _ in range(num_types):
+        w0 = [0.0] * descriptor_dim
+        w0[structural_dim + 2] = 1.0
+        parameters.extend(w0)
+        parameters.append(0.0)
+        parameters.append(1.0)
+    parameters.append(0.0)
+    parameters.extend([0.0] * (5 * 7 * num_types * num_types))
+    parameters.extend([0.0] * (3 * 5 * num_types * num_types))
+    parameters.extend([1.0] * (num_types * num_types))
+    parameters.extend([1.0] * descriptor_dim)
+    header = (
+        "nep4_spin1 2 Fe O\n"
+        "spin_mode 1 10\n"
+        "spin_baseline 0 0\n"
+        "spin_n_max 0 0\n"
+        "spin_basis_size 0 0\n"
+        "spin_l_max 0 0 0\n"
+        "spin_compress 1\n"
+        "spin_cutoff 6 6\n"
+        "spin_chiral 0\n"
+        "spin_scaler 1\n"
+        "spin_dof_type Fe\n"
+        f"spin_env_type {spin_env_types}\n"
+        "cutoff 2 2 64 64\n"
+        "n_max 4 2\n"
+        "basis_size 6 4\n"
+        "l_max 1 0 0\n"
+        f"ANN {hidden} 0\n")
+    return header + "".join(f"{value:.17g}\n" for value in parameters)
+
+
+def validate_selective_type_semantics(root):
+    xyz = (
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:spin:R:3 pbc="T T T"\n'
+        'Fe 0 0 0 1 0.2 -0.1\n'
+        'O 3 0 0 0.4 -0.3 0.7\n')
+    selective_dir, selective_result = run_case(
+        root, "selective_types", selective_type_model(), xyz)
+    if selective_result.returncode:
+        raise AssertionError(
+            "valid selective spin types failed:\n"
+            f"{selective_result.stdout}{selective_result.stderr}")
+    selective = read_frame(selective_dir / "result.xyz")
+    excluded_dir, excluded_result = run_case(
+        root, "selective_env_excluded", selective_type_model("Fe"), xyz)
+    if excluded_result.returncode:
+        raise AssertionError(
+            "valid selective environment failed:\n"
+            f"{excluded_result.stdout}{excluded_result.stderr}")
+    excluded = read_frame(excluded_dir / "result.xyz")
+    default_env_model = selective_type_model("Fe").replace(
+        "spin_mode 1 10", "spin_mode 1 9", 1).replace(
+            "spin_env_type Fe\n", "", 1)
+    default_env_dir, default_env_result = run_case(
+        root, "selective_env_default", default_env_model, xyz)
+    if default_env_result.returncode:
+        raise AssertionError(
+            "default spin environment failed:\n"
+            f"{default_env_result.stdout}{default_env_result.stderr}")
+    default_env = read_frame(default_env_dir / "result.xyz")
+    positive = {
+        "environment_energy_response": abs(
+            selective["energy"][0] - excluded["energy"][0]),
+        "default_environment_energy_error": abs(
+            default_env["energy"][0] - excluded["energy"][0]),
+        "inactive_mforce_max": max(
+            abs(value) for value in selective["mforce"][1]),
+        "inactive_potential_abs": abs(selective["potential"][1]),
+    }
+    if positive["environment_energy_response"] <= 1.0e-6:
+        raise AssertionError("active center did not respond to an active environment type")
+    if positive["default_environment_energy_error"] > 1.0e-12:
+        raise AssertionError("missing spin_env_type did not default to spin_dof_type")
+    if positive["inactive_mforce_max"] > 1.0e-12:
+        raise AssertionError("inactive spin DOF received a public mforce")
+    if positive["inactive_potential_abs"] > 1.0e-12:
+        raise AssertionError("inactive spin center received a spin descriptor contribution")
+
+    mutations = {
+        "dof_not_subset": selective_type_model().replace(
+            "spin_dof_type Fe\nspin_env_type Fe O",
+            "spin_dof_type O\nspin_env_type Fe",
+            1),
+        "empty_dof": selective_type_model().replace(
+            "spin_dof_type Fe", "spin_dof_type", 1),
+        "unknown_env": selective_type_model().replace(
+            "spin_env_type Fe O", "spin_env_type Fe X", 1),
+        "duplicate_dof_type": selective_type_model().replace(
+            "spin_dof_type Fe", "spin_dof_type Fe Fe", 1),
+    }
+    negative = {}
+    for index, (name, mutated) in enumerate(mutations.items()):
+        _, result = run_case(
+            root, f"selective_negative_{index}", mutated, xyz)
+        negative[name] = result.returncode
+        if result.returncode == 0:
+            raise AssertionError(f"selective parser accepted {name}")
+    return positive, negative
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=("quick", "full"),
+        choices=("selective", "quick", "full"),
         default="full",
         help="quick checks one atom's position/spin derivatives; full checks all 3N components")
     parser.add_argument(
@@ -218,6 +327,20 @@ def main():
     if GPU_IDS and arguments.workers > len(GPU_IDS):
         raise ValueError(
             "--workers cannot exceed GPUMD_VALIDATOR_GPU_IDS count")
+    if arguments.mode == "selective":
+        with tempfile.TemporaryDirectory(
+                prefix="gpumd-nep-spin-selective-") as temporary:
+            positive, negative = validate_selective_type_semantics(
+                Path(temporary))
+        print(json.dumps(
+            {
+                "mode": "selective",
+                "parser_positive": {"selective_types": positive},
+                "parser_negative": negative,
+            },
+            indent=2,
+            sort_keys=True))
+        return 0
     model = (FIXTURE / "nep.txt").read_text()
     oracle = json.loads((FIXTURE / "fp64_oracle.json").read_text())
     report = {
@@ -383,6 +506,11 @@ def main():
                     f"basis={basis_size} failed:\n{result.stdout}{result.stderr}")
         variant_count = len(variant_futures)
         report["parser_positive"]["shape_variants"] = variant_count
+
+        selective_positive, selective_negative = (
+            validate_selective_type_semantics(root))
+        report["parser_positive"]["selective_types"] = selective_positive
+        report["parser_negative"].update(selective_negative)
 
         baseline = frames["large_box"]
         missing_spin_xyz = large_xyz.replace(":spin:R:3", "")

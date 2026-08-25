@@ -17,7 +17,9 @@
 #include "utilities/common.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
+#include "utilities/nep_utilities.cuh"
 #include "utilities/read_file.cuh"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -65,6 +67,8 @@ void Parameters::set_default_parameters()
   is_lambda_e_set = false;
   is_lambda_f_set = false;
   is_lambda_v_set = false;
+  is_lambda_m_set = false;
+  is_lambda_tau_set = false;
   is_atomic_v_set = false;
   is_lambda_shear_set = false;
   is_batch_set = false;
@@ -75,6 +79,15 @@ void Parameters::set_default_parameters()
   is_force_delta_set = false;
   is_use_typewise_cutoff_zbl_set = false;
   is_charge_mode_set = false;
+  is_spin_mode_set = false;
+  is_spin_chiral_set = false;
+  is_spin_compress_set = false;
+  is_spin_n_max_set = false;
+  is_spin_basis_size_set = false;
+  is_spin_l_max_set = false;
+  is_spin_cutoff_set = false;
+  is_spin_dof_type_set = false;
+  is_spin_env_type_set = false;
   is_save_potential_set = false;
   is_output_interval_set = false;
 
@@ -96,6 +109,8 @@ void Parameters::set_default_parameters()
   lambda_1 = lambda_2 = -1.0f; // automatic regularization
   lambda_e = lambda_f = 1.0f;  // energy and force are more important
   lambda_v = 0.1f;             // virial is less important
+  lambda_m = 1.0f;
+  lambda_tau = 0.0f;
   lambda_shear = 1.0f;         // do not weight shear virial more by default
   lambda_q = 0.1f;             // close to optimal
   lambda_z = 0.5f;             // close to optimal
@@ -114,6 +129,18 @@ void Parameters::set_default_parameters()
   typewise_cutoff_zbl_factor = -1.0f;
   output_descriptor = false;
   charge_mode = 0;
+  spin_mode = 0;
+  spin_chiral = 0;
+  spin_compress = 4;
+  spin_n_max[0] = 3;
+  spin_n_max[1] = 0;
+  spin_basis_size[0] = 3;
+  spin_basis_size[1] = 3;
+  spin_l_max[0] = 4;
+  spin_l_max[1] = 0;
+  spin_l_max[2] = 0;
+  spin_cutoff[0] = 8.0f;
+  spin_cutoff[1] = 4.0f;
 
   type_weight_cpu.resize(NUM_ELEMENTS);
   rc_radial.resize(NUM_ELEMENTS);
@@ -183,10 +210,84 @@ void Parameters::read_zbl_in()
 
 void Parameters::calculate_parameters()
 {
+  if (!is_spin_cutoff_set) {
+    spin_cutoff[0] = rc_radial_max;
+    spin_cutoff[1] = rc_angular_max;
+  }
+
   if (charge_mode) {
     if (train_mode != 0) {
       PRINT_INPUT_ERROR("Charge is only supported for potential model.");
     }
+  }
+
+  if (spin_chiral && !spin_mode) {
+    PRINT_INPUT_ERROR("spin_chiral requires spin_mode 1.\n");
+  }
+  if (spin_mode) {
+    if (version != 4 || train_mode != 0) {
+      PRINT_INPUT_ERROR("spin_mode 1 only supports a NEP4 potential model.\n");
+    }
+    if (charge_mode || enable_zbl || has_multiple_cutoffs) {
+      PRINT_INPUT_ERROR(
+        "spin_mode 1 does not support charge, ZBL, or type-dependent cutoffs.\n");
+    }
+    if (num_hidden_layers == 2) {
+      PRINT_INPUT_ERROR("spin_mode 1 only supports one hidden layer.\n");
+    }
+    if (fine_tune || import_q_scaler) {
+      PRINT_INPUT_ERROR(
+        "Spin NEP fine_tune/import_q_scaler is not supported until the "
+        "counted spin checkpoint reader is implemented.\n");
+    }
+    if (spin_compress < 1 || spin_compress > 4 ||
+        spin_basis_size[0] + 1 < spin_compress ||
+        spin_basis_size[0] + 1 > 8 ||
+        spin_n_max[0] > spin_basis_size[0] ||
+        spin_n_max[1] > spin_basis_size[1] ||
+        spin_l_max[0] < 0 || spin_l_max[0] > 4 ||
+        spin_l_max[1] != 0 || spin_l_max[2] != 0 ||
+        spin_cutoff[0] <= 0.0f || spin_cutoff[1] <= 0.0f) {
+      PRINT_INPUT_ERROR("Unsupported Spin NEP Lite shape in nep.in.\n");
+    }
+
+    auto resolve_active_types = [&](const std::vector<std::string>& names,
+                                    bool is_set,
+                                    std::vector<int>& active) {
+      active.assign(num_types, is_set ? 0 : 1);
+      if (!is_set) {
+        return;
+      }
+      for (const auto& name : names) {
+        auto found = std::find(elements.begin(), elements.end(), name);
+        if (found == elements.end()) {
+          PRINT_INPUT_ERROR("spin_dof_type or spin_env_type contains an unknown atom type.\n");
+        }
+        active[found - elements.begin()] = 1;
+      }
+    };
+    resolve_active_types(
+      spin_dof_type_names,
+      is_spin_dof_type_set,
+      spin_dof_type_active);
+    if (is_spin_env_type_set) {
+      resolve_active_types(
+        spin_env_type_names,
+        true,
+        spin_env_type_active);
+    } else {
+      spin_env_type_active = spin_dof_type_active;
+    }
+    for (int type = 0; type < num_types; ++type) {
+      if (spin_dof_type_active[type] && !spin_env_type_active[type]) {
+        PRINT_INPUT_ERROR("spin_dof_type must be a subset of spin_env_type.\n");
+      }
+    }
+    spin_baseline.assign(num_types, 0.0f);
+  } else {
+    spin_dof_type_active.assign(num_types, 0);
+    spin_env_type_active.assign(num_types, 0);
+    spin_baseline.assign(num_types, 0.0f);
   }
 
   if (train_mode == 0) {
@@ -228,7 +329,23 @@ void Parameters::calculate_parameters()
     PRINT_INPUT_ERROR("Number of angular descriptors should not exceed 90.");
   }
 
-  dim = dim_radial + dim_angular;
+  dim_struct = dim_radial + dim_angular;
+  dim_spin = 0;
+  if (spin_mode) {
+    const int C = spin_compress;
+    const int L = spin_l_max[0];
+    dim_spin =
+      2 + C * (7 + 4 * (L >= 1) + (L >= 2) + (L >= 3) + (L >= 4)) +
+      spin_chiral * ((C < 2 ? C : 2) + 2 * C);
+    if (dim_spin > 96) {
+      PRINT_INPUT_ERROR("Number of spin descriptors should not exceed 96.\n");
+    }
+  }
+  dim = dim_struct + dim_spin;
+  if (dim > MAX_DIM) {
+    PRINT_INPUT_ERROR(
+      "Combined structural and spin descriptor dimension exceeds GPUMD MAX_DIM.\n");
+  }
   if (train_mode == 3) {
     dim += 1; // concatenate temeprature with descriptors
   }
@@ -247,6 +364,9 @@ void Parameters::calculate_parameters()
   number_of_variables_descriptor =
     num_types * num_types *
     (dim_radial * (basis_size_radial + 1) + (n_max_angular + 1) * (basis_size_angular + 1));
+  number_of_variables_descriptor_spin =
+    spin_mode ? num_types * num_types * spin_compress * (spin_basis_size[0] + 1) : 0;
+  number_of_variables_descriptor += number_of_variables_descriptor_spin;
 
   number_of_variables = number_of_variables_ann + number_of_variables_descriptor;
   if (train_mode == 2) {
@@ -496,6 +616,40 @@ void Parameters::report_inputs()
     }
   }
 
+  if (spin_mode) {
+    printf("    (input)   use Spin NEP Lite training.\n");
+    printf(
+      "        spin_compress/n_max/basis_size/l_max = %d / %d,%d / %d,%d / %d,%d,%d.\n",
+      spin_compress,
+      spin_n_max[0],
+      spin_n_max[1],
+      spin_basis_size[0],
+      spin_basis_size[1],
+      spin_l_max[0],
+      spin_l_max[1],
+      spin_l_max[2]);
+    printf(
+      "        spin cutoff/chiral = %g,%g A / %d.\n",
+      spin_cutoff[0],
+      spin_cutoff[1],
+      spin_chiral);
+    printf("        spin_dof_type =");
+    for (int type = 0; type < num_types; ++type) {
+      if (spin_dof_type_active[type]) {
+        printf(" %s", elements[type].c_str());
+      }
+    }
+    printf(".\n");
+    printf("        spin_env_type =");
+    for (int type = 0; type < num_types; ++type) {
+      if (spin_env_type_active[type]) {
+        printf(" %s", elements[type].c_str());
+      }
+    }
+    printf(".\n");
+    printf("        lambda_m/lambda_tau = %g/%g.\n", lambda_m, lambda_tau);
+  }
+
   if (is_n_max_set) {
     printf("    (input)   n_max_radial = %d.\n", n_max_radial);
     printf("    (input)   n_max_angular = %d.\n", n_max_angular);
@@ -630,6 +784,9 @@ void Parameters::report_inputs()
   printf("Some calculated parameters:\n");
   printf("    number of radial descriptor components = %d.\n", dim_radial);
   printf("    number of angular descriptor components = %d.\n", dim_angular);
+  if (spin_mode) {
+    printf("    number of spin descriptor components = %d.\n", dim_spin);
+  }
   printf("    total number of descriptor components = %d.\n", dim);
   if (num_hidden_layers == 2) {
     printf("    NN architecture = %d-%d-%d-1.\n", dim, num_neurons1, num_neurons2);
@@ -685,6 +842,11 @@ void Parameters::parse_one_keyword(std::vector<std::string>& tokens)
     parse_lambda_f(param, num_param);
   } else if (strcmp(param[0], "lambda_v") == 0) {
     parse_lambda_v(param, num_param);
+  } else if (strcmp(param[0], "lambda_m") == 0 ||
+             strcmp(param[0], "lambda_mforce") == 0) {
+    parse_lambda_m(param, num_param);
+  } else if (strcmp(param[0], "lambda_tau") == 0) {
+    parse_lambda_tau(param, num_param);
   } else if (strcmp(param[0], "lambda_q") == 0) {
     parse_lambda_q(param, num_param);
   } else if (strcmp(param[0], "lambda_z") == 0) {
@@ -709,6 +871,39 @@ void Parameters::parse_one_keyword(std::vector<std::string>& tokens)
     parse_output_descriptor(param, num_param);
   } else if (strcmp(param[0], "charge_mode") == 0) {
     parse_charge_mode(param, num_param);
+  } else if (strcmp(param[0], "spin_mode") == 0) {
+    parse_spin_mode(param, num_param);
+  } else if (strcmp(param[0], "spin_chiral") == 0) {
+    parse_spin_chiral(param, num_param);
+  } else if (strcmp(param[0], "spin_compress") == 0) {
+    parse_spin_compress(param, num_param);
+  } else if (strcmp(param[0], "spin_n_max") == 0) {
+    parse_spin_n_max(param, num_param);
+  } else if (strcmp(param[0], "spin_basis_size") == 0) {
+    parse_spin_basis_size(param, num_param);
+  } else if (strcmp(param[0], "spin_l_max") == 0) {
+    parse_spin_l_max(param, num_param);
+  } else if (strcmp(param[0], "spin_cutoff") == 0) {
+    parse_spin_cutoff(param, num_param);
+  } else if (strcmp(param[0], "spin_dof_type") == 0) {
+    parse_spin_active_types(
+      param,
+      num_param,
+      "spin_dof_type",
+      spin_dof_type_names,
+      is_spin_dof_type_set);
+  } else if (strcmp(param[0], "spin_env_type") == 0) {
+    parse_spin_active_types(
+      param,
+      num_param,
+      "spin_env_type",
+      spin_env_type_names,
+      is_spin_env_type_set);
+  } else if (strcmp(param[0], "spin_type") == 0 ||
+             strcmp(param[0], "spin_descriptor") == 0) {
+    PRINT_INPUT_ERROR(
+      "Use spin_mode 1 with spin_dof_type and optional spin_env_type; "
+      "legacy spin_type/spin_descriptor is not supported.\n");
   } else if (strcmp(param[0], "fine_tune") == 0) {
     parse_fine_tune(param, num_param);
   } else if (strcmp(param[0], "save_potential") == 0) {
@@ -1179,6 +1374,38 @@ void Parameters::parse_lambda_v(const char** param, int num_param)
   }
 }
 
+void Parameters::parse_lambda_m(const char** param, int num_param)
+{
+  if (is_lambda_m_set) {
+    PRINT_INPUT_ERROR("Duplicate lambda_m/lambda_mforce keyword.\n");
+  }
+  is_lambda_m_set = true;
+  if (num_param != 2) {
+    PRINT_INPUT_ERROR("lambda_m should have 1 parameter.\n");
+  }
+  double value = 0.0;
+  if (!is_valid_real(param[1], &value) || value < 0.0) {
+    PRINT_INPUT_ERROR("Magnetic-force loss weight should be a non-negative number.\n");
+  }
+  lambda_m = value;
+}
+
+void Parameters::parse_lambda_tau(const char** param, int num_param)
+{
+  if (is_lambda_tau_set) {
+    PRINT_INPUT_ERROR("Duplicate lambda_tau keyword.\n");
+  }
+  is_lambda_tau_set = true;
+  if (num_param != 2) {
+    PRINT_INPUT_ERROR("lambda_tau should have 1 parameter.\n");
+  }
+  double value = 0.0;
+  if (!is_valid_real(param[1], &value) || value < 0.0) {
+    PRINT_INPUT_ERROR("Spin-torque loss weight should be a non-negative number.\n");
+  }
+  lambda_tau = value;
+}
+
 void Parameters::parse_lambda_q(const char** param, int num_param)
 {
   if (num_param != 2) {
@@ -1419,6 +1646,126 @@ void Parameters::parse_charge_mode(const char** param, int num_param)
   if (num_hidden_layers == 2) {
     PRINT_INPUT_ERROR("Can only use one hidden layer for qNEP.");
   }
+}
+
+void Parameters::parse_spin_mode(const char** param, int num_param)
+{
+  if (is_spin_mode_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_mode keyword.\n");
+  }
+  is_spin_mode_set = true;
+  if (num_param != 2 || !is_valid_int(param[1], &spin_mode) ||
+      spin_mode < 0 || spin_mode > 1) {
+    PRINT_INPUT_ERROR("spin_mode should be 0 or 1.\n");
+  }
+}
+
+void Parameters::parse_spin_chiral(const char** param, int num_param)
+{
+  if (is_spin_chiral_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_chiral keyword.\n");
+  }
+  is_spin_chiral_set = true;
+  if (num_param != 2 || !is_valid_int(param[1], &spin_chiral) ||
+      spin_chiral < 0 || spin_chiral > 1) {
+    PRINT_INPUT_ERROR("spin_chiral should be 0 or 1.\n");
+  }
+}
+
+void Parameters::parse_spin_compress(const char** param, int num_param)
+{
+  if (is_spin_compress_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_compress keyword.\n");
+  }
+  is_spin_compress_set = true;
+  if (num_param != 2 || !is_valid_int(param[1], &spin_compress) ||
+      spin_compress < 1 || spin_compress > 4) {
+    PRINT_INPUT_ERROR("spin_compress should be an integer from 1 to 4.\n");
+  }
+}
+
+void Parameters::parse_spin_n_max(const char** param, int num_param)
+{
+  if (is_spin_n_max_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_n_max keyword.\n");
+  }
+  is_spin_n_max_set = true;
+  if (num_param != 3 ||
+      !is_valid_int(param[1], &spin_n_max[0]) ||
+      !is_valid_int(param[2], &spin_n_max[1]) ||
+      spin_n_max[0] < 0 || spin_n_max[1] < 0) {
+    PRINT_INPUT_ERROR("spin_n_max should have two non-negative integers.\n");
+  }
+}
+
+void Parameters::parse_spin_basis_size(const char** param, int num_param)
+{
+  if (is_spin_basis_size_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_basis_size keyword.\n");
+  }
+  is_spin_basis_size_set = true;
+  if (num_param != 3 ||
+      !is_valid_int(param[1], &spin_basis_size[0]) ||
+      !is_valid_int(param[2], &spin_basis_size[1]) ||
+      spin_basis_size[0] < 0 || spin_basis_size[1] < 0) {
+    PRINT_INPUT_ERROR("spin_basis_size should have two non-negative integers.\n");
+  }
+}
+
+void Parameters::parse_spin_l_max(const char** param, int num_param)
+{
+  if (is_spin_l_max_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_l_max keyword.\n");
+  }
+  is_spin_l_max_set = true;
+  if (num_param != 4 ||
+      !is_valid_int(param[1], &spin_l_max[0]) ||
+      !is_valid_int(param[2], &spin_l_max[1]) ||
+      !is_valid_int(param[3], &spin_l_max[2])) {
+    PRINT_INPUT_ERROR("spin_l_max should have three integers.\n");
+  }
+}
+
+void Parameters::parse_spin_cutoff(const char** param, int num_param)
+{
+  if (is_spin_cutoff_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_cutoff keyword.\n");
+  }
+  is_spin_cutoff_set = true;
+  double radial = 0.0;
+  double angular = 0.0;
+  if (num_param != 3 ||
+      !is_valid_real(param[1], &radial) ||
+      !is_valid_real(param[2], &angular) ||
+      radial <= 0.0 || angular <= 0.0) {
+    PRINT_INPUT_ERROR("spin_cutoff should have two positive numbers.\n");
+  }
+  spin_cutoff[0] = radial;
+  spin_cutoff[1] = angular;
+}
+
+void Parameters::parse_spin_active_types(
+  const char** param,
+  int num_param,
+  const char* keyword,
+  std::vector<std::string>& names,
+  bool& is_set)
+{
+  if (is_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_dof_type or spin_env_type keyword.\n");
+  }
+  is_set = true;
+  if (num_param < 2) {
+    PRINT_INPUT_ERROR("spin_dof_type and spin_env_type must enable at least one type.\n");
+  }
+  names.clear();
+  for (int n = 1; n < num_param; ++n) {
+    if (std::find(names.begin(), names.end(), param[n]) != names.end()) {
+      PRINT_INPUT_ERROR("Duplicate atom type in spin_dof_type or spin_env_type.\n");
+    }
+    names.emplace_back(param[n]);
+  }
+  (void)keyword;
 }
 
 void Parameters::parse_fine_tune(const char** param, int num_param)

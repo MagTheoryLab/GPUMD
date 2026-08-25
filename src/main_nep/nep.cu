@@ -708,6 +708,8 @@ void NEP::find_force(
       nep_data[device_id].sum_fxyz.data());
     GPU_CHECK_KERNEL
 
+    find_additional_descriptors(para, dataset[device_id], device_id);
+
     if (para.prediction == 1 && para.output_descriptor >= 1) {
       FILE* fid_descriptor = my_fopen("descriptor.out", "a");
       std::vector<float> descriptor_cpu(nep_data[device_id].descriptors.size());
@@ -758,6 +760,7 @@ void NEP::find_force(
       dataset[device_id].virial.data() + dataset[device_id].N,
       dataset[device_id].virial.data() + dataset[device_id].N * 2);
     GPU_CHECK_KERNEL
+    initialize_additional_outputs(dataset[device_id], device_id);
 
     if (para.train_mode == 3) {
       apply_ann_temperature<<<grid_size, block_size>>>(
@@ -840,5 +843,6 @@ void NEP::find_force(
         dataset[device_id].energy.data());
       GPU_CHECK_KERNEL
     }
+    find_additional_force(para, dataset[device_id], device_id);
   }
 }

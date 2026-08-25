@@ -17,6 +17,7 @@
 
 #include "spin_integrator.cuh"
 #include "utilities/gpu_vector.cuh"
+#include <vector>
 
 class Atom;
 
@@ -29,6 +30,7 @@ public:
     double time_step,
     double mass_factor,
     int seed,
+    const std::vector<int>& spin_dof_type_active,
     Atom& atom);
 
   void compute1(const double time_step, Atom& atom) override;
@@ -46,5 +48,8 @@ private:
   double pos_nhc_[4];
   double vel_nhc_[4];
   double mas_nhc_[4];
+  int number_of_active_atoms_ = 0;
+  std::vector<int> cpu_active_per_atom_;
+  GPU_Vector<int> active_per_atom_;
   GPU_Vector<double> twice_kinetic_energy_;
 };

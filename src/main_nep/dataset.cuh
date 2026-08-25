@@ -27,6 +27,7 @@ public:
   int max_Na;         // number of atoms in the largest configuration
   int max_NN_radial;  // radial neighbor list size
   int max_NN_angular; // angular neighbor list size
+  int max_NN_spin;    // spin neighbor list size
 
   GPU_Vector<int> Na;          // number of atoms in each configuration
   GPU_Vector<int> Na_sum;      // prefix sum of Na
@@ -35,6 +36,8 @@ public:
 
   GPU_Vector<int> type;           // atom type (0, 1, 2, 3, ...)
   GPU_Vector<float> r;            // position
+  GPU_Vector<double> r_spin;      // position used by the Spin NEP kernels
+  GPU_Vector<double> spin;        // Cartesian magnetic moments
   GPU_Vector<float> box;          // (expanded) box and inverse box (18 components)
   GPU_Vector<float> box_original; // (original) box (9 components)
   GPU_Vector<int> num_cell;       // number of cells in the expanded box (3 components)
@@ -51,6 +54,9 @@ public:
   GPU_Vector<float> x12_angular;
   GPU_Vector<float> y12_angular;
   GPU_Vector<float> z12_angular;
+  GPU_Vector<int> NN_spin;
+  GPU_Vector<int> NL_spin;
+  GPU_Vector<double> r12_spin;
 
   GPU_Vector<float> charge;      // calculated charge in GPU
   GPU_Vector<float> charge_shifted;      // shifted charge in GPU
@@ -58,12 +64,14 @@ public:
   GPU_Vector<float> energy;      // calculated energy in GPU
   GPU_Vector<float> virial;      // calculated virial in GPU
   GPU_Vector<float> force;       // calculated force in GPU
+  GPU_Vector<float> mforce;      // calculated magnetic force in GPU
   GPU_Vector<float> avirial; // calculated atomic virial in GPU
   std::vector<float> charge_cpu;  // calculated charge in CPU
   std::vector<float> bec_cpu;     // calculated BEC in CPU
   std::vector<float> energy_cpu; // calculated energy in CPU
   std::vector<float> virial_cpu; // calculated virial in CPU
   std::vector<float> force_cpu;  // calculated force in CPU
+  std::vector<float> mforce_cpu;
   std::vector<float> avirial_cpu;   // calculated atomic virial in CPU
 
   GPU_Vector<float> energy_weight_gpu;    // energy weight in GPU
@@ -71,6 +79,7 @@ public:
   GPU_Vector<float> energy_ref_gpu;       // reference energy in GPU
   GPU_Vector<float> virial_ref_gpu;       // reference virial in GPU
   GPU_Vector<float> force_ref_gpu;        // reference force in GPU
+  GPU_Vector<float> mforce_ref_gpu;       // reference magnetic force in GPU
   GPU_Vector<float> bec_ref_gpu;          // reference BEC in GPU
   GPU_Vector<float> avirial_ref_gpu;     // reference atomic virial in GPU
   GPU_Vector<float> temperature_ref_gpu;  // reference temperature in GPU
@@ -79,12 +88,16 @@ public:
   std::vector<float> energy_ref_cpu;      // reference energy in CPU
   std::vector<float> virial_ref_cpu;      // reference virial in CPU
   std::vector<float> force_ref_cpu;       // reference force in CPU
+  std::vector<float> mforce_ref_cpu;
+  std::vector<int> has_mforce_cpu;
+  GPU_Vector<int> has_mforce_gpu;
   std::vector<float> bec_ref_cpu;         // reference BEC in CPU
   std::vector<float> avirial_ref_cpu;      // reference atomic virial in CPU
   std::vector<float> weight_cpu;          // configuration weight in CPU
   std::vector<float> temperature_ref_cpu; // reference temeprature in CPU
 
   GPU_Vector<float> type_weight_gpu; // relative force weight for different atom types (GPU)
+  GPU_Vector<int> spin_dof_type_active_gpu;
 
   std::vector<float> error_cpu; // error in energy, virial, or force
   GPU_Vector<float> error_gpu;  // error in energy, virial, or force
@@ -103,6 +116,8 @@ public:
     const bool do_shift,
     int device_id);
   std::vector<float> get_rmse_virial(Parameters& para, const bool use_weight, int device_id);
+  std::vector<float> get_rmse_mforce(Parameters& para, const bool use_weight, int device_id);
+  std::vector<float> get_rmse_tau(Parameters& para, const bool use_weight, int device_id);
   std::vector<float> get_rmse_avirial(Parameters& para, const bool use_weight, int device_id);
   std::vector<float> get_rmse_charge(Parameters& para, int device_id);
   std::vector<float> get_rmse_bec(Parameters& para, int device_id);

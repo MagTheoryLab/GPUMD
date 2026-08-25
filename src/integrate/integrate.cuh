@@ -37,7 +37,8 @@ public:
     Box& box,
     std::vector<Group>& group,
     GPU_Vector<double>& thermo,
-    int& total_steps);
+    int& total_steps,
+    const std::vector<int>& spin_dof_type_active);
 
   void finalize();
 

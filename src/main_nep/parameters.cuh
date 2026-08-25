@@ -53,6 +53,8 @@ public:
   float lambda_e;         // weight parameter for energy RMSE loss
   float lambda_f;         // weight parameter for force RMSE loss
   float lambda_v;         // weight parameter for virial RMSE loss
+  float lambda_m;         // weight parameter for magnetic-force RMSE loss
+  float lambda_tau;       // weight parameter for spin-torque RMSE loss
   float lambda_shear;     // extra weight parameter for shear virial
   float lambda_q;         // weight for global charge
   float lambda_z;         // weight for BEC
@@ -70,6 +72,13 @@ public:
   float typewise_cutoff_zbl_factor;
   int output_descriptor;
   int charge_mode; // add dynamic charge to NEP potential model
+  int spin_mode;   // add Spin NEP Lite descriptors to NEP potential model
+  int spin_chiral;
+  int spin_compress;
+  int spin_n_max[2];
+  int spin_basis_size[2];
+  int spin_l_max[3];
+  float spin_cutoff[2];
   bool has_bec = false; // check if there are target BEC values
   int flip_charge = 0; // 1 for flipping charges upon restarting
   int fine_tune = 0; // fine_tune option; 0=no, 1=yes
@@ -93,6 +102,8 @@ public:
   bool is_lambda_e_set;
   bool is_lambda_f_set;
   bool is_lambda_v_set;
+  bool is_lambda_m_set;
+  bool is_lambda_tau_set;
   bool is_atomic_v_set;
   bool is_lambda_shear_set;
   bool is_batch_set;
@@ -105,21 +116,38 @@ public:
   bool is_zbl_set;
   bool is_use_typewise_cutoff_zbl_set;
   bool is_charge_mode_set;
+  bool is_spin_mode_set;
+  bool is_spin_chiral_set;
+  bool is_spin_compress_set;
+  bool is_spin_n_max_set;
+  bool is_spin_basis_size_set;
+  bool is_spin_l_max_set;
+  bool is_spin_cutoff_set;
+  bool is_spin_dof_type_set;
+  bool is_spin_env_type_set;
 
   // other parameters
   int dim;                            // dimension of the descriptor vector
   int dim_radial;                     // number of radial descriptor components
   int dim_angular;                    // number of angular descriptor components
+  int dim_struct;                     // structural descriptor dimension
+  int dim_spin;                       // spin descriptor dimension
   int number_of_variables;            // total number of parameters (NN and descriptor)
   int number_of_variables_ann;        // number of parameters in the ANN only
   int number_of_variables_ann_1;      // number of parameters in the ANN for one element
   int number_of_variables_descriptor; // number of parameters in the descriptor only
+  int number_of_variables_descriptor_spin;
 
   // some arrays
 
   std::vector<float> type_weight_cpu; // relative force weight for different atom types (CPU)
   std::vector<float> q_scaler_cpu;    // used to scale some descriptor components (CPU)
   std::vector<std::string> elements;  // atom symbols
+  std::vector<std::string> spin_dof_type_names;
+  std::vector<std::string> spin_env_type_names;
+  std::vector<int> spin_dof_type_active;
+  std::vector<int> spin_env_type_active;
+  std::vector<float> spin_baseline;
   std::vector<int> atomic_numbers;    // atomic numbers
   std::vector<float> zbl_para;        // parameters of zbl potential
   std::vector<float> rc_radial;       // radial cutoff distance
@@ -158,6 +186,8 @@ private:
   void parse_lambda_e(const char** param, int num_param);
   void parse_lambda_f(const char** param, int num_param);
   void parse_lambda_v(const char** param, int num_param);
+  void parse_lambda_m(const char** param, int num_param);
+  void parse_lambda_tau(const char** param, int num_param);
   void parse_lambda_q(const char** param, int num_param);
   void parse_lambda_z(const char** param, int num_param);
   void parse_lambda_shear(const char** param, int num_param);
@@ -171,6 +201,19 @@ private:
   void parse_use_typewise_cutoff_zbl(const char** param, int num_param);
   void parse_output_descriptor(const char** param, int num_param);
   void parse_charge_mode(const char** param, int num_param);
+  void parse_spin_mode(const char** param, int num_param);
+  void parse_spin_chiral(const char** param, int num_param);
+  void parse_spin_compress(const char** param, int num_param);
+  void parse_spin_n_max(const char** param, int num_param);
+  void parse_spin_basis_size(const char** param, int num_param);
+  void parse_spin_l_max(const char** param, int num_param);
+  void parse_spin_cutoff(const char** param, int num_param);
+  void parse_spin_active_types(
+    const char** param,
+    int num_param,
+    const char* keyword,
+    std::vector<std::string>& names,
+    bool& is_set);
   void parse_fine_tune(const char** param, int num_param);
   void parse_save_potential(const char** param, int num_param);
   void parse_output_interval(const char** param, int num_param);

@@ -25,6 +25,7 @@ struct Structure {
   int has_atomic_virial;
   int atomic_virial_diag_only;
   int has_bec;
+  int has_mforce;
   int has_temperature;
   float weight;
   float charge = 0.0f;
@@ -42,6 +43,12 @@ struct Structure {
   std::vector<float> fx;
   std::vector<float> fy;
   std::vector<float> fz;
+  std::vector<float> sx;
+  std::vector<float> sy;
+  std::vector<float> sz;
+  std::vector<float> mfx;
+  std::vector<float> mfy;
+  std::vector<float> mfz;
   std::vector<float> avirialxx;
   std::vector<float> avirialyy;
   std::vector<float> avirialzz;

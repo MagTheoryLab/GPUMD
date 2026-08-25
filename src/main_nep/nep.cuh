@@ -88,10 +88,22 @@ public:
     bool calculate_q_scaler,
     int deviceCount);
 
-private:
+protected:
   ParaMB paramb;
   ANN annmb[16];
   NEP_Data nep_data[16];
   ZBL zbl;
   void update_potential(float* parameters, ANN& ann);
+  virtual void find_additional_descriptors(
+    Parameters&,
+    Dataset&,
+    int)
+  {
+  }
+  virtual void initialize_additional_outputs(Dataset&, int)
+  {
+  }
+  virtual void find_additional_force(Parameters&, Dataset&, int)
+  {
+  }
 };

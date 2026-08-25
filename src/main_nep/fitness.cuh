@@ -28,7 +28,17 @@ class Fitness
 public:
   Fitness(Parameters& para);
   ~Fitness();
-  void compute(const int generation, Parameters& para, const float*, float*, float*, float*, float*, float*);
+  void compute(
+    const int generation,
+    Parameters& para,
+    const float*,
+    float*,
+    float*,
+    float*,
+    float*,
+    float*,
+    float*,
+    float*);
   void report_error(
     Parameters& para,
     const int generation,
@@ -44,6 +54,7 @@ protected:
   int num_batches = 0;
   int max_NN_radial;  // radial neighbor list size
   int max_NN_angular; // angular neighbor list size
+  int max_NN_spin;    // spin neighbor list size
   FILE* fid_loss_out = NULL;
   std::unique_ptr<Potential> potential;
   std::vector<std::vector<Dataset>> train_set;
@@ -63,6 +74,7 @@ protected:
       Dataset& dataset);
   void update_energy_force_virial(
     FILE* fid_energy, FILE* fid_force, FILE* fid_virial, FILE* fid_stress, Dataset& dataset);
+  void update_mforce(FILE* fid_mforce, Dataset& dataset);
   void update_charge(FILE* fid_charge, Dataset& dataset);
   void update_bec(FILE* fid_bec, Dataset& dataset);
   void update_dipole(FILE* fid_dipole, Dataset& dataset, bool atomic);

@@ -54,7 +54,8 @@ void Integrate::initialize(
   Box& box,
   std::vector<Group>& group,
   GPU_Vector<double>& thermo,
-  int& total_steps)
+  int& total_steps,
+  const std::vector<int>& spin_dof_type_active)
 {
   this->total_steps = total_steps;
   int number_of_atoms = atom.number_of_atoms;
@@ -290,6 +291,7 @@ void Integrate::initialize(
       time_step,
       spin_mass_factor,
       spin_seed,
+      spin_dof_type_active,
       atom));
     spin_integrator->temperature = temperature;
   }

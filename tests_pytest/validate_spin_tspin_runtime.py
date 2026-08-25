@@ -9,6 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from validate_nep_spin_runtime import selective_type_model
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin" / "spin_chiral_protocol"
@@ -30,7 +32,13 @@ def model_with_zero_lattice_velocity(xyz_name="model_large_box.xyz"):
     return "\n".join(lines) + "\n"
 
 
-def run_case(root, name, run_input, model_text=None, ordinary=False):
+def run_case(
+        root,
+        name,
+        run_input,
+        model_text=None,
+        ordinary=False,
+        potential_text=None):
     case = root / name
     case.mkdir()
     if ordinary:
@@ -41,7 +49,10 @@ def run_case(root, name, run_input, model_text=None, ordinary=False):
             Path(__file__).parent / "fixtures" / "structures" / "C-nat16-rattled.xyz",
             case / "model.xyz")
     else:
-        shutil.copy(FIXTURE / "nep.txt", case / "nep.txt")
+        if potential_text is None:
+            shutil.copy(FIXTURE / "nep.txt", case / "nep.txt")
+        else:
+            (case / "nep.txt").write_text(potential_text)
         (case / "model.xyz").write_text(
             model_text if model_text is not None
             else model_with_zero_lattice_velocity())
@@ -398,6 +409,49 @@ def validate_fixed_spin_nhc(root):
     return error
 
 
+def validate_selective_types(root):
+    model_text = (
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
+        'O 3 0 0 0 0 0 0.4 -0.3 0.7\n')
+    initial_inactive_spin = [0.4, -0.3, 0.7]
+    case, result = run_case(
+        root,
+        "selective_types",
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
+        "time_step 0.1\n"
+        "dump_xyz -1 0 1 state.xyz spin spin_velocity\n"
+        "run 1\n",
+        model_text,
+        potential_text=selective_type_model())
+    if result.returncode != 0:
+        raise RuntimeError(result.stdout + result.stderr)
+    lines = (case / "state.xyz").read_text().splitlines()
+    rows = [
+        [float(value) for value in line.split()[1:]]
+        for line in lines[-2:]
+    ]
+    active_spin = rows[0][3:6]
+    inactive_spin = rows[1][3:6]
+    inactive_velocity = rows[1][6:9]
+    inactive_spin_error = max(
+        abs(actual - expected)
+        for actual, expected in zip(inactive_spin, initial_inactive_spin))
+    inactive_velocity_max = max(abs(value) for value in inactive_velocity)
+    active_spin_change = max(
+        abs(actual - expected)
+        for actual, expected in zip(active_spin, [1.0, 0.2, -0.1]))
+    if inactive_spin_error != 0.0 or inactive_velocity_max != 0.0:
+        raise AssertionError(
+            "nvt_tspin advanced an inactive spin DOF: "
+            f"spin={inactive_spin_error:.3e}, velocity={inactive_velocity_max:.3e}")
+    if active_spin_change <= 1.0e-12:
+        raise AssertionError("nvt_tspin did not advance the active spin DOF")
+    return inactive_spin_error, inactive_velocity_max
+
+
 def main():
     if not GPUMD.exists():
         raise FileNotFoundError(GPUMD)
@@ -407,6 +461,8 @@ def main():
         negative_count = validate_fail_closed(root)
         validate_lifecycle(root)
         fixed_spin_error = validate_fixed_spin_nhc(root)
+        inactive_spin_error, inactive_velocity_max = (
+            validate_selective_types(root))
         minimum_temperature, maximum_temperature, mean_temperature = (
             validate_short_dynamics(root))
     print(
@@ -415,6 +471,8 @@ def main():
         f"max spin_velocity error={velocity_error:.3e}, "
         f"fail-closed cases={negative_count}, lifecycle/restart=passed, "
         f"fixed-spin nvt_nhc error={fixed_spin_error:.1e}, "
+        f"selective inactive spin/velocity={inactive_spin_error:.1e}/"
+        f"{inactive_velocity_max:.1e}, "
         f"short spin T min/mean/max={minimum_temperature:.3f}/"
         f"{mean_temperature:.3f}/{maximum_temperature:.3f} K")
     return 0

@@ -4,7 +4,9 @@
     This file is part of GPUMD and is distributed under GPLv3 or later.
 
     The spin model protocol and mathematical layout are adapted from
-    NEPAdapters (GPLv3+), commit b4735bba1d02045ad31b7bae510bfdb393536f37.
+    NEPAdapters (GPLv3+). The frozen mathematical reference is commit
+    b4735bba1d02045ad31b7bae510bfdb393536f37; selective spin-type semantics
+    are aligned with commit 640f2e484d59f41a09ac9e3b602f3868e0d26842.
 */
 
 #include "nep_spin.cuh"
@@ -572,19 +574,27 @@ void check_unique_elements(const std::vector<std::string>& elements)
   }
 }
 
-void check_active_types(
+std::vector<int> parse_active_types(
   const std::vector<std::string>& tokens,
   const std::vector<std::string>& elements,
   const char* name)
 {
-  if (tokens.size() != elements.size() + 1) {
-    throw std::runtime_error(std::string(name) + " must list every model type exactly once");
+  if (tokens.size() < 2) {
+    throw std::runtime_error(std::string(name) + " must enable at least one model type");
   }
-  std::set<std::string> listed(tokens.begin() + 1, tokens.end());
-  std::set<std::string> expected(elements.begin(), elements.end());
-  if (listed != expected || listed.size() != tokens.size() - 1) {
-    throw std::runtime_error(std::string(name) + " must activate all model types exactly once");
+  std::vector<int> active(elements.size(), 0);
+  for (std::size_t index = 1; index < tokens.size(); ++index) {
+    const auto found = std::find(elements.begin(), elements.end(), tokens[index]);
+    if (found == elements.end()) {
+      throw std::runtime_error(std::string("unknown ") + name + " model type");
+    }
+    const std::size_t type = static_cast<std::size_t>(found - elements.begin());
+    if (active[type] != 0) {
+      throw std::runtime_error(std::string("duplicate model type in ") + name);
+    }
+    active[type] = 1;
   }
+  return active;
 }
 
 NEP_Spin::Spin_Layout make_spin_layout(const NEP_Spin::Model& model)
@@ -655,6 +665,8 @@ void launch_spin_descriptor(
       static_cast<float>(model.spin_cutoff[0]),
       box,
       type.data(),
+      data.spin_dof_type_active.data(),
+      data.spin_env_type_active.data(),
       position.data(),
       spin.data(),
       data.NN_spin.data(),
@@ -699,6 +711,8 @@ void launch_spin_descriptor(
       static_cast<float>(model.spin_cutoff[0]),
       box,
       type.data(),
+      data.spin_dof_type_active.data(),
+      data.spin_env_type_active.data(),
       position.data(),
       spin.data(),
       data.NN_spin.data(),
@@ -819,6 +833,8 @@ void launch_spin_density_force(
     static_cast<float>(model.spin_cutoff[0]),
     box,
     type.data(),
+    data.spin_dof_type_active.data(),
+    data.spin_env_type_active.data(),
     position.data(),
     spin.data(),
     data.NN_spin.data(),
@@ -874,6 +890,8 @@ void launch_spin_chiral_force(
     static_cast<float>(model.spin_cutoff[0]),
     box,
     type.data(),
+    data.spin_dof_type_active.data(),
+    data.spin_env_type_active.data(),
     position.data(),
     spin.data(),
     data.NN_spin.data(),
@@ -968,6 +986,20 @@ void launch_spin_forces(
       launch_spin_forces_lmax<4>(
         model, box, type, position, spin, data, force, mforce, virial, slot_r12, r12_plane_size);
       break;
+  }
+  const bool has_inactive_dof = std::any_of(
+    model.spin_dof_type_active.begin(),
+    model.spin_dof_type_active.end(),
+    [](const int active) { return active == 0; });
+  if (has_inactive_dof) {
+    constexpr int block_size = 128;
+    const int grid_size = (type.size() - 1) / block_size + 1;
+    mask_inactive_spin_mforce<<<grid_size, block_size>>>(
+      type.size(),
+      type.size(),
+      type.data(),
+      data.spin_dof_type_active.data(),
+      mforce.data());
   }
   GPU_CHECK_KERNEL
 }
@@ -1141,12 +1173,14 @@ void NEP_Spin::read_model(const char* file_potential)
       if (seen_dof)
         throw std::runtime_error("duplicate spin_dof_type");
       seen_dof = true;
-      check_active_types(tokens, model_.elements, "spin_dof_type");
+      model_.spin_dof_type_active =
+        parse_active_types(tokens, model_.elements, "spin_dof_type");
     } else if (name == "spin_env_type") {
       if (seen_env)
         throw std::runtime_error("duplicate spin_env_type");
       seen_env = true;
-      check_active_types(tokens, model_.elements, "spin_env_type");
+      model_.spin_env_type_active =
+        parse_active_types(tokens, model_.elements, "spin_env_type");
     } else {
       throw std::runtime_error("unknown or unsupported spin header line: " + name);
     }
@@ -1155,6 +1189,19 @@ void NEP_Spin::read_model(const char* file_potential)
     !seen_baseline || !seen_n_max || !seen_basis_size || !seen_l_max || !seen_compress ||
     !seen_cutoff || !seen_chiral || !seen_scaler) {
     throw std::runtime_error("counted spin header is missing a required line");
+  }
+  if (!seen_dof) {
+    model_.spin_dof_type_active.assign(model_.num_types, 1);
+  }
+  if (!seen_env) {
+    model_.spin_env_type_active = model_.spin_dof_type_active;
+  }
+  for (int type = 0; type < model_.num_types; ++type) {
+    if (
+      model_.spin_dof_type_active[type] != 0 &&
+      model_.spin_env_type_active[type] == 0) {
+      throw std::runtime_error("spin_dof_type must be a subset of spin_env_type");
+    }
   }
 
   tokens = next_tokens(input);
@@ -1244,6 +1291,10 @@ void NEP_Spin::read_model(const char* file_potential)
     throw std::runtime_error("spin descriptor dimension exceeds 96");
   }
   model_.descriptor_dim = model_.struct_descriptor_dim + model_.spin_descriptor_dim;
+  if (model_.descriptor_dim > MAX_DIM) {
+    throw std::runtime_error(
+      "combined structural and spin descriptor dimension exceeds GPUMD MAX_DIM");
+  }
 
   const std::size_t types = static_cast<std::size_t>(model_.num_types);
   const std::size_t type_pairs = types * types;
@@ -1303,6 +1354,10 @@ void NEP_Spin::read_model(const char* file_potential)
   std::vector<float> spin_baseline(model_.spin_baseline.begin(), model_.spin_baseline.end());
   data_.spin_baseline.resize(spin_baseline.size());
   data_.spin_baseline.copy_from_host(spin_baseline.data());
+  data_.spin_dof_type_active.resize(model_.spin_dof_type_active.size());
+  data_.spin_dof_type_active.copy_from_host(model_.spin_dof_type_active.data());
+  data_.spin_env_type_active.resize(model_.spin_env_type_active.size());
+  data_.spin_env_type_active.copy_from_host(model_.spin_env_type_active.data());
 
   paramb_.version = 4;
   paramb_.num_types = model_.num_types;
@@ -1607,7 +1662,14 @@ void NEP_Spin::compute(
       virial.data());
     GPU_CHECK_KERNEL
     find_mforce_onsite<<<grid_size, block_size>>>(
-      N, N, model_.struct_descriptor_dim, spin.data(), data_.Fp.data(), mforce.data());
+      N,
+      N,
+      model_.struct_descriptor_dim,
+      type.data(),
+      data_.spin_dof_type_active.data(),
+      spin.data(),
+      data_.Fp.data(),
+      mforce.data());
     launch_spin_forces(
       model_,
       box,
@@ -1733,6 +1795,13 @@ void NEP_Spin::compute(
     virial);
 
   find_mforce_onsite<<<grid_size, block_size>>>(
-    N, N, model_.struct_descriptor_dim, spin.data(), data_.Fp.data(), mforce.data());
+    N,
+    N,
+    model_.struct_descriptor_dim,
+    type.data(),
+    data_.spin_dof_type_active.data(),
+    spin.data(),
+    data_.Fp.data(),
+    mforce.data());
   launch_spin_forces(model_, box, type, position, spin, data_, force, mforce, virial);
 }

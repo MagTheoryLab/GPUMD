@@ -57,6 +57,8 @@ SNES::SNES(Parameters& para, Fitness* fitness_function)
   fitness_virial.resize(population_size * (para.num_types + 1));
   fitness_charge.resize(population_size * (para.num_types + 1));
   fitness_bec.resize(population_size * (para.num_types + 1));
+  fitness_mforce.resize(population_size * (para.num_types + 1));
+  fitness_tau.resize(population_size * (para.num_types + 1));
   index.resize(population_size * (para.num_types + 1));
   population.resize(N);
   mu.resize(number_of_variables);
@@ -230,7 +232,6 @@ void SNES::initialize_mu_and_sigma_fine_tune(Parameters& para)
       }
     }
   }
-
   input.close();
   gpuSetDevice(0); // normally use GPU-0
   gpu_mu.copy_from_host(mu.data());
@@ -290,6 +291,25 @@ void SNES::find_type_of_variable(Parameters& para)
       }
     }
   }
+  offset +=
+    (para.n_max_angular + 1) * (para.basis_size_angular + 1) *
+    para.num_types * para.num_types;
+  if (para.spin_mode) {
+    for (int channel = 0; channel < para.spin_compress; ++channel) {
+      for (int basis = 0; basis <= para.spin_basis_size[0]; ++basis) {
+        for (int t1 = 0; t1 < para.num_types; ++t1) {
+          for (int t2 = 0; t2 < para.num_types; ++t2) {
+            const int pair = t1 * para.num_types + t2;
+            const int coefficient =
+              (channel * (para.spin_basis_size[0] + 1) + basis) *
+                para.num_types * para.num_types +
+              pair;
+            type_of_variable[offset + coefficient] = t1;
+          }
+        }
+      }
+    }
+  }
 }
 
 void SNES::compute(Parameters& para, Fitness* fitness_function)
@@ -308,18 +328,37 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
 
     if (para.train_mode == 0 || para.train_mode == 3) {
       if (!para.charge_mode) {
-        printf(
-          "%-8s%-11s%-11s%-11s%-13s%-13s%-13s%-13s%-13s%-13s\n",
-          "Step",
-          "Total-Loss",
-          "L1Reg-Loss",
-          "L2Reg-Loss",
-          "RMSE-E-Train",
-          "RMSE-F-Train",
-          "RMSE-V-Train",
-          "RMSE-E-Test",
-          "RMSE-F-Test",
-          "RMSE-V-Test");
+        if (para.spin_mode) {
+          printf(
+            "%-8s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s\n",
+            "Step",
+            "Total",
+            "L1Reg",
+            "L2Reg",
+            "E-Train",
+            "F-Train",
+            "V-Train",
+            "M-Train",
+            "T-Train",
+            "E-Test",
+            "F-Test",
+            "V-Test",
+            "M-Test",
+            "T-Test");
+        } else {
+          printf(
+            "%-8s%-11s%-11s%-11s%-13s%-13s%-13s%-13s%-13s%-13s\n",
+            "Step",
+            "Total-Loss",
+            "L1Reg-Loss",
+            "L2Reg-Loss",
+            "RMSE-E-Train",
+            "RMSE-F-Train",
+            "RMSE-V-Train",
+            "RMSE-E-Test",
+            "RMSE-F-Test",
+            "RMSE-V-Test");
+        }
       } else {
         printf(
           "%-8s%-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s%-9s\n",
@@ -353,15 +392,18 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
   if (para.prediction == 0) {
     for (int n = 0; n < maximum_generation; ++n) {
       create_population();
+      // Generation zero initializes q_scaler before population fitness is used.
       fitness_function->compute(
         n, 
         para, 
-        population.data(), 
+        population.data(),
         fitness_energy.data(),
         fitness_force.data(),
         fitness_virial.data(),
         fitness_charge.data(),
-        fitness_bec.data());
+        fitness_bec.data(),
+        fitness_mforce.data(),
+        fitness_tau.data());
 
       regularize_NEP4(para);
 
@@ -397,6 +439,24 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
     std::vector<std::string> tokens;
     tokens = get_tokens(input);
     int num_lines_to_be_skipped = 5;
+    if (tokens[0] == "nep4_spin1") {
+      tokens = get_tokens(input);
+      if (tokens.size() != 3 || tokens[0] != "spin_mode" ||
+          get_int_from_token(tokens[1], __FILE__, __LINE__) != 1) {
+        PRINT_INPUT_ERROR("Invalid counted spin header in nep.txt.");
+      }
+      const int spin_header_lines =
+        get_int_from_token(tokens[2], __FILE__, __LINE__);
+      if (spin_header_lines < 8 || spin_header_lines > 10) {
+        PRINT_INPUT_ERROR("Invalid counted spin header length in nep.txt.");
+      }
+      for (int line = 0; line < spin_header_lines; ++line) {
+        tokens = get_tokens(input);
+        if (tokens.empty()) {
+          PRINT_INPUT_ERROR("Truncated counted spin header in nep.txt.");
+        }
+      }
+    }
     if ( 
       tokens[0] == "nep4_zbl" || 
       tokens[0] == "nep4_zbl_temperature" || 
@@ -526,7 +586,8 @@ void SNES::regularize_NEP4(Parameters& para)
       fitness_total[p + t * population_size] =
         cost_L1 + cost_L2 + fitness_energy[p + t * population_size] +
         fitness_force[p + t * population_size] + fitness_virial[p + t * population_size] +
-        fitness_charge[p + t * population_size] + fitness_bec[p + t * population_size];
+        fitness_charge[p + t * population_size] + fitness_bec[p + t * population_size] +
+        fitness_mforce[p + t * population_size] + fitness_tau[p + t * population_size];
       fitness_L1[p + t * population_size] = cost_L1;
       fitness_L2[p + t * population_size] = cost_L2;
     }
