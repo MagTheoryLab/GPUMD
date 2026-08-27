@@ -35,7 +35,9 @@ Get the fitness
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <random>
+#include <set>
 #include <sstream>
 #include <vector>
 #include <cstring>
@@ -49,8 +51,11 @@ void load_spin_checkpoint_metadata(Parameters& para)
     PRINT_INPUT_ERROR("Failed to open nep.txt for Spin NEP prediction.");
   }
   auto tokens = get_tokens(input);
+  const std::string expected_tag = para.enable_zbl
+    ? "nep4_spin2_zbl"
+    : "nep4_spin" + std::to_string(para.spin_mode);
   if (tokens.size() != static_cast<std::size_t>(para.num_types + 2) ||
-      tokens[0] != "nep4_spin1" ||
+      tokens[0] != expected_tag ||
       get_int_from_token(tokens[1], __FILE__, __LINE__) != para.num_types) {
     PRINT_INPUT_ERROR("Spin NEP checkpoint header does not match nep.in.");
   }
@@ -61,12 +66,13 @@ void load_spin_checkpoint_metadata(Parameters& para)
   }
   tokens = get_tokens(input);
   if (tokens.size() != 3 || tokens[0] != "spin_mode" ||
-      get_int_from_token(tokens[1], __FILE__, __LINE__) != 1) {
+      get_int_from_token(tokens[1], __FILE__, __LINE__) != para.spin_mode) {
     PRINT_INPUT_ERROR("Spin NEP checkpoint has an invalid counted spin header.");
   }
   const int line_count = get_int_from_token(tokens[2], __FILE__, __LINE__);
-  if (line_count < 8 || line_count > 10) {
-    PRINT_INPUT_ERROR("Spin NEP checkpoint header must contain 8 to 10 lines.");
+  const int minimum_lines = para.spin_mode == 2 ? 9 : 8;
+  if (line_count < minimum_lines || line_count > minimum_lines + 2) {
+    PRINT_INPUT_ERROR("Spin NEP checkpoint has an invalid counted header length.");
   }
 
   bool seen_baseline = false;
@@ -77,6 +83,9 @@ void load_spin_checkpoint_metadata(Parameters& para)
   bool seen_cutoff = false;
   bool seen_chiral = false;
   bool seen_scaler = false;
+  bool seen_order = false;
+  bool seen_soc = false;
+  bool seen_projection_size = false;
   bool seen_dof = false;
   bool seen_env = false;
   std::vector<int> dof(para.num_types, 1);
@@ -118,26 +127,30 @@ void load_spin_checkpoint_metadata(Parameters& para)
           get_double_from_token(tokens[type + 1], __FILE__, __LINE__);
       }
     } else if (keyword == "spin_n_max") {
-      if (seen_n_max || tokens.size() != 3 ||
+      if (para.spin_mode == 2 || seen_n_max || tokens.size() != 3 ||
           get_int_from_token(tokens[1], __FILE__, __LINE__) != para.spin_n_max[0] ||
           get_int_from_token(tokens[2], __FILE__, __LINE__) != para.spin_n_max[1]) {
         PRINT_INPUT_ERROR("spin_n_max in nep.txt does not match nep.in.");
       }
       seen_n_max = true;
     } else if (keyword == "spin_basis_size") {
-      if (seen_basis_size || tokens.size() != 3 ||
+      const std::size_t expected_size = para.spin_mode == 2 ? 2 : 3;
+      if (seen_basis_size || tokens.size() != expected_size ||
           get_int_from_token(tokens[1], __FILE__, __LINE__) !=
             para.spin_basis_size[0] ||
-          get_int_from_token(tokens[2], __FILE__, __LINE__) !=
-            para.spin_basis_size[1]) {
+          (para.spin_mode == 1 &&
+           get_int_from_token(tokens[2], __FILE__, __LINE__) !=
+             para.spin_basis_size[1])) {
         PRINT_INPUT_ERROR("spin_basis_size in nep.txt does not match nep.in.");
       }
       seen_basis_size = true;
     } else if (keyword == "spin_l_max") {
-      if (seen_l_max || tokens.size() != 4) {
+      const std::size_t expected_size = para.spin_mode == 2 ? 2 : 4;
+      if (seen_l_max || tokens.size() != expected_size) {
         PRINT_INPUT_ERROR("Invalid spin_l_max in Spin NEP checkpoint.");
       }
-      for (int component = 0; component < 3; ++component) {
+      const int component_count = para.spin_mode == 2 ? 1 : 3;
+      for (int component = 0; component < component_count; ++component) {
         if (get_int_from_token(tokens[component + 1], __FILE__, __LINE__) !=
             para.spin_l_max[component]) {
           PRINT_INPUT_ERROR("spin_l_max in nep.txt does not match nep.in.");
@@ -151,10 +164,12 @@ void load_spin_checkpoint_metadata(Parameters& para)
       }
       seen_compress = true;
     } else if (keyword == "spin_cutoff") {
-      if (seen_cutoff || tokens.size() != 3) {
+      const std::size_t expected_size = para.spin_mode == 2 ? 2 : 3;
+      if (seen_cutoff || tokens.size() != expected_size) {
         PRINT_INPUT_ERROR("Invalid spin_cutoff in Spin NEP checkpoint.");
       }
-      for (int component = 0; component < 2; ++component) {
+      const int component_count = para.spin_mode == 2 ? 1 : 2;
+      for (int component = 0; component < component_count; ++component) {
         const double value =
           get_double_from_token(tokens[component + 1], __FILE__, __LINE__);
         if (std::abs(value - para.spin_cutoff[component]) >
@@ -164,11 +179,30 @@ void load_spin_checkpoint_metadata(Parameters& para)
       }
       seen_cutoff = true;
     } else if (keyword == "spin_chiral") {
-      if (seen_chiral || tokens.size() != 2 ||
+      if (para.spin_mode == 2 || seen_chiral || tokens.size() != 2 ||
           get_int_from_token(tokens[1], __FILE__, __LINE__) != para.spin_chiral) {
         PRINT_INPUT_ERROR("spin_chiral in nep.txt does not match nep.in.");
       }
       seen_chiral = true;
+    } else if (keyword == "spin_order") {
+      if (para.spin_mode != 2 || seen_order || tokens.size() != 2 ||
+          get_int_from_token(tokens[1], __FILE__, __LINE__) != para.spin_order) {
+        PRINT_INPUT_ERROR("spin_order in nep.txt does not match nep.in.");
+      }
+      seen_order = true;
+    } else if (keyword == "spin_soc") {
+      if (para.spin_mode != 2 || seen_soc || tokens.size() != 2 ||
+          get_int_from_token(tokens[1], __FILE__, __LINE__) != para.spin_soc) {
+        PRINT_INPUT_ERROR("spin_soc in nep.txt does not match nep.in.");
+      }
+      seen_soc = true;
+    } else if (keyword == "spin_projection_size") {
+      if (para.spin_mode != 2 || seen_projection_size || tokens.size() != 2 ||
+          get_int_from_token(tokens[1], __FILE__, __LINE__) !=
+            para.number_of_variables_spin_projection) {
+        PRINT_INPUT_ERROR("spin_projection_size in nep.txt does not match nep.in.");
+      }
+      seen_projection_size = true;
     } else if (keyword == "spin_scaler") {
       if (seen_scaler || tokens.size() != 2 ||
           get_int_from_token(tokens[1], __FILE__, __LINE__) != 1) {
@@ -191,8 +225,11 @@ void load_spin_checkpoint_metadata(Parameters& para)
       PRINT_INPUT_ERROR("Unknown line in counted Spin NEP checkpoint header.");
     }
   }
-  if (!seen_baseline || !seen_n_max || !seen_basis_size || !seen_l_max ||
-      !seen_compress || !seen_cutoff || !seen_chiral || !seen_scaler) {
+  const bool missing_mode_specific = para.spin_mode == 2
+    ? (!seen_order || !seen_soc || !seen_projection_size)
+    : (!seen_n_max || !seen_chiral);
+  if (!seen_baseline || !seen_basis_size || !seen_l_max ||
+      !seen_compress || !seen_cutoff || !seen_scaler || missing_mode_specific) {
     PRINT_INPUT_ERROR("Spin NEP checkpoint is missing required metadata.");
   }
   if (!seen_env) {
@@ -205,6 +242,22 @@ void load_spin_checkpoint_metadata(Parameters& para)
   }
   para.spin_dof_type_active = dof;
   para.spin_env_type_active = env;
+  if (para.enable_zbl) {
+    tokens = get_tokens(input);
+    const std::size_t expected_size = para.use_typewise_cutoff_zbl ? 4 : 3;
+    if (tokens.size() != expected_size || tokens[0] != "zbl") {
+      PRINT_INPUT_ERROR("Spin2 ZBL checkpoint has an invalid zbl line.");
+    }
+    const double inner = get_double_from_token(tokens[1], __FILE__, __LINE__);
+    const double outer = get_double_from_token(tokens[2], __FILE__, __LINE__);
+    if (std::abs(inner - para.zbl_rc_inner) > 1.0e-6 ||
+        std::abs(outer - para.zbl_rc_outer) > 1.0e-6 ||
+        (para.use_typewise_cutoff_zbl &&
+         std::abs(get_double_from_token(tokens[3], __FILE__, __LINE__) -
+                  para.typewise_cutoff_zbl_factor) > 1.0e-6)) {
+      PRINT_INPUT_ERROR("Spin2 ZBL checkpoint does not match nep.in.");
+    }
+  }
 }
 
 void fit_spin_energy_baseline(
@@ -309,6 +362,149 @@ void fit_spin_energy_baseline(
   }
 }
 
+struct SpinResponsePoint {
+  std::string group;
+  double coordinate;
+  double prediction;
+  double target;
+};
+
+void append_spin_response_points(
+  const int device_id,
+  Dataset& dataset,
+  std::vector<SpinResponsePoint>& points)
+{
+  CHECK(gpuSetDevice(device_id));
+  dataset.mforce.copy_to_host(dataset.mforce_cpu.data());
+  for (int nc = 0; nc < dataset.Nc; ++nc) {
+    const Structure& structure = dataset.structures[nc];
+    if (!structure.has_spin_response) {
+      continue;
+    }
+    double prediction = 0.0;
+    double target = 0.0;
+    const int atom_offset = dataset.Na_sum_cpu[nc];
+    for (int na = 0; na < structure.num_atom; ++na) {
+      const int atom = atom_offset + na;
+      prediction +=
+        dataset.mforce_cpu[atom] * structure.spin_tangent_x[na] +
+        dataset.mforce_cpu[dataset.N + atom] * structure.spin_tangent_y[na] +
+        dataset.mforce_cpu[2 * dataset.N + atom] * structure.spin_tangent_z[na];
+      target +=
+        structure.mfx[na] * structure.spin_tangent_x[na] +
+        structure.mfy[na] * structure.spin_tangent_y[na] +
+        structure.mfz[na] * structure.spin_tangent_z[na];
+    }
+    points.push_back({
+      structure.spin_response_group,
+      structure.spin_response_coordinate,
+      prediction,
+      target});
+  }
+}
+
+double huber_loss(const double residual)
+{
+  const double absolute = std::abs(residual);
+  return absolute <= 1.0 ? 0.5 * residual * residual : absolute - 0.5;
+}
+
+float spin_response_loss(const std::vector<SpinResponsePoint>& points)
+{
+  std::map<std::string, std::vector<const SpinResponsePoint*>> groups;
+  for (const auto& point : points) {
+    groups[point.group].push_back(&point);
+  }
+  if (groups.empty()) {
+    return 0.0f;
+  }
+
+  std::vector<double> centered_prediction(points.size());
+  std::vector<double> centered_target(points.size());
+  std::vector<double> reliability(points.size());
+  std::vector<double> mean_prediction;
+  std::vector<double> mean_target;
+  std::size_t offset = 0;
+  for (const auto& item : groups) {
+    const auto& members = item.second;
+    double mean_x = 0.0;
+    double mean_p = 0.0;
+    double mean_t = 0.0;
+    for (const auto* point : members) {
+      mean_x += point->coordinate;
+      mean_p += point->prediction;
+      mean_t += point->target;
+    }
+    const double inverse_size = 1.0 / members.size();
+    mean_x *= inverse_size;
+    mean_p *= inverse_size;
+    mean_t *= inverse_size;
+    mean_prediction.push_back(mean_p);
+    mean_target.push_back(mean_t);
+
+    double xx = 0.0;
+    double xy = 0.0;
+    for (const auto* point : members) {
+      const double x = point->coordinate - mean_x;
+      const double y = point->target - mean_t;
+      xx += x * x;
+      xy += x * y;
+    }
+    const double slope = xy / std::max(xx, static_cast<double>(
+      std::numeric_limits<float>::epsilon()));
+    double signal_power = 0.0;
+    double noise_power = 0.0;
+    for (const auto* point : members) {
+      const double centered_x = point->coordinate - mean_x;
+      const double centered_y = point->target - mean_t;
+      const double signal = slope * centered_x;
+      const double noise = centered_y - signal;
+      signal_power += signal * signal;
+      noise_power += noise * noise;
+    }
+    signal_power *= inverse_size;
+    noise_power *= inverse_size;
+    const double score = signal_power /
+      (signal_power + noise_power + std::numeric_limits<float>::epsilon());
+    for (const auto* point : members) {
+      centered_prediction[offset] = point->prediction - mean_p;
+      centered_target[offset] = point->target - mean_t;
+      reliability[offset] = std::max(0.05, score);
+      ++offset;
+    }
+  }
+
+  double target_square = 0.0;
+  for (const double value : centered_target) {
+    target_square += value * value;
+  }
+  const double scale = std::max(
+    std::sqrt(target_square / centered_target.size()),
+    64.0 * std::numeric_limits<float>::epsilon());
+  double weighted_loss = 0.0;
+  double weight_sum = 0.0;
+  for (std::size_t n = 0; n < centered_target.size(); ++n) {
+    const double residual = (centered_prediction[n] - centered_target[n]) / scale;
+    weighted_loss += reliability[n] * huber_loss(residual);
+    weight_sum += reliability[n];
+  }
+  const double shape_loss = weighted_loss / std::max(1.0, weight_sum);
+
+  double mean_target_square = 0.0;
+  for (const double value : mean_target) {
+    mean_target_square += value * value;
+  }
+  const double mean_scale = std::max(
+    std::sqrt(mean_target_square / mean_target.size()),
+    64.0 * std::numeric_limits<float>::epsilon());
+  double mean_loss = 0.0;
+  for (std::size_t n = 0; n < mean_target.size(); ++n) {
+    mean_loss += huber_loss((mean_prediction[n] - mean_target[n]) / mean_scale);
+  }
+  mean_loss /= mean_target.size();
+  return static_cast<float>(shape_loss + 0.25 * mean_loss);
+}
+
 } // namespace
 
 Fitness::Fitness(Parameters& para)
@@ -321,6 +517,37 @@ Fitness::Fitness(Parameters& para)
   }
   std::vector<Structure> structures_train;
   read_structures(true, para, structures_train);
+  if (para.lambda_spin_response > 0.0f) {
+    std::map<std::string, std::set<float>> response_groups;
+    std::map<std::string, std::pair<int, int>> response_group_counts;
+    for (const auto& structure : structures_train) {
+      if (structure.has_spin_response_metadata) {
+        ++response_group_counts[structure.spin_response_group].first;
+      }
+      if (structure.has_spin_response) {
+        ++response_group_counts[structure.spin_response_group].second;
+        response_groups[structure.spin_response_group].insert(
+          structure.spin_response_coordinate);
+      }
+    }
+    if (response_groups.empty()) {
+      PRINT_INPUT_ERROR(
+        "lambda_spin_response requires rotation response frames in train.xyz.\n");
+    }
+    for (const auto& item : response_group_counts) {
+      if (item.second.second > 0 && item.second.first != item.second.second) {
+        PRINT_INPUT_ERROR(
+          "spin_tangent must be present on every frame of a response_group.\n");
+      }
+    }
+    for (const auto& item : response_groups) {
+      if (item.second.size() < 3) {
+        PRINT_INPUT_ERROR(
+          "Each response_group needs at least three distinct "
+          "response_coordinate values.\n");
+      }
+    }
+  }
   if (para.spin_mode && !para.prediction) {
     fit_spin_energy_baseline(structures_train, para);
     printf("Spin energy baseline:");
@@ -449,7 +676,8 @@ void Fitness::compute(
   float* fitness_charge,
   float* fitness_bec,
   float* fitness_mforce,
-  float* fitness_tau)
+  float* fitness_tau,
+  float* fitness_spin_response)
 {
   int deviceCount;
   CHECK(gpuGetDeviceCount(&deviceCount));
@@ -497,11 +725,25 @@ void Fitness::compute(
       CHECK(gpuSetDevice(0));
     }
   } else {
+    std::vector<std::vector<SpinResponsePoint>> response_points;
+    if (para.lambda_spin_response > 0.0f) {
+      response_points.resize(para.population_size);
+    }
     int batch_id = generation % num_batches;
     for (int n = 0; n < population_iter; ++n) {
       const float* individual = population + deviceCount * n * para.number_of_variables;
       potential->find_force(para, individual, train_set[batch_id], false, deviceCount);
       for (int m = 0; m < deviceCount; ++m) {
+        const int population_index = deviceCount * n + m;
+        if (population_index >= para.population_size) {
+          continue;
+        }
+        if (para.lambda_spin_response > 0.0f) {
+          append_spin_response_points(
+            m,
+            train_set[batch_id][m],
+            response_points[population_index]);
+        }
         float energy_shift_per_structure_not_used;
         auto rmse_energy_array = train_set[batch_id][m].get_rmse_energy(
           para, energy_shift_per_structure_not_used, true, true, m);
@@ -548,6 +790,16 @@ void Fitness::compute(
           const float* individual = population + deviceCount * n * para.number_of_variables;
           potential->find_force(para, individual, train_set[batch_id], false, deviceCount);
           for (int m = 0; m < deviceCount; ++m) {
+            const int population_index = deviceCount * n + m;
+            if (population_index >= para.population_size) {
+              continue;
+            }
+            if (para.lambda_spin_response > 0.0f) {
+              append_spin_response_points(
+                m,
+                train_set[batch_id][m],
+                response_points[population_index]);
+            }
             float energy_shift_per_structure_not_used;
             auto rmse_energy_array = train_set[batch_id][m].get_rmse_energy(
               para, energy_shift_per_structure_not_used, true, true, m);
@@ -613,6 +865,14 @@ void Fitness::compute(
             }
           }
         }
+      }
+    }
+    for (int p = 0; p < para.population_size; ++p) {
+      const float value = para.lambda_spin_response > 0.0f
+        ? para.lambda_spin_response * spin_response_loss(response_points[p])
+        : 0.0f;
+      for (int t = 0; t <= para.num_types; ++t) {
+        fitness_spin_response[p + t * para.population_size] = value;
       }
     }
   }
@@ -687,7 +947,11 @@ void Fitness::write_nep_txt(FILE* fid_nep, Parameters& para, float* elite)
     if (!para.charge_mode) {
       if (para.version == 4) {
         if (para.spin_mode) {
-          fprintf(fid_nep, "nep4_spin1 %d ", para.num_types);
+          if (para.enable_zbl) {
+            fprintf(fid_nep, "nep4_spin2_zbl %d ", para.num_types);
+          } else {
+            fprintf(fid_nep, "nep4_spin%d %d ", para.spin_mode, para.num_types);
+          }
         } else if (para.enable_zbl) {
           fprintf(fid_nep, "nep4_zbl %d ", para.num_types);
         } else {
@@ -725,34 +989,51 @@ void Fitness::write_nep_txt(FILE* fid_nep, Parameters& para, float* elite)
   fprintf(fid_nep, "\n");
   if (para.spin_mode) {
     const int spin_header_lines =
-      8 + static_cast<int>(para.is_spin_dof_type_set) +
+      (para.spin_mode == 2 ? 9 : 8) +
+      static_cast<int>(para.is_spin_dof_type_set) +
       static_cast<int>(para.is_spin_env_type_set);
-    fprintf(fid_nep, "spin_mode 1 %d\n", spin_header_lines);
+    fprintf(fid_nep, "spin_mode %d %d\n", para.spin_mode, spin_header_lines);
     fprintf(fid_nep, "spin_baseline");
     for (const float value : para.spin_baseline) {
       fprintf(fid_nep, " %.16e", static_cast<double>(value));
     }
     fprintf(fid_nep, "\n");
-    fprintf(
-      fid_nep, "spin_n_max %d %d\n", para.spin_n_max[0], para.spin_n_max[1]);
-    fprintf(
-      fid_nep,
-      "spin_basis_size %d %d\n",
-      para.spin_basis_size[0],
-      para.spin_basis_size[1]);
-    fprintf(
-      fid_nep,
-      "spin_l_max %d %d %d\n",
-      para.spin_l_max[0],
-      para.spin_l_max[1],
-      para.spin_l_max[2]);
-    fprintf(fid_nep, "spin_compress %d\n", para.spin_compress);
-    fprintf(
-      fid_nep,
-      "spin_cutoff %.16e %.16e\n",
-      static_cast<double>(para.spin_cutoff[0]),
-      static_cast<double>(para.spin_cutoff[1]));
-    fprintf(fid_nep, "spin_chiral %d\n", para.spin_chiral);
+    if (para.spin_mode == 1) {
+      fprintf(
+        fid_nep, "spin_n_max %d %d\n", para.spin_n_max[0], para.spin_n_max[1]);
+      fprintf(
+        fid_nep,
+        "spin_basis_size %d %d\n",
+        para.spin_basis_size[0],
+        para.spin_basis_size[1]);
+      fprintf(
+        fid_nep,
+        "spin_l_max %d %d %d\n",
+        para.spin_l_max[0],
+        para.spin_l_max[1],
+        para.spin_l_max[2]);
+      fprintf(fid_nep, "spin_compress %d\n", para.spin_compress);
+      fprintf(
+        fid_nep,
+        "spin_cutoff %.16e %.16e\n",
+        static_cast<double>(para.spin_cutoff[0]),
+        static_cast<double>(para.spin_cutoff[1]));
+      fprintf(fid_nep, "spin_chiral %d\n", para.spin_chiral);
+    } else {
+      fprintf(fid_nep, "spin_basis_size %d\n", para.spin_basis_size[0]);
+      fprintf(fid_nep, "spin_l_max %d\n", para.spin_l_max[0]);
+      fprintf(fid_nep, "spin_compress %d\n", para.spin_compress);
+      fprintf(
+        fid_nep,
+        "spin_cutoff %.16e\n",
+        static_cast<double>(para.spin_cutoff[0]));
+      fprintf(fid_nep, "spin_order %d\n", para.spin_order);
+      fprintf(fid_nep, "spin_soc %d\n", para.spin_soc);
+      fprintf(
+        fid_nep,
+        "spin_projection_size %d\n",
+        para.number_of_variables_spin_projection);
+    }
     fprintf(fid_nep, "spin_scaler 1\n");
     if (para.is_spin_dof_type_set) {
       fprintf(fid_nep, "spin_dof_type");

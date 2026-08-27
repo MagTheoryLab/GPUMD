@@ -38,6 +38,12 @@ void Dataset::copy_structures(std::vector<Structure>& structures_input, int n1, 
     structures[n].has_virial = structures_input[n_input].has_virial;
     structures[n].has_bec = structures_input[n_input].has_bec;
     structures[n].has_mforce = structures_input[n_input].has_mforce;
+    structures[n].has_spin_response_metadata =
+      structures_input[n_input].has_spin_response_metadata;
+    structures[n].has_spin_response = structures_input[n_input].has_spin_response;
+    structures[n].spin_response_group = structures_input[n_input].spin_response_group;
+    structures[n].spin_response_coordinate =
+      structures_input[n_input].spin_response_coordinate;
     structures[n].has_atomic_virial = structures_input[n_input].has_atomic_virial;
     structures[n].atomic_virial_diag_only = structures_input[n_input].atomic_virial_diag_only;
     structures[n].charge = structures_input[n_input].charge;
@@ -73,6 +79,11 @@ void Dataset::copy_structures(std::vector<Structure>& structures_input, int n1, 
       structures[n].mfx.resize(structures[n].num_atom);
       structures[n].mfy.resize(structures[n].num_atom);
       structures[n].mfz.resize(structures[n].num_atom);
+      if (structures[n].has_spin_response) {
+        structures[n].spin_tangent_x.resize(structures[n].num_atom);
+        structures[n].spin_tangent_y.resize(structures[n].num_atom);
+        structures[n].spin_tangent_z.resize(structures[n].num_atom);
+      }
     }
     structures[n].bec.resize(structures[n].num_atom * 9);
 
@@ -91,6 +102,14 @@ void Dataset::copy_structures(std::vector<Structure>& structures_input, int n1, 
         structures[n].mfx[na] = structures_input[n_input].mfx[na];
         structures[n].mfy[na] = structures_input[n_input].mfy[na];
         structures[n].mfz[na] = structures_input[n_input].mfz[na];
+        if (structures[n].has_spin_response) {
+          structures[n].spin_tangent_x[na] =
+            structures_input[n_input].spin_tangent_x[na];
+          structures[n].spin_tangent_y[na] =
+            structures_input[n_input].spin_tangent_y[na];
+          structures[n].spin_tangent_z[na] =
+            structures_input[n_input].spin_tangent_z[na];
+        }
       }
       for (int d = 0; d < 9; ++d) {
         structures[n].bec[na * 9 + d] = structures_input[n_input].bec[na * 9 + d];

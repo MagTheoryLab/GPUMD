@@ -37,6 +37,7 @@ protected:
   int number_of_variables = 10;
   int population_size = 20;
   float eta_sigma = 0.1f;
+  bool curriculum_enabled = false;
 
   std::vector<int> index;
   std::vector<float> fitness_total;
@@ -49,6 +50,7 @@ protected:
   std::vector<float> fitness_bec;
   std::vector<float> fitness_mforce;
   std::vector<float> fitness_tau;
+  std::vector<float> fitness_spin_response;
   std::vector<float> population;
   std::vector<float> mu;
   std::vector<float> sigma;
@@ -56,9 +58,11 @@ protected:
   std::vector<float> cost_L1reg;
   std::vector<float> cost_L2reg;
   std::vector<int> type_of_variable;
+  std::vector<int> curriculum_parameter;
 
   GPU_Vector<gpurandState> curand_states;
   GPU_Vector<int> gpu_type_of_variable;
+  GPU_Vector<int> gpu_curriculum_parameter;
   GPU_Vector<int> gpu_index;
   GPU_Vector<float> gpu_utility;
   GPU_Vector<float> gpu_population;
@@ -74,10 +78,10 @@ protected:
   void calculate_utility();
   void find_type_of_variable(Parameters& para);
   void compute(Parameters&, Fitness*);
-  void create_population();
+  void create_population(float curriculum_scale);
   void regularize(Parameters&);
   void regularize_NEP4(Parameters& para);
   void sort_population(Parameters& para);
-  void update_mu_and_sigma();
+  void update_mu_and_sigma(float curriculum_scale);
   void output_mu_and_sigma(const char* filename);
 };

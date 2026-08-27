@@ -39,6 +39,9 @@ struct NEP_Spin_Data {
   GPU_Vector<float> octupole;
   GPU_Vector<float> hexadecapole;
   GPU_Vector<float> chirals;
+  GPU_Vector<float> spin_projection_parameters;
+  GPU_Vector<float> spin2_moments;
+  GPU_Vector<float> spin2_pulls;
   GPU_Vector<int> NN_radial;
   GPU_Vector<int> NL_radial;
   GPU_Vector<int> NN_angular;
@@ -53,6 +56,40 @@ struct NEP_Spin_Data {
 class NEP_Spin : public Potential
 {
 public:
+  struct Spin_Polynomial_Layout {
+    int channels = 0;
+    int pair_count = 0;
+    int density_stride = 38;
+    int moment_count = 0;
+    int local_s2 = -1;
+    int edge_l0_dot = -1;
+    int edge_l0_neighbor_s2 = -1;
+    int edge_l2_pair = -1;
+    int center_l2_environment = -1;
+    int edge_l0_dot2 = -1;
+    int density_l0_self = -1;
+    int density_l1_longitudinal_self = -1;
+    int density_l1_axial_self = -1;
+    int density_l1_stf_self = -1;
+    int density_l1_product_self = -1;
+    int density_l2_product_self = -1;
+    int density_l0_dot_response = -1;
+    int correlation_same_edge = -1;
+    int correlation_distinct_neighbor = -1;
+    int coupling_l11_axial = -1;
+    int edge_l11_axial = -1;
+    int coupling_l22_axial = -1;
+    int edge_l22_axial = -1;
+    int edge_l0_moment_gate = -1;
+    int coupling_l11_dot_response = -1;
+    int coupling_l111_p_m_x = -1;
+    int coupling_l22_dot_response = -1;
+    int coupling_l111_p_qs_x = -1;
+    int coupling_l112_edge_response = -1;
+    int coupling_l111_bulk = -1;
+    int descriptor_dim = 0;
+  };
+
   struct Body_Channels {
     int l_max_3body = 0;
     bool has_q_222 = false;
@@ -85,6 +122,7 @@ public:
   };
 
   struct Model {
+    int spin_mode = 0;
     int num_types = 0;
     int n_max_radial = 0;
     int n_max_angular = 0;
@@ -99,6 +137,9 @@ public:
     int spin_l_max[3] = {0, 0, 0};
     int spin_compress = 0;
     int spin_chiral = 0;
+    int spin_order = 0;
+    int spin_soc = 0;
+    int spin_projection_size = 0;
     double cutoff_radial = 0.0;
     double cutoff_angular = 0.0;
     double spin_cutoff[2] = {0.0, 0.0};
@@ -109,6 +150,7 @@ public:
     std::size_t radial_parameter_count = 0;
     std::size_t angular_parameter_count = 0;
     std::size_t spin_parameter_count = 0;
+    std::size_t spin_projection_parameter_count = 0;
     std::size_t model_parameter_count = 0;
     std::vector<std::string> elements;
     std::vector<double> spin_baseline;
@@ -116,6 +158,7 @@ public:
     std::vector<int> spin_env_type_active;
     Body_Channels body;
     Spin_Layout spin_layout;
+    Spin_Polynomial_Layout spin_polynomial_layout;
   };
 
   NEP_Spin(const char* file_potential, const int num_atoms);
@@ -149,6 +192,7 @@ private:
   Neighbor neighbor_;
   NEP::ParaMB paramb_;
   NEP::ANN ann_;
+  NEP::ZBL zbl_;
   int num_atoms_ = 0;
   bool small_box_initialized_ = false;
   int small_box_capacity_ = 0;

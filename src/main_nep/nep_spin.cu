@@ -155,6 +155,197 @@ __device__ __forceinline__ void atomic_add_spin_transfer_float(
 #undef mask_inactive_spin_mforce
 #undef find_mforce_onsite
 
+using SpinPolynomialLayout = NEP_Spin_Trainer::Spin_Polynomial_Layout;
+
+template <typename Layout>
+Layout make_spin_polynomial_layout(
+  const int channels, const int l_max, const int order, const int soc)
+{
+  Layout layout;
+  layout.channels = channels;
+  layout.pair_count = channels * (channels + 1) / 2;
+  layout.moment_count = layout.density_stride * channels + layout.pair_count;
+  int offset = 0;
+  layout.local_s2 = offset++;
+  layout.edge_l0_dot = offset; offset += channels;
+  layout.edge_l0_neighbor_s2 = offset; offset += channels;
+  if (soc != 0 && l_max >= 2) {
+    layout.edge_l2_pair = offset; offset += channels;
+    layout.center_l2_environment = offset; offset += channels;
+  }
+  if (order >= 2) {
+    layout.edge_l0_dot2 = offset; offset += channels;
+    layout.density_l0_self = offset; offset += channels;
+    if (l_max >= 1) {
+      if (soc != 0) {
+        layout.density_l1_longitudinal_self = offset; offset += channels;
+        layout.density_l1_axial_self = offset; offset += channels;
+        layout.density_l1_stf_self = offset; offset += channels;
+      } else {
+        layout.density_l1_product_self = offset; offset += channels;
+      }
+    }
+    if (l_max >= 2) {
+      layout.density_l2_product_self = offset; offset += channels;
+    }
+    layout.density_l0_dot_response = offset; offset += channels;
+    layout.correlation_same_edge = offset; offset += layout.pair_count;
+    layout.correlation_distinct_neighbor = offset; offset += layout.pair_count;
+    if (soc != 0 && l_max >= 1) {
+      layout.coupling_l11_axial = offset; offset += channels;
+      layout.edge_l11_axial = offset; offset += channels;
+    }
+    if (soc != 0 && l_max >= 2) {
+      layout.coupling_l22_axial = offset; offset += channels;
+      layout.edge_l22_axial = offset; offset += channels;
+    }
+  }
+  if (order >= 3) {
+    layout.edge_l0_moment_gate = offset; offset += channels;
+    if (soc != 0 && l_max >= 1) {
+      layout.coupling_l11_dot_response = offset; offset += channels;
+      layout.coupling_l111_p_m_x = offset; offset += channels;
+    }
+    if (soc != 0 && l_max >= 2) {
+      layout.coupling_l22_dot_response = offset; offset += channels;
+      layout.coupling_l111_p_qs_x = offset; offset += channels;
+      layout.coupling_l112_edge_response = offset; offset += channels;
+    }
+    if (soc != 0 && l_max >= 1 && channels >= 3) {
+      layout.coupling_l111_bulk = offset; offset += channels;
+    }
+  }
+  layout.descriptor_dim = offset;
+  return layout;
+}
+
+template <int C, bool NeedDerivatives>
+__device__ __forceinline__ void evaluate_spin2_edge_weights_b9_f32(
+  const float spin_cutoff,
+  const float dist,
+  const int num_types,
+  const int type_pair,
+  const float* descriptor_coefficients,
+  const int spin_coefficient_offset,
+  float* weights,
+  float* weight_derivatives)
+{
+  constexpr int basis_count = 9;
+  constexpr float pi = 3.14159265358979323846f;
+  const int pair_count = num_types * num_types;
+  const float inverse_cutoff = 1.0f / spin_cutoff;
+  const float scaled_distance = dist * inverse_cutoff;
+  const float phase = pi * scaled_distance;
+  const float cutoff = 0.5f * cosf(phase) + 0.5f;
+  const float shifted = scaled_distance - 1.0f;
+  const float x = 2.0f * shifted * shifted - 1.0f;
+  const float dxdr = 2.0f * shifted * inverse_cutoff;
+  const float cutoff_derivative =
+    NeedDerivatives ? -0.5f * pi * sinf(phase) * inverse_cutoff : 0.0f;
+  float basis[basis_count] = {};
+  float basis_derivative[basis_count] = {};
+  basis[0] = cutoff;
+  basis_derivative[0] = cutoff_derivative;
+  const float raw1 = 0.5f * (x + 1.0f);
+  basis[1] = raw1 * cutoff;
+  basis_derivative[1] = dxdr * cutoff + raw1 * cutoff_derivative;
+  float t0 = 1.0f;
+  float t1 = x;
+  float u0 = 1.0f;
+  float u1 = 2.0f * x;
+  for (int n = 2; n < basis_count; ++n) {
+    const float t2 = 2.0f * x * t1 - t0;
+    const float raw = 0.5f * (t2 + 1.0f);
+    basis[n] = raw * cutoff;
+    basis_derivative[n] =
+      static_cast<float>(n) * u1 * dxdr * cutoff + raw * cutoff_derivative;
+    const float u2 = 2.0f * x * u1 - u0;
+    t0 = t1;
+    t1 = t2;
+    u0 = u1;
+    u1 = u2;
+  }
+  for (int channel = 0; channel < C; ++channel) {
+    float weight = 0.0f;
+    float derivative = 0.0f;
+    for (int basis_index = 0; basis_index < basis_count; ++basis_index) {
+      const int index = spin_coefficient_offset +
+        (channel * basis_count + basis_index) * pair_count + type_pair;
+      weight += basis[basis_index] * descriptor_coefficients[index];
+      if constexpr (NeedDerivatives) {
+        derivative += basis_derivative[basis_index] * descriptor_coefficients[index];
+      }
+    }
+    weights[channel] = weight;
+    if constexpr (NeedDerivatives) {
+      weight_derivatives[channel] = derivative;
+    }
+  }
+}
+
+template <int C, bool NeedDerivatives = true>
+__device__ __forceinline__ bool load_spin2_edge_f32(
+  const int atom,
+  const int neighbor,
+  const int atom_stride,
+  const int num_types,
+  const int spin_basis_size,
+  const float spin_cutoff,
+  const SimulationBox box,
+  const int* types,
+  const double* positions,
+  const double* slot_r12,
+  const int r12_plane_size,
+  const int slot_index,
+  const double* spins,
+  const float* descriptor_coefficients,
+  const int spin_coefficient_offset,
+  float* rhat,
+  float& dist,
+  float* si,
+  float* sj,
+  float* weights,
+  float* weight_derivatives)
+{
+  if (slot_r12) {
+    const float dx = static_cast<float>(slot_r12[slot_index]);
+    const float dy = static_cast<float>(slot_r12[r12_plane_size + slot_index]);
+    const float dz = static_cast<float>(slot_r12[2 * r12_plane_size + slot_index]);
+    dist = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (dist > 1.0e-12f) {
+      const float inverse_distance = 1.0f / dist;
+      rhat[0] = dx * inverse_distance;
+      rhat[1] = dy * inverse_distance;
+      rhat[2] = dz * inverse_distance;
+    }
+  } else {
+    compute_spin_edge_geometry_f32(
+      atom, neighbor, atom_stride, box, positions, rhat, dist);
+  }
+  for (int component = 0; component < 3; ++component) {
+    si[component] = static_cast<float>(spins[component * atom_stride + atom]);
+    sj[component] = static_cast<float>(spins[component * atom_stride + neighbor]);
+  }
+  if (!(dist > 1.0e-12f && dist < spin_cutoff) || spin_basis_size != 8) {
+    return false;
+  }
+  const int type_pair = types[atom] * num_types + types[neighbor];
+  evaluate_spin2_edge_weights_b9_f32<C, NeedDerivatives>(
+    spin_cutoff,
+    dist,
+    num_types,
+    type_pair,
+    descriptor_coefficients,
+    spin_coefficient_offset,
+    weights,
+    weight_derivatives);
+  return true;
+}
+
+#include "../force/nep_spin2_layout.cuh"
+#include "../force/nep_spin2_descriptor.cuh"
+#include "../force/nep_spin2_force.cuh"
+
 template <int C, int LMax>
 void launch_spin_descriptor(
   int atom_count,
@@ -467,8 +658,162 @@ void launch_spin_chiral_force(
     force,
     mforce,
     virial,
-    nullptr,
-    nullptr);
+      nullptr,
+      nullptr);
+}
+
+template <int C, typename Layout>
+void launch_spin2_descriptor(
+  Layout layout,
+  int atom_count,
+  int struct_dim,
+  int num_types,
+  int spin_basis_size,
+  float spin_cutoff,
+  const int* type,
+  const int* spin_dof_type_active,
+  const int* spin_env_type_active,
+  const double* position,
+  const double* spin,
+  const int* NN_spin,
+  const int* NL_spin,
+  const double* r12_spin,
+  int r12_plane_size,
+  const float* descriptor_coefficients,
+  int spin_coefficient_offset,
+  const float* projection,
+  float* moments,
+  float* descriptors)
+{
+  constexpr int block_size = 128;
+  Box box{};
+  const int density_work = C * atom_count;
+  build_spin2_oc_density_bank<C>
+    <<<(density_work + block_size - 1) / block_size, block_size>>>(
+      layout,
+      atom_count,
+      atom_count,
+      struct_dim,
+      num_types,
+      spin_basis_size,
+      spin_cutoff,
+      spin_coefficient_offset,
+      box,
+      type,
+      spin_dof_type_active,
+      spin_env_type_active,
+      position,
+      r12_spin,
+      r12_plane_size,
+      spin,
+      NN_spin,
+      NL_spin,
+      descriptor_coefficients,
+      descriptors,
+      moments);
+  contract_spin2_oc_descriptors<C>
+    <<<(atom_count + block_size - 1) / block_size, block_size>>>(
+      layout,
+      atom_count,
+      atom_count,
+      struct_dim,
+      type,
+      spin_dof_type_active,
+      spin,
+      projection,
+      moments,
+      descriptors);
+  GPU_CHECK_KERNEL
+}
+
+template <int C, typename Layout>
+void launch_spin2_force(
+  Layout layout,
+  int atom_count,
+  int struct_dim,
+  int num_types,
+  int spin_basis_size,
+  float spin_cutoff,
+  const int* type,
+  const int* spin_dof_type_active,
+  const int* spin_env_type_active,
+  const double* position,
+  const double* spin,
+  const int* NN_spin,
+  const int* NL_spin,
+  const double* r12_spin,
+  int r12_plane_size,
+  const float* Fp,
+  const float* descriptor_coefficients,
+  int spin_coefficient_offset,
+  const float* projection,
+  const float* moments,
+  float* pulls,
+  double* force,
+  double* mforce,
+  double* virial)
+{
+  constexpr int block_size = 128;
+  const int pull_values = atom_count * layout.moment_count;
+  clear_spin2_oc_pulls<<<
+    (pull_values + block_size - 1) / block_size, block_size>>>(pull_values, pulls);
+  accumulate_spin2_oc_onsite_mforces<<<
+    (atom_count + block_size - 1) / block_size, block_size>>>(
+      layout,
+      atom_count,
+      atom_count,
+      struct_dim,
+      type,
+      spin_dof_type_active,
+      spin,
+      Fp,
+      mforce);
+  const int pull_work = C * atom_count;
+  build_spin2_oc_center_pulls<C><<<
+    (pull_work + block_size - 1) / block_size, block_size>>>(
+      layout,
+      atom_count,
+      atom_count,
+      struct_dim,
+      type,
+      spin_dof_type_active,
+      spin,
+      Fp,
+      projection,
+      moments,
+      pulls,
+      mforce);
+  Box box{};
+  accumulate_spin2_oc_native_forces<
+    C, SpinVirialMode::neighbor_owned, false><<<
+      (atom_count + block_size - 1) / block_size, block_size>>>(
+        layout,
+        atom_count,
+        atom_count,
+        struct_dim,
+        num_types,
+        spin_basis_size,
+        spin_cutoff,
+        box,
+        type,
+        spin_dof_type_active,
+        spin_env_type_active,
+        position,
+        r12_spin,
+        r12_plane_size,
+        spin,
+        NN_spin,
+        NL_spin,
+        Fp,
+        descriptor_coefficients,
+        pulls,
+        spin_coefficient_offset,
+        force,
+        mforce,
+        virial,
+        nullptr,
+        nullptr);
+  GPU_CHECK_KERNEL
 }
 
 __global__ void add_spin_training_outputs(
@@ -506,15 +851,26 @@ NEP_Spin_Trainer::NEP_Spin_Trainer(
   Parameters& para, int N, int version, int device_count)
   : NEP(para, N, version, device_count)
 {
+  spin_mode_ = para.spin_mode;
   spin_compress_ = para.spin_compress;
   spin_basis_size_ = para.spin_basis_size[0];
   spin_l_max_ = para.spin_l_max[0];
   spin_chiral_ = para.spin_chiral;
+  spin_order_ = para.spin_order;
+  spin_soc_ = para.spin_soc;
   struct_dim_ = para.dim_struct;
   spin_coefficient_offset_ =
     para.number_of_variables_descriptor - para.number_of_variables_descriptor_spin;
+  spin_coefficient_offset_ -= para.number_of_variables_spin_projection;
+  spin_projection_offset_ =
+    spin_coefficient_offset_ + para.number_of_variables_descriptor_spin;
   num_types_ = para.num_types;
   spin_cutoff_ = para.spin_cutoff[0];
+
+  if (spin_mode_ == 2) {
+    polynomial_layout_ = make_spin_polynomial_layout<Spin_Polynomial_Layout>(
+      spin_compress_, spin_l_max_, spin_order_, spin_soc_);
+  }
 
   layout_.channels = spin_compress_;
   layout_.basis_count = spin_basis_size_ + 1;
@@ -580,6 +936,10 @@ NEP_Spin_Trainer::NEP_Spin_Trainer(
     data.hexadecapole.resize(
       spin_chiral_ ? kSpinChiralHReducedCount * layout_.chi_channels * N : 1);
     data.chirals.resize(spin_chiral_ ? layout_.chi_channels * N : 1);
+    data.spin2_moments.resize(
+      spin_mode_ == 2 ? N * polynomial_layout_.moment_count : 1);
+    data.spin2_pulls.resize(
+      spin_mode_ == 2 ? N * polynomial_layout_.moment_count : 1);
     data.force.resize(3 * N);
     data.mforce.resize(3 * N);
     data.virial.resize(9 * N);
@@ -590,6 +950,32 @@ void NEP_Spin_Trainer::find_additional_descriptors(
   Parameters&, Dataset& dataset, int device_id)
 {
   auto& data = spin_data_[device_id];
+  if (spin_mode_ == 2) {
+    const int plane_size = dataset.N * dataset.max_NN_spin;
+    const float* projection =
+      annmb[device_id].c + spin_projection_offset_;
+#define LAUNCH_SPIN2_DESCRIPTOR(C) \
+    launch_spin2_descriptor<C>( \
+      polynomial_layout_, dataset.N, struct_dim_, num_types_, spin_basis_size_, \
+      spin_cutoff_, dataset.type.data(), data.spin_dof_type_active.data(), \
+      data.spin_env_type_active.data(), dataset.r_spin.data(), dataset.spin.data(), \
+      dataset.NN_spin.data(), dataset.NL_spin.data(), dataset.r12_spin.data(), \
+      plane_size, annmb[device_id].c, spin_coefficient_offset_, projection, \
+      data.spin2_moments.data(), nep_data[device_id].descriptors.data())
+    switch (spin_compress_) {
+      case 1: LAUNCH_SPIN2_DESCRIPTOR(1); break;
+      case 2: LAUNCH_SPIN2_DESCRIPTOR(2); break;
+      case 3: LAUNCH_SPIN2_DESCRIPTOR(3); break;
+      case 4: LAUNCH_SPIN2_DESCRIPTOR(4); break;
+      case 5: LAUNCH_SPIN2_DESCRIPTOR(5); break;
+      case 6: LAUNCH_SPIN2_DESCRIPTOR(6); break;
+      case 7: LAUNCH_SPIN2_DESCRIPTOR(7); break;
+      case 8: LAUNCH_SPIN2_DESCRIPTOR(8); break;
+      case 9: LAUNCH_SPIN2_DESCRIPTOR(9); break;
+    }
+#undef LAUNCH_SPIN2_DESCRIPTOR
+    return;
+  }
   TrainingSpinLayout layout;
   layout.channels = layout_.channels;
   layout.basis_count = layout_.basis_count;
@@ -646,33 +1032,60 @@ void NEP_Spin_Trainer::find_additional_force(
   auto& data = spin_data_[device_id];
   const int block_size = 128;
   const int grid_size = (dataset.N + block_size - 1) / block_size;
-  find_mforce_onsite_training<<<grid_size, block_size>>>(
-    dataset.N,
-    dataset.N,
-    struct_dim_,
-    dataset.type.data(),
-    data.spin_dof_type_active.data(),
-    dataset.spin.data(),
-    nep_data[device_id].Fp.data(),
-    data.mforce.data());
+  if (spin_mode_ == 2) {
+    const int plane_size = dataset.N * dataset.max_NN_spin;
+    const float* projection =
+      annmb[device_id].c + spin_projection_offset_;
+#define LAUNCH_SPIN2_FORCE(C) \
+    launch_spin2_force<C>( \
+      polynomial_layout_, dataset.N, struct_dim_, num_types_, spin_basis_size_, \
+      spin_cutoff_, dataset.type.data(), data.spin_dof_type_active.data(), \
+      data.spin_env_type_active.data(), dataset.r_spin.data(), dataset.spin.data(), \
+      dataset.NN_spin.data(), dataset.NL_spin.data(), dataset.r12_spin.data(), \
+      plane_size, nep_data[device_id].Fp.data(), annmb[device_id].c, \
+      spin_coefficient_offset_, projection, data.spin2_moments.data(), \
+      data.spin2_pulls.data(), data.force.data(), data.mforce.data(), \
+      data.virial.data())
+    switch (spin_compress_) {
+      case 1: LAUNCH_SPIN2_FORCE(1); break;
+      case 2: LAUNCH_SPIN2_FORCE(2); break;
+      case 3: LAUNCH_SPIN2_FORCE(3); break;
+      case 4: LAUNCH_SPIN2_FORCE(4); break;
+      case 5: LAUNCH_SPIN2_FORCE(5); break;
+      case 6: LAUNCH_SPIN2_FORCE(6); break;
+      case 7: LAUNCH_SPIN2_FORCE(7); break;
+      case 8: LAUNCH_SPIN2_FORCE(8); break;
+      case 9: LAUNCH_SPIN2_FORCE(9); break;
+    }
+#undef LAUNCH_SPIN2_FORCE
+  } else {
+    find_mforce_onsite_training<<<grid_size, block_size>>>(
+      dataset.N,
+      dataset.N,
+      struct_dim_,
+      dataset.type.data(),
+      data.spin_dof_type_active.data(),
+      dataset.spin.data(),
+      nep_data[device_id].Fp.data(),
+      data.mforce.data());
 
-  TrainingSpinLayout layout;
-  layout.channels = layout_.channels;
-  layout.basis_count = layout_.basis_count;
-  layout.l_max = layout_.l_max;
-  layout.chi_channels = layout_.chi_channels;
-  layout.rho0_offset = layout_.rho0_offset;
-  layout.l1_rdot_offset = layout_.l1_rdot_offset;
-  layout.l1_cross_offset = layout_.l1_cross_offset;
-  layout.l1_stf_offset = layout_.l1_stf_offset;
-  layout.angular2_offset = layout_.angular2_offset;
-  layout.angular3_offset = layout_.angular3_offset;
-  layout.angular4_offset = layout_.angular4_offset;
-  layout.geom_offset = layout_.geom_offset;
-  layout.rho0_dot_offset = layout_.rho0_dot_offset;
-  layout.raw1_dot_offset = layout_.raw1_dot_offset;
-  layout.chiral_offset = layout_.chiral_offset;
-  layout.descriptor_dim = layout_.descriptor_dim;
+    TrainingSpinLayout layout;
+    layout.channels = layout_.channels;
+    layout.basis_count = layout_.basis_count;
+    layout.l_max = layout_.l_max;
+    layout.chi_channels = layout_.chi_channels;
+    layout.rho0_offset = layout_.rho0_offset;
+    layout.l1_rdot_offset = layout_.l1_rdot_offset;
+    layout.l1_cross_offset = layout_.l1_cross_offset;
+    layout.l1_stf_offset = layout_.l1_stf_offset;
+    layout.angular2_offset = layout_.angular2_offset;
+    layout.angular3_offset = layout_.angular3_offset;
+    layout.angular4_offset = layout_.angular4_offset;
+    layout.geom_offset = layout_.geom_offset;
+    layout.rho0_dot_offset = layout_.rho0_dot_offset;
+    layout.raw1_dot_offset = layout_.raw1_dot_offset;
+    layout.chiral_offset = layout_.chiral_offset;
+    layout.descriptor_dim = layout_.descriptor_dim;
 
 #define LAUNCH_DENSITY(C, L) \
   launch_spin_density_force<C, L>( \
@@ -705,14 +1118,15 @@ void NEP_Spin_Trainer::find_additional_force(
       data.hexadecapole.data(), data.chirals.data(), data.force.data(), \
       data.mforce.data(), data.virial.data()); \
   }
-  switch (spin_compress_) {
-    case 1: LAUNCH_FOR_C(1); break;
-    case 2: LAUNCH_FOR_C(2); break;
-    case 3: LAUNCH_FOR_C(3); break;
-    case 4: LAUNCH_FOR_C(4); break;
-  }
+    switch (spin_compress_) {
+      case 1: LAUNCH_FOR_C(1); break;
+      case 2: LAUNCH_FOR_C(2); break;
+      case 3: LAUNCH_FOR_C(3); break;
+      case 4: LAUNCH_FOR_C(4); break;
+    }
 #undef LAUNCH_FOR_C
 #undef LAUNCH_DENSITY
+  }
 
   mask_inactive_spin_mforce_training<<<grid_size, block_size>>>(
     dataset.N,

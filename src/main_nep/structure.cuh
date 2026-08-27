@@ -14,6 +14,7 @@
 */
 
 #pragma once
+#include <string>
 #include <vector>
 
 class Parameters;
@@ -26,6 +27,8 @@ struct Structure {
   int atomic_virial_diag_only;
   int has_bec;
   int has_mforce;
+  int has_spin_response_metadata = 0;
+  int has_spin_response = 0;
   int has_temperature;
   float weight;
   float charge = 0.0f;
@@ -36,6 +39,8 @@ struct Structure {
   float volume;
   float box[18];
   float temperature;
+  float spin_response_coordinate = 0.0f;
+  std::string spin_response_group;
   std::vector<int> type;
   std::vector<float> x;
   std::vector<float> y;
@@ -49,6 +54,9 @@ struct Structure {
   std::vector<float> mfx;
   std::vector<float> mfy;
   std::vector<float> mfz;
+  std::vector<float> spin_tangent_x;
+  std::vector<float> spin_tangent_y;
+  std::vector<float> spin_tangent_z;
   std::vector<float> avirialxx;
   std::vector<float> avirialyy;
   std::vector<float> avirialzz;

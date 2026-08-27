@@ -59,6 +59,7 @@ SNES::SNES(Parameters& para, Fitness* fitness_function)
   fitness_bec.resize(population_size * (para.num_types + 1));
   fitness_mforce.resize(population_size * (para.num_types + 1));
   fitness_tau.resize(population_size * (para.num_types + 1));
+  fitness_spin_response.resize(population_size * (para.num_types + 1));
   index.resize(population_size * (para.num_types + 1));
   population.resize(N);
   mu.resize(number_of_variables);
@@ -67,10 +68,12 @@ SNES::SNES(Parameters& para, Fitness* fitness_function)
   cost_L2reg.resize(population_size);
   utility.resize(population_size);
   type_of_variable.resize(number_of_variables, para.num_types);
+  curriculum_parameter.resize(number_of_variables, 0);
   initialize_rng();
 
   gpuSetDevice(0); // normally use GPU-0
   gpu_type_of_variable.resize(number_of_variables);
+  gpu_curriculum_parameter.resize(number_of_variables);
   gpu_index.resize(population_size * (para.num_types + 1));
   gpu_utility.resize(number_of_variables);
   gpu_sigma.resize(number_of_variables);
@@ -91,6 +94,20 @@ SNES::SNES(Parameters& para, Fitness* fitness_function)
   
   calculate_utility();
   find_type_of_variable(para);
+  if (curriculum_enabled) {
+    for (int type = 0; type < para.num_types; ++type) {
+      const int ann_offset = type * para.number_of_variables_ann_1;
+      for (int neuron = 0; neuron < para.num_neurons1; ++neuron) {
+        for (int descriptor = para.spin_order3_descriptor_start;
+             descriptor < para.dim;
+             ++descriptor) {
+          curriculum_parameter[
+            ann_offset + neuron * para.dim + descriptor] = 1;
+        }
+      }
+    }
+  }
+  gpu_curriculum_parameter.copy_from_host(curriculum_parameter.data());
   compute(para, fitness_function);
 }
 
@@ -107,10 +124,23 @@ void SNES::initialize_mu_and_sigma(Parameters& para)
 {
   FILE* fid_restart = fopen("nep.restart", "r");
   if (fid_restart == NULL) {
+    curriculum_enabled = para.spin_curriculum;
     std::uniform_real_distribution<float> r1(0, 1);
     for (int n = 0; n < number_of_variables; ++n) {
       mu[n] = (r1(rng) - 0.5f) * 2.0f;
       sigma[n] = para.sigma0;
+    }
+    if (curriculum_enabled) {
+      for (int type = 0; type < para.num_types; ++type) {
+        const int ann_offset = type * para.number_of_variables_ann_1;
+        for (int neuron = 0; neuron < para.num_neurons1; ++neuron) {
+          for (int descriptor = para.spin_order3_descriptor_start;
+               descriptor < para.dim;
+               ++descriptor) {
+            mu[ann_offset + neuron * para.dim + descriptor] = 0.0f;
+          }
+        }
+      }
     }
     // make sure the initial charges are zero
     if (para.charge_mode) {
@@ -391,7 +421,25 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
 
   if (para.prediction == 0) {
     for (int n = 0; n < maximum_generation; ++n) {
-      create_population();
+      float curriculum_scale = 1.0f;
+      if (curriculum_enabled) {
+        const int epoch = n + 1;
+        const int full_o3_epoch = std::max(2, 2 * maximum_generation / 3);
+        const int warmup_end = std::max(1, full_o3_epoch / 2);
+        if (epoch <= warmup_end) {
+          curriculum_scale = 0.0f;
+        } else if (epoch < full_o3_epoch) {
+          curriculum_scale = static_cast<float>(epoch - warmup_end) /
+            static_cast<float>(full_o3_epoch - warmup_end);
+        }
+        if (epoch == 1 || epoch == warmup_end || epoch == full_o3_epoch) {
+          printf(
+            "O3 curriculum generation %d: perturbation_scale=%.6f\n",
+            epoch,
+            curriculum_scale);
+        }
+      }
+      create_population(curriculum_scale);
       // Generation zero initializes q_scaler before population fitness is used.
       fitness_function->compute(
         n, 
@@ -403,7 +451,8 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
         fitness_charge.data(),
         fitness_bec.data(),
         fitness_mforce.data(),
-        fitness_tau.data());
+        fitness_tau.data(),
+        fitness_spin_response.data());
 
       regularize_NEP4(para);
 
@@ -418,7 +467,7 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
         fitness_L2[para.num_types * population_size + best_index],
         population.data() + number_of_variables * best_index);
 
-      update_mu_and_sigma();
+      update_mu_and_sigma(curriculum_scale);
       if (0 == (n + 1) % 100) {
         const char* filename = "nep.restart";
         output_mu_and_sigma(filename);
@@ -439,21 +488,31 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
     std::vector<std::string> tokens;
     tokens = get_tokens(input);
     int num_lines_to_be_skipped = 5;
-    if (tokens[0] == "nep4_spin1") {
+    const bool spin2_zbl = tokens[0] == "nep4_spin2_zbl";
+    if (tokens[0] == "nep4_spin1" || tokens[0] == "nep4_spin2" || spin2_zbl) {
+      const int expected_mode = tokens[0] == "nep4_spin1" ? 1 : 2;
       tokens = get_tokens(input);
       if (tokens.size() != 3 || tokens[0] != "spin_mode" ||
-          get_int_from_token(tokens[1], __FILE__, __LINE__) != 1) {
+          get_int_from_token(tokens[1], __FILE__, __LINE__) != expected_mode) {
         PRINT_INPUT_ERROR("Invalid counted spin header in nep.txt.");
       }
       const int spin_header_lines =
         get_int_from_token(tokens[2], __FILE__, __LINE__);
-      if (spin_header_lines < 8 || spin_header_lines > 10) {
+      const int minimum_lines = expected_mode == 2 ? 9 : 8;
+      if (spin_header_lines < minimum_lines ||
+          spin_header_lines > minimum_lines + 2) {
         PRINT_INPUT_ERROR("Invalid counted spin header length in nep.txt.");
       }
       for (int line = 0; line < spin_header_lines; ++line) {
         tokens = get_tokens(input);
         if (tokens.empty()) {
           PRINT_INPUT_ERROR("Truncated counted spin header in nep.txt.");
+        }
+      }
+      if (spin2_zbl) {
+        tokens = get_tokens(input);
+        if ((tokens.size() != 3 && tokens.size() != 4) || tokens[0] != "zbl") {
+          PRINT_INPUT_ERROR("Invalid zbl line in nep4_spin2_zbl checkpoint.");
         }
       }
     }
@@ -487,6 +546,8 @@ static __global__ void gpu_create_population(
   const int number_of_variables,
   const float* g_mu,
   const float* g_sigma,
+  const int* g_curriculum_parameter,
+  const float curriculum_scale,
   gpurandState* g_state,
   float* g_s,
   float* g_population)
@@ -497,12 +558,14 @@ static __global__ void gpu_create_population(
     gpurandState state = g_state[n];
     float s = gpurand_normal(&state);
     g_s[n] = s;
-    g_population[n] = g_sigma[v] * s + g_mu[v];
+    const float scale =
+      g_curriculum_parameter[v] ? curriculum_scale : 1.0f;
+    g_population[n] = scale * g_sigma[v] * s + g_mu[v];
     g_state[n] = state;
   }
 }
 
-void SNES::create_population()
+void SNES::create_population(float curriculum_scale)
 {
   gpuSetDevice(0); // normally use GPU-0
   const int N = population_size * number_of_variables;
@@ -511,6 +574,8 @@ void SNES::create_population()
     number_of_variables,
     gpu_mu.data(),
     gpu_sigma.data(),
+    gpu_curriculum_parameter.data(),
+    curriculum_scale,
     curand_states.data(),
     gpu_s.data(),
     gpu_population.data());
@@ -587,7 +652,8 @@ void SNES::regularize_NEP4(Parameters& para)
         cost_L1 + cost_L2 + fitness_energy[p + t * population_size] +
         fitness_force[p + t * population_size] + fitness_virial[p + t * population_size] +
         fitness_charge[p + t * population_size] + fitness_bec[p + t * population_size] +
-        fitness_mforce[p + t * population_size] + fitness_tau[p + t * population_size];
+        fitness_mforce[p + t * population_size] + fitness_tau[p + t * population_size] +
+        fitness_spin_response[p + t * population_size];
       fitness_L1[p + t * population_size] = cost_L1;
       fitness_L2[p + t * population_size] = cost_L2;
     }
@@ -628,6 +694,8 @@ static __global__ void gpu_update_mu_and_sigma(
   const int number_of_variables,
   const float eta_sigma,
   const int* g_type_of_variable,
+  const int* g_curriculum_parameter,
+  const float curriculum_scale,
   const int* g_index,
   const float* g_utility,
   const float* g_s,
@@ -646,12 +714,15 @@ static __global__ void gpu_update_mu_and_sigma(
       gradient_sigma += (s * s - 1.0f) * utility;
     }
     const float sigma = g_sigma[v];
-    g_mu[v] += sigma * gradient_mu;
-    g_sigma[v] = fminf(sigma * exp(eta_sigma * gradient_sigma), 1.0f);
+    const float scale =
+      g_curriculum_parameter[v] ? curriculum_scale : 1.0f;
+    g_mu[v] += scale * sigma * gradient_mu;
+    g_sigma[v] =
+      fminf(sigma * exp(scale * eta_sigma * gradient_sigma), 1.0f);
   }
 }
 
-void SNES::update_mu_and_sigma()
+void SNES::update_mu_and_sigma(float curriculum_scale)
 {
   gpuSetDevice(0); // normally use GPU-0
   gpu_type_of_variable.copy_from_host(type_of_variable.data());
@@ -662,6 +733,8 @@ void SNES::update_mu_and_sigma()
     number_of_variables,
     eta_sigma,
     gpu_type_of_variable.data(),
+    gpu_curriculum_parameter.data(),
+    curriculum_scale,
     gpu_index.data(),
     gpu_utility.data(),
     gpu_s.data(),

@@ -91,6 +91,7 @@ static void read_force(
   const int force_offset,
   const int spin_offset,
   const int mforce_offset,
+  const int spin_tangent_offset,
   const int avirial_offset,
   const int bec_offset,
   std::ifstream& input,
@@ -114,6 +115,11 @@ static void read_force(
     structure.mfx.resize(structure.num_atom, 0.0f);
     structure.mfy.resize(structure.num_atom, 0.0f);
     structure.mfz.resize(structure.num_atom, 0.0f);
+    if (structure.has_spin_response) {
+      structure.spin_tangent_x.resize(structure.num_atom);
+      structure.spin_tangent_y.resize(structure.num_atom);
+      structure.spin_tangent_z.resize(structure.num_atom);
+    }
   }
   structure.bec.resize(structure.num_atom * 9);
   if (structure.has_atomic_virial) {
@@ -163,6 +169,14 @@ static void read_force(
           get_double_from_token(tokens[mforce_offset + 1], xyz_filename.c_str(), line_number);
         structure.mfz[na] =
           get_double_from_token(tokens[mforce_offset + 2], xyz_filename.c_str(), line_number);
+      }
+      if (structure.has_spin_response) {
+        structure.spin_tangent_x[na] = get_double_from_token(
+          tokens[spin_tangent_offset], xyz_filename.c_str(), line_number);
+        structure.spin_tangent_y[na] = get_double_from_token(
+          tokens[spin_tangent_offset + 1], xyz_filename.c_str(), line_number);
+        structure.spin_tangent_z[na] = get_double_from_token(
+          tokens[spin_tangent_offset + 2], xyz_filename.c_str(), line_number);
       }
     }
 
@@ -227,6 +241,45 @@ static void read_one_structure(
 
   if (tokens.size() == 0) {
     PRINT_INPUT_ERROR("The second line for each frame should not be empty.");
+  }
+
+  bool has_response_probe = false;
+  bool has_response_group = false;
+  bool has_response_coordinate = false;
+  for (const auto& token : tokens) {
+    const std::string probe = "response_probe=";
+    const std::string group = "response_group=";
+    const std::string coordinate = "response_coordinate=";
+    if (token.substr(0, probe.length()) == probe) {
+      has_response_probe = true;
+      if (token.substr(probe.length(), token.length()) != "rotation") {
+        PRINT_INPUT_ERROR("Only response_probe=rotation is supported.\n");
+      }
+    } else if (token.substr(0, group.length()) == group) {
+      has_response_group = true;
+      structure.spin_response_group =
+        token.substr(group.length(), token.length());
+      if (structure.spin_response_group.empty()) {
+        PRINT_INPUT_ERROR("response_group should not be empty.\n");
+      }
+    } else if (token.substr(0, coordinate.length()) == coordinate) {
+      has_response_coordinate = true;
+      structure.spin_response_coordinate = get_double_from_token(
+        token.substr(coordinate.length(), token.length()),
+        xyz_filename.c_str(),
+        line_number);
+    }
+  }
+  if (has_response_probe || has_response_group || has_response_coordinate) {
+    if (!has_response_probe || !has_response_group || !has_response_coordinate) {
+      PRINT_INPUT_ERROR(
+        "A magnetic response frame requires response_probe, response_group, "
+        "and response_coordinate.\n");
+    }
+    if (!para.spin_mode) {
+      PRINT_INPUT_ERROR("Magnetic response metadata requires spin_mode.\n");
+    }
+    structure.has_spin_response_metadata = 1;
   }
 
   // get energy_weight (optional)
@@ -443,6 +496,7 @@ static void read_one_structure(
   int force_offset = 0;
   int spin_offset = 0;
   int mforce_offset = 0;
+  int spin_tangent_offset = 0;
   int avirial_offset = 0;
   int bec_offset = 0;
   int num_columns = 0;
@@ -465,6 +519,7 @@ static void read_one_structure(
       int force_position = -1;
       int spin_position = -1;
       int mforce_position = -1;
+      int spin_tangent_position = -1;
       int avirial_position = -1;
       int bec_position = -1;
       for (int k = 0; k < sub_tokens.size() / 3; ++k) {
@@ -493,6 +548,19 @@ static void read_one_structure(
                 xyz_filename.c_str(),
                 line_number) != 3) {
             PRINT_INPUT_ERROR("spin/moment must have property type R:3.\n");
+          }
+        }
+        if (sub_tokens[k * 3] == "spin_tangent") {
+          if (spin_tangent_position >= 0) {
+            PRINT_INPUT_ERROR("Only one spin_tangent property is allowed.\n");
+          }
+          spin_tangent_position = k;
+          if (sub_tokens[k * 3 + 1] != "r" ||
+              get_int_from_token(
+                sub_tokens[k * 3 + 2],
+                xyz_filename.c_str(),
+                line_number) != 3) {
+            PRINT_INPUT_ERROR("spin_tangent must have property type R:3.\n");
           }
         }
         if (
@@ -545,6 +613,12 @@ static void read_one_structure(
         PRINT_INPUT_ERROR(
           "spin_mode 1 requires spin/spins/moment/moments with property type R:3.\n");
       }
+      if (spin_tangent_position >= 0 &&
+          (!structure.has_spin_response_metadata || mforce_position < 0)) {
+        PRINT_INPUT_ERROR(
+          "spin_tangent:R:3 requires rotation response metadata and mforce:R:3.\n");
+      }
+      structure.has_spin_response = spin_tangent_position >= 0;
       if (avirial_position < 0 && para.train_mode == 1 && para.atomic_v == 1) {
         PRINT_INPUT_ERROR("'adipole' or 'atomic_dipole' is missing in properties.");
       }
@@ -572,6 +646,10 @@ static void read_one_structure(
           mforce_offset +=
             get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
         }
+        if (k < spin_tangent_position) {
+          spin_tangent_offset +=
+            get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
+        }
         if (k < avirial_position) {
           avirial_offset +=
             get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
@@ -592,6 +670,7 @@ static void read_one_structure(
     force_offset,
     spin_offset,
     mforce_offset,
+    spin_tangent_offset,
     avirial_offset,
     bec_offset,
     input,
@@ -686,6 +765,12 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures_copy[nc].has_virial = structures[nc].has_virial;
     structures_copy[nc].has_bec = structures[nc].has_bec;
     structures_copy[nc].has_mforce = structures[nc].has_mforce;
+    structures_copy[nc].has_spin_response_metadata =
+      structures[nc].has_spin_response_metadata;
+    structures_copy[nc].has_spin_response = structures[nc].has_spin_response;
+    structures_copy[nc].spin_response_group = structures[nc].spin_response_group;
+    structures_copy[nc].spin_response_coordinate =
+      structures[nc].spin_response_coordinate;
     structures_copy[nc].energy = structures[nc].energy;
     structures_copy[nc].energy_weight = structures[nc].energy_weight;
     structures_copy[nc].has_temperature = structures[nc].has_temperature;
@@ -716,6 +801,9 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures_copy[nc].mfx.resize(structures[nc].mfx.size());
     structures_copy[nc].mfy.resize(structures[nc].mfy.size());
     structures_copy[nc].mfz.resize(structures[nc].mfz.size());
+    structures_copy[nc].spin_tangent_x.resize(structures[nc].spin_tangent_x.size());
+    structures_copy[nc].spin_tangent_y.resize(structures[nc].spin_tangent_y.size());
+    structures_copy[nc].spin_tangent_z.resize(structures[nc].spin_tangent_z.size());
     structures_copy[nc].bec.resize(structures[nc].num_atom * 9);
     for (int na = 0; na < structures[nc].num_atom; ++na) {
       structures_copy[nc].type[na] = structures[nc].type[na];
@@ -732,6 +820,11 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
         structures_copy[nc].mfx[na] = structures[nc].mfx[na];
         structures_copy[nc].mfy[na] = structures[nc].mfy[na];
         structures_copy[nc].mfz[na] = structures[nc].mfz[na];
+        if (structures[nc].has_spin_response) {
+          structures_copy[nc].spin_tangent_x[na] = structures[nc].spin_tangent_x[na];
+          structures_copy[nc].spin_tangent_y[na] = structures[nc].spin_tangent_y[na];
+          structures_copy[nc].spin_tangent_z[na] = structures[nc].spin_tangent_z[na];
+        }
       }
       for (int d = 0; d < 9; ++d) {
         structures_copy[nc].bec[na * 9 + d] = structures[nc].bec[na * 9 + d];
@@ -745,6 +838,14 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures[nc].has_virial = structures_copy[configuration_id[nc]].has_virial;
     structures[nc].has_bec = structures_copy[configuration_id[nc]].has_bec;
     structures[nc].has_mforce = structures_copy[configuration_id[nc]].has_mforce;
+    structures[nc].has_spin_response_metadata =
+      structures_copy[configuration_id[nc]].has_spin_response_metadata;
+    structures[nc].has_spin_response =
+      structures_copy[configuration_id[nc]].has_spin_response;
+    structures[nc].spin_response_group =
+      structures_copy[configuration_id[nc]].spin_response_group;
+    structures[nc].spin_response_coordinate =
+      structures_copy[configuration_id[nc]].spin_response_coordinate;
     structures[nc].energy = structures_copy[configuration_id[nc]].energy;
     structures[nc].energy_weight = structures_copy[configuration_id[nc]].energy_weight;
     structures[nc].has_temperature = structures_copy[configuration_id[nc]].has_temperature;
@@ -775,6 +876,12 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures[nc].mfx.resize(structures_copy[configuration_id[nc]].mfx.size());
     structures[nc].mfy.resize(structures_copy[configuration_id[nc]].mfy.size());
     structures[nc].mfz.resize(structures_copy[configuration_id[nc]].mfz.size());
+    structures[nc].spin_tangent_x.resize(
+      structures_copy[configuration_id[nc]].spin_tangent_x.size());
+    structures[nc].spin_tangent_y.resize(
+      structures_copy[configuration_id[nc]].spin_tangent_y.size());
+    structures[nc].spin_tangent_z.resize(
+      structures_copy[configuration_id[nc]].spin_tangent_z.size());
     structures[nc].bec.resize(structures[nc].num_atom * 9);
     for (int na = 0; na < structures[nc].num_atom; ++na) {
       structures[nc].type[na] = structures_copy[configuration_id[nc]].type[na];
@@ -791,6 +898,14 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
         structures[nc].mfx[na] = structures_copy[configuration_id[nc]].mfx[na];
         structures[nc].mfy[na] = structures_copy[configuration_id[nc]].mfy[na];
         structures[nc].mfz[na] = structures_copy[configuration_id[nc]].mfz[na];
+        if (structures[nc].has_spin_response) {
+          structures[nc].spin_tangent_x[na] =
+            structures_copy[configuration_id[nc]].spin_tangent_x[na];
+          structures[nc].spin_tangent_y[na] =
+            structures_copy[configuration_id[nc]].spin_tangent_y[na];
+          structures[nc].spin_tangent_z[na] =
+            structures_copy[configuration_id[nc]].spin_tangent_z[na];
+        }
       }
       for (int d = 0; d < 9; ++d) {
         structures[nc].bec[na * 9 + d] = structures_copy[configuration_id[nc]].bec[na * 9 + d];

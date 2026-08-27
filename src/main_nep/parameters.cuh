@@ -55,6 +55,7 @@ public:
   float lambda_v;         // weight parameter for virial RMSE loss
   float lambda_m;         // weight parameter for magnetic-force RMSE loss
   float lambda_tau;       // weight parameter for spin-torque RMSE loss
+  float lambda_spin_response; // weight for grouped magnetic-response loss
   float lambda_shear;     // extra weight parameter for shear virial
   float lambda_q;         // weight for global charge
   float lambda_z;         // weight for BEC
@@ -72,9 +73,12 @@ public:
   float typewise_cutoff_zbl_factor;
   int output_descriptor;
   int charge_mode; // add dynamic charge to NEP potential model
-  int spin_mode;   // add Spin NEP Lite descriptors to NEP potential model
+  int spin_mode;   // 1=Spin NEP Lite, 2=unified O/C spin polynomial
   int spin_chiral;
   int spin_compress;
+  int spin_order;
+  int spin_soc;
+  int spin_curriculum;
   int spin_n_max[2];
   int spin_basis_size[2];
   int spin_l_max[3];
@@ -104,6 +108,7 @@ public:
   bool is_lambda_v_set;
   bool is_lambda_m_set;
   bool is_lambda_tau_set;
+  bool is_lambda_spin_response_set;
   bool is_atomic_v_set;
   bool is_lambda_shear_set;
   bool is_batch_set;
@@ -119,6 +124,9 @@ public:
   bool is_spin_mode_set;
   bool is_spin_chiral_set;
   bool is_spin_compress_set;
+  bool is_spin_order_set;
+  bool is_spin_soc_set;
+  bool is_spin_curriculum_set;
   bool is_spin_n_max_set;
   bool is_spin_basis_size_set;
   bool is_spin_l_max_set;
@@ -137,6 +145,8 @@ public:
   int number_of_variables_ann_1;      // number of parameters in the ANN for one element
   int number_of_variables_descriptor; // number of parameters in the descriptor only
   int number_of_variables_descriptor_spin;
+  int number_of_variables_spin_projection;
+  int spin_order3_descriptor_start;
 
   // some arrays
 
@@ -188,6 +198,7 @@ private:
   void parse_lambda_v(const char** param, int num_param);
   void parse_lambda_m(const char** param, int num_param);
   void parse_lambda_tau(const char** param, int num_param);
+  void parse_lambda_spin_response(const char** param, int num_param);
   void parse_lambda_q(const char** param, int num_param);
   void parse_lambda_z(const char** param, int num_param);
   void parse_lambda_shear(const char** param, int num_param);
@@ -204,6 +215,9 @@ private:
   void parse_spin_mode(const char** param, int num_param);
   void parse_spin_chiral(const char** param, int num_param);
   void parse_spin_compress(const char** param, int num_param);
+  void parse_spin_order(const char** param, int num_param);
+  void parse_spin_soc(const char** param, int num_param);
+  void parse_spin_curriculum(const char** param, int num_param);
   void parse_spin_n_max(const char** param, int num_param);
   void parse_spin_basis_size(const char** param, int num_param);
   void parse_spin_l_max(const char** param, int num_param);

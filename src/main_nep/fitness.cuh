@@ -38,6 +38,7 @@ public:
     float*,
     float*,
     float*,
+    float*,
     float*);
   void report_error(
     Parameters& para,
