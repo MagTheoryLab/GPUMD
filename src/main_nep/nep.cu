@@ -337,6 +337,66 @@ static __global__ void apply_ann(
   }
 }
 
+static __global__ void apply_ann_one_layer_warp(
+  const int N,
+  const NEP::ANN annmb,
+  const int* __restrict__ g_type,
+  const float* __restrict__ g_descriptors,
+  const float* __restrict__ g_q_scaler,
+  float* g_pe,
+  float* g_Fp)
+{
+  constexpr int warp_size = 32;
+  constexpr int values_per_lane = (MAX_DIM + warp_size - 1) / warp_size;
+  const int lane = threadIdx.x & (warp_size - 1);
+  const int atom = (blockIdx.x * blockDim.x + threadIdx.x) / warp_size;
+  if (atom >= N) return;
+
+  const int dim = annmb.dim;
+  const int num_neurons = annmb.num_neurons1;
+  const int type = g_type[atom];
+  const float* w0 = annmb.wb[type];
+  const float* b0 = w0 + num_neurons * dim;
+  const float* w1 = b0 + num_neurons;
+  float q[values_per_lane] = {};
+  float Fp[values_per_lane] = {};
+  for (int k = 0; k < values_per_lane; ++k) {
+    const int d = lane + k * warp_size;
+    if (d < dim) {
+      q[k] = g_descriptors[atom + d * N] * g_q_scaler[d];
+    }
+  }
+
+  float energy = 0.0f;
+  for (int n = 0; n < num_neurons; ++n) {
+    float w0_times_q = 0.0f;
+    for (int k = 0; k < values_per_lane; ++k) {
+      const int d = lane + k * warp_size;
+      if (d < dim) w0_times_q += w0[n * dim + d] * q[k];
+    }
+    for (int offset = warp_size / 2; offset > 0; offset /= 2) {
+      w0_times_q += __shfl_down_sync(0xffffffff, w0_times_q, offset);
+    }
+    float derivative_scale = 0.0f;
+    if (lane == 0) {
+      const float x1 = tanh(w0_times_q - b0[n]);
+      derivative_scale = w1[n] * (1.0f - x1 * x1);
+      energy += w1[n] * x1;
+    }
+    derivative_scale = __shfl_sync(0xffffffff, derivative_scale, 0);
+    for (int k = 0; k < values_per_lane; ++k) {
+      const int d = lane + k * warp_size;
+      if (d < dim) Fp[k] += derivative_scale * w0[n * dim + d];
+    }
+  }
+
+  if (lane == 0) g_pe[atom] = energy - annmb.b[0];
+  for (int k = 0; k < values_per_lane; ++k) {
+    const int d = lane + k * warp_size;
+    if (d < dim) g_Fp[atom + d * N] = Fp[k] * g_q_scaler[d];
+  }
+}
+
 static __global__ void apply_ann_temperature(
   const int N,
   const NEP::ParaMB paramb,
@@ -775,15 +835,29 @@ void NEP::find_force(
         nep_data[device_id].Fp.data());
       GPU_CHECK_KERNEL
     } else {
-      apply_ann<<<grid_size, block_size>>>(
-        dataset[device_id].N,
-        paramb,
-        annmb[device_id],
-        dataset[device_id].type.data(),
-        nep_data[device_id].descriptors.data(),
-        para.q_scaler_gpu[device_id].data(),
-        dataset[device_id].energy.data(),
-        nep_data[device_id].Fp.data());
+      if (annmb[device_id].num_hidden_layers == 1) {
+        constexpr int warps_per_block = block_size / 32;
+        const int ann_grid_size =
+          (dataset[device_id].N + warps_per_block - 1) / warps_per_block;
+        apply_ann_one_layer_warp<<<ann_grid_size, block_size>>>(
+          dataset[device_id].N,
+          annmb[device_id],
+          dataset[device_id].type.data(),
+          nep_data[device_id].descriptors.data(),
+          para.q_scaler_gpu[device_id].data(),
+          dataset[device_id].energy.data(),
+          nep_data[device_id].Fp.data());
+      } else {
+        apply_ann<<<grid_size, block_size>>>(
+          dataset[device_id].N,
+          paramb,
+          annmb[device_id],
+          dataset[device_id].type.data(),
+          nep_data[device_id].descriptors.data(),
+          para.q_scaler_gpu[device_id].data(),
+          dataset[device_id].energy.data(),
+          nep_data[device_id].Fp.data());
+      }
       GPU_CHECK_KERNEL
     }
 
