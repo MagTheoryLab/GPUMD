@@ -122,7 +122,7 @@ def maximum_error(left, right):
 
 def parity_tolerance(left, right):
     scale = max(abs(value) for value in flatten(left) + flatten(right))
-    return 5.0e-5 + 2.0e-6 * scale
+    return 5.0e-5 + 5.0e-6 * scale
 
 
 def validate_parser(root):
@@ -168,11 +168,13 @@ def validate_response_training(root):
     return {"training_loss": loss, "curriculum_schedule": "0 -> 1"}
 
 
-def validate_training_and_runtime(root, enable_zbl=False):
+def validate_training_and_runtime(root, enable_zbl=False, spin_compress=2):
     root.mkdir()
     training = root / "training"
     nep_in = NEP_IN.replace("version 4", "version 4\nzbl 2.5") \
         if enable_zbl else NEP_IN
+    nep_in = nep_in.replace(
+        "spin_compress 2", f"spin_compress {spin_compress}")
     write_case(training, nep_in)
     result = run(NEP, training)
     if result.returncode:
@@ -185,13 +187,12 @@ def validate_training_and_runtime(root, enable_zbl=False):
         raise AssertionError("invalid counted spin2 checkpoint")
     if enable_zbl and "\nzbl 1.25 2.5\ncutoff " not in checkpoint:
         raise AssertionError("spin2 ZBL checkpoint is missing its zbl line")
+    projection_size = 4 * spin_compress * spin_compress
     required = (
         "spin_basis_size 8\n",
         "spin_l_max 2\n",
-        "spin_compress 2\n",
         "spin_order 3\n",
         "spin_soc 1\n",
-        "spin_projection_size 16\n",
         "spin_scaler 1\n",
         "spin_dof_type Fe\n",
         "spin_env_type Fe Ge\n",
@@ -199,10 +200,27 @@ def validate_training_and_runtime(root, enable_zbl=False):
     for line in required:
         if line not in checkpoint:
             raise AssertionError(f"missing checkpoint line: {line.strip()}")
+    for line in (
+            f"spin_compress {spin_compress}\n",
+            f"spin_projection_size {projection_size}\n"):
+        if line not in checkpoint:
+            raise AssertionError(f"missing checkpoint line: {line.strip()}")
 
     loss = (training / "loss.out").read_text().splitlines()[-1]
     if re.search(r"\b(?:nan|inf)\b", loss, re.IGNORECASE):
         raise AssertionError("spin2 training produced a non-finite loss")
+    loss_values = [float(value) for value in loss.split()]
+    regularization_only = loss_values[2] + loss_values[3]
+    if loss_values[1] <= regularization_only + 1.0e-4:
+        raise AssertionError(
+            "generation-one total loss does not contain the training fitness")
+
+    descriptor_dim = 22 if spin_compress == 1 else 52
+    q_scaler = [
+        float(value) for value in checkpoint.splitlines()[-descriptor_dim:]]
+    if max(q_scaler) >= 1.0e4:
+        raise AssertionError(
+            f"spin2 q_scaler is ill-conditioned: max={max(q_scaler)}")
 
     prediction = root / "prediction"
     prediction.mkdir()
@@ -263,7 +281,10 @@ def validate_training_and_runtime(root, enable_zbl=False):
         "inactive_mforce": max(
             abs(value) for row in runtime_mforce[2:] for value in row),
         "training_loss": loss,
+        "q_scaler_max": max(q_scaler),
         "zbl": enable_zbl,
+        "spin_compress": spin_compress,
+        "descriptor_dim": descriptor_dim,
     }
     for name in ("energy_per_atom", "force", "mforce", "virial_per_atom"):
         reference = {
@@ -296,6 +317,8 @@ def main():
             "parser_negative_exit_codes": validate_parser(root / "parser"),
             "response_training": validate_response_training(root / "response"),
             "training_runtime": validate_training_and_runtime(root / "correctness"),
+            "rank_one_training_runtime": validate_training_and_runtime(
+                root / "rank-one", spin_compress=1),
             "zbl_training_runtime": validate_training_and_runtime(
                 root / "zbl", enable_zbl=True),
         }

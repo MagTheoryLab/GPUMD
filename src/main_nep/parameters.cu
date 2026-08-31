@@ -381,14 +381,22 @@ void Parameters::calculate_parameters()
         if (L >= 1) dim_spin += (spin_soc ? 3 : 1) * C;
         if (L >= 2) dim_spin += C;
         dim_spin += C + 2 * pairs;
-        if (spin_soc && L >= 1) dim_spin += 2 * C;
-        if (spin_soc && L >= 2) dim_spin += 2 * C;
+        if (spin_soc && L >= 1) {
+          dim_spin += (C >= 2 ? 2 : 1) * C;
+        }
+        if (spin_soc && L >= 2) {
+          dim_spin += (C >= 2 ? 2 : 1) * C;
+        }
       }
       spin_order3_descriptor_start = dim_struct + dim_spin;
       if (spin_order >= 3) {
         dim_spin += C;
-        if (spin_soc && L >= 1) dim_spin += 2 * C;
-        if (spin_soc && L >= 2) dim_spin += 3 * C;
+        if (spin_soc && L >= 1) {
+          dim_spin += (C >= 2 ? 2 : 1) * C;
+        }
+        if (spin_soc && L >= 2) {
+          dim_spin += (C >= 2 ? 3 : 1) * C;
+        }
         if (spin_soc && L >= 1 && C >= 3) dim_spin += C;
       }
     }

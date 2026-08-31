@@ -666,6 +666,90 @@ Fitness::~Fitness()
   }
 }
 
+void Fitness::initialize_q_scaler(
+  Parameters& para, const float* parameter_center)
+{
+  if (para.prediction != 0 || para.fine_tune || para.import_q_scaler) {
+    return;
+  }
+
+  int deviceCount;
+  CHECK(gpuGetDeviceCount(&deviceCount));
+  std::vector<float> scaler_solution(
+    para.number_of_variables * deviceCount, para.initial_para);
+  if (parameter_center != nullptr) {
+    for (int device_id = 0; device_id < deviceCount; ++device_id) {
+      std::copy(
+        parameter_center,
+        parameter_center + para.number_of_variables,
+        scaler_solution.begin() + device_id * para.number_of_variables);
+    }
+  }
+
+  for (int batch_id = 0; batch_id < num_batches; ++batch_id) {
+    potential->find_force(
+      para,
+      scaler_solution.data(),
+      train_set[batch_id],
+      true,
+      deviceCount);
+  }
+
+  if (!para.spin_mode) {
+    return;
+  }
+
+  std::vector<float> global_max(para.dim, -1.0e10f);
+  std::vector<float> global_min(para.dim, 1.0e10f);
+  std::vector<float> device_max(para.dim);
+  std::vector<float> device_min(para.dim);
+  for (int device_id = 0; device_id < deviceCount; ++device_id) {
+    CHECK(gpuSetDevice(device_id));
+    para.q_scaler_max[device_id].copy_to_host(device_max.data());
+    para.q_scaler_min[device_id].copy_to_host(device_min.data());
+    for (int d = 0; d < para.dim; ++d) {
+      global_max[d] = std::max(global_max[d], device_max[d]);
+      global_min[d] = std::min(global_min[d], device_min[d]);
+    }
+  }
+
+  int unresolved_channels = 0;
+  for (int d = 0; d < para.dim; ++d) {
+    const float range = global_max[d] - global_min[d];
+    const float magnitude = std::max(
+      1.0f, std::max(std::abs(global_max[d]), std::abs(global_min[d])));
+    const float resolution =
+      64.0f * std::numeric_limits<float>::epsilon() * magnitude;
+    if (!std::isfinite(range)) {
+      PRINT_INPUT_ERROR(
+        "Cannot initialize Spin NEP q_scaler from a non-finite "
+        "descriptor channel.\n");
+    }
+    if (para.spin_mode == 2 && range <= resolution) {
+      para.q_scaler_cpu[d] = 1.0f;
+      ++unresolved_channels;
+    } else {
+      if (range <= 1.0e-10f) {
+        PRINT_INPUT_ERROR(
+          "Cannot initialize Spin NEP q_scaler from a constant "
+          "descriptor channel.\n");
+      }
+      para.q_scaler_cpu[d] = 1.0f / range;
+    }
+  }
+  if (unresolved_channels > 0) {
+    printf(
+      "Spin2 q_scaler kept at 1 for %d numerically unresolved "
+      "descriptor channel(s).\n",
+      unresolved_channels);
+  }
+  for (int device_id = 0; device_id < deviceCount; ++device_id) {
+    CHECK(gpuSetDevice(device_id));
+    para.q_scaler_gpu[device_id].copy_from_host(para.q_scaler_cpu.data());
+  }
+  CHECK(gpuSetDevice(0));
+}
+
 void Fitness::compute(
   const int generation, 
   Parameters& para, 
@@ -683,48 +767,7 @@ void Fitness::compute(
   CHECK(gpuGetDeviceCount(&deviceCount));
   int population_iter = (para.population_size - 1) / deviceCount + 1;
 
-  if (generation == 0) {
-    std::vector<float> scaler_solution(
-      para.number_of_variables * deviceCount, para.initial_para);
-    for (int batch_id = 0; batch_id < num_batches; ++batch_id) {
-      potential->find_force(
-        para,
-        scaler_solution.data(),
-        train_set[batch_id],
-        (para.fine_tune || para.import_q_scaler) ? false : true,
-        deviceCount);
-    }
-    if (para.spin_mode && !para.fine_tune && !para.import_q_scaler) {
-      std::vector<float> global_max(para.dim, -1.0e10f);
-      std::vector<float> global_min(para.dim, 1.0e10f);
-      std::vector<float> device_max(para.dim);
-      std::vector<float> device_min(para.dim);
-      for (int device_id = 0; device_id < deviceCount; ++device_id) {
-        CHECK(gpuSetDevice(device_id));
-        para.q_scaler_max[device_id].copy_to_host(device_max.data());
-        para.q_scaler_min[device_id].copy_to_host(device_min.data());
-        for (int d = 0; d < para.dim; ++d) {
-          global_max[d] = std::max(global_max[d], device_max[d]);
-          global_min[d] = std::min(global_min[d], device_min[d]);
-        }
-      }
-      for (int d = 0; d < para.dim; ++d) {
-        const float range = global_max[d] - global_min[d];
-        if (!std::isfinite(range) || range <= 1.0e-10f) {
-          PRINT_INPUT_ERROR(
-            "Cannot initialize Spin NEP q_scaler from a constant or "
-            "non-finite descriptor channel.\n");
-        }
-        para.q_scaler_cpu[d] = 1.0f / range;
-      }
-      for (int device_id = 0; device_id < deviceCount; ++device_id) {
-        CHECK(gpuSetDevice(device_id));
-        para.q_scaler_gpu[device_id].copy_from_host(
-          para.q_scaler_cpu.data());
-      }
-      CHECK(gpuSetDevice(0));
-    }
-  } else {
+  {
     std::vector<std::vector<SpinResponsePoint>> response_points;
     if (para.lambda_spin_response > 0.0f) {
       response_points.resize(para.population_size);

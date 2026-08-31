@@ -28,6 +28,7 @@ class Fitness
 public:
   Fitness(Parameters& para);
   ~Fitness();
+  void initialize_q_scaler(Parameters& para, const float* parameter_center);
   void compute(
     const int generation,
     Parameters& para,
