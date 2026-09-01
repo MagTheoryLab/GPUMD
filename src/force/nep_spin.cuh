@@ -162,7 +162,7 @@ public:
   };
 
   NEP_Spin(const char* file_potential, const int num_atoms);
-  virtual ~NEP_Spin(void) = default;
+  virtual ~NEP_Spin(void);
 
   using Potential::compute;
 
@@ -194,6 +194,8 @@ private:
   NEP::ANN ann_;
   NEP::ZBL zbl_;
   int num_atoms_ = 0;
+  gpuStream_t structural_descriptor_stream_ = nullptr;
+  gpuStream_t spin_descriptor_stream_ = nullptr;
   bool small_box_initialized_ = false;
   int small_box_capacity_ = 0;
   NEP::ExpandedBox expanded_box_;

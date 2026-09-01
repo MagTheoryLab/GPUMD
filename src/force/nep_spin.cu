@@ -342,15 +342,6 @@ __device__ __forceinline__ bool load_spin2_edge_f32(
 
 __device__ int required_small_box_capacity[1];
 
-__device__ __forceinline__ void add_compensated(
-  const float value, float& sum, float& compensation)
-{
-  const float corrected = value - compensation;
-  const float updated = sum + corrected;
-  compensation = (updated - sum) - corrected;
-  sum = updated;
-}
-
 __global__ void find_local_neighbors_spin(
   const int N,
   const Box box,
@@ -554,7 +545,6 @@ __global__ void find_structural_descriptor(
   const double y1 = y[n1];
   const double z1 = z[n1];
   float q[MAX_DIM] = {0.0f};
-  float q_compensation[MAX_DIM] = {0.0f};
 
   for (int i1 = 0; i1 < NN_radial[n1]; ++i1) {
     const int n2 = NL_radial[static_cast<size_t>(N) * i1 + n1];
@@ -581,13 +571,12 @@ __global__ void find_structural_descriptor(
         const int basis = n * (paramb.basis_size_radial + 1) + k;
         gn12 += fn12[k] * ann.c_type_pair[(t1 * paramb.num_types + t2) * basis_count + basis];
       }
-      add_compensated(gn12, q[n], q_compensation[n]);
+      q[n] += gn12;
     }
   }
 
   for (int n = 0; n <= paramb.n_max_angular; ++n) {
     float s[NUM_OF_ABC] = {0.0f};
-    float s_compensation[NUM_OF_ABC] = {0.0f};
     const int abc_count = (paramb.L_max + 1) * (paramb.L_max + 1) - 1;
     for (int i1 = 0; i1 < NN_angular[n1]; ++i1) {
       const int n2 = NL_angular[n1 + N * i1];
@@ -614,11 +603,7 @@ __global__ void find_structural_descriptor(
         c_index += n * (paramb.basis_size_angular + 1) + k;
         gn12 += fn12[k] * ann.c_type_pair[c_index];
       }
-      float edge_s[NUM_OF_ABC] = {0.0f};
-      accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, edge_s);
-      for (int abc = 0; abc < abc_count; ++abc) {
-        add_compensated(edge_s[abc], s[abc], s_compensation[abc]);
-      }
+      accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
     }
     find_q(
       paramb.L_max,
@@ -666,35 +651,307 @@ __global__ void find_potential(
   const float* b0 = w0 + static_cast<std::size_t>(hidden_neurons) * descriptor_dim;
   const float* w1 = b0 + hidden_neurons;
   const float* b1 = parameters + static_cast<std::size_t>(num_types) * type_block;
-  double q[MAX_DIM] = {0.0};
+  float q[MAX_DIM] = {0.0f};
   for (int d = 0; d < descriptor_dim; ++d) {
-    q[d] = static_cast<double>(descriptor[static_cast<std::size_t>(N) * d + atom]) *
-           static_cast<double>(q_scaler[d]);
+    q[d] = descriptor[static_cast<std::size_t>(N) * d + atom] * q_scaler[d];
   }
-  double energy = 0.0;
-  double fp[MAX_DIM] = {0.0};
+  float energy = 0.0f;
+  float fp[MAX_DIM] = {0.0f};
   for (int neuron = 0; neuron < hidden_neurons; ++neuron) {
-    double projection = 0.0;
+    float projection = 0.0f;
     for (int d = 0; d < descriptor_dim; ++d) {
-      projection +=
-        static_cast<double>(w0[neuron * descriptor_dim + d]) * q[d];
+      projection += w0[neuron * descriptor_dim + d] * q[d];
     }
-    const double activation = tanh(projection - static_cast<double>(b0[neuron]));
-    const double activation_derivative = 1.0 - activation * activation;
-    energy += static_cast<double>(w1[neuron]) * activation;
+    const float activation = tanhf(projection - b0[neuron]);
+    const float activation_derivative = 1.0f - activation * activation;
+    energy += w1[neuron] * activation;
     for (int d = 0; d < descriptor_dim; ++d) {
-      fp[d] += static_cast<double>(w1[neuron]) * activation_derivative *
-               static_cast<double>(w0[neuron * descriptor_dim + d]);
+      fp[d] += w1[neuron] * activation_derivative *
+               w0[neuron * descriptor_dim + d];
     }
   }
-  energy -= static_cast<double>(b1[0]);
-  potential[atom] += energy + static_cast<double>(spin_baseline[atom_type]);
+  energy -= b1[0];
+  potential[atom] += static_cast<double>(energy + spin_baseline[atom_type]);
   for (int d = 0; d < descriptor_dim; ++d) {
-    Fp[static_cast<std::size_t>(N) * d + atom] =
-      static_cast<float>(fp[d] * static_cast<double>(q_scaler[d]));
+    Fp[static_cast<std::size_t>(N) * d + atom] = fp[d] * q_scaler[d];
   }
 }
 
+template <int lanes_per_atom>
+__global__ void find_potential_warp(
+  const int N,
+  const int descriptor_dim,
+  const int hidden_neurons,
+  const int num_types,
+  const int* __restrict__ type,
+  const float* __restrict__ descriptor,
+  const float* __restrict__ parameters,
+  const float* __restrict__ q_scaler,
+  const float* __restrict__ spin_baseline,
+  double* potential,
+  float* __restrict__ Fp)
+{
+  static_assert(32 % lanes_per_atom == 0, "one warp must contain complete atom tiles");
+  constexpr int warps_per_block = 4;
+  constexpr int atoms_per_warp = 32 / lanes_per_atom;
+  constexpr int atoms_per_block = warps_per_block * atoms_per_warp;
+  const int warp = threadIdx.x >> 5;
+  const int lane = threadIdx.x & 31;
+  const int atom_lane = lane / lanes_per_atom;
+  const int work_lane = lane - atom_lane * lanes_per_atom;
+  const int atom_local = warp * atoms_per_warp + atom_lane;
+  const int atom = blockIdx.x * atoms_per_block + atom_local;
+  const unsigned int atom_mask =
+    ((1u << lanes_per_atom) - 1u) << (atom_lane * lanes_per_atom);
+
+  extern __shared__ float state[];
+  float* q = state + static_cast<std::size_t>(atom_local) * descriptor_dim;
+  float* hidden_delta =
+    state + static_cast<std::size_t>(atoms_per_block) * descriptor_dim +
+    static_cast<std::size_t>(atom_local) * hidden_neurons;
+
+  if (atom < N) {
+    for (int d = work_lane; d < descriptor_dim; d += lanes_per_atom) {
+      q[d] = descriptor[static_cast<std::size_t>(N) * d + atom] * q_scaler[d];
+    }
+  }
+  __syncwarp(atom_mask);
+  if (atom >= N) {
+    return;
+  }
+
+  const int atom_type = type[atom];
+  const std::size_t type_block =
+    static_cast<std::size_t>(hidden_neurons) * (descriptor_dim + 2);
+  const float* w0 = parameters + static_cast<std::size_t>(atom_type) * type_block;
+  const float* b0 = w0 + static_cast<std::size_t>(hidden_neurons) * descriptor_dim;
+  const float* w1 = b0 + hidden_neurons;
+  const float* b1 = parameters + static_cast<std::size_t>(num_types) * type_block;
+
+  float energy = 0.0f;
+  for (int neuron = work_lane; neuron < hidden_neurons; neuron += lanes_per_atom) {
+    float projection = 0.0f;
+    for (int d = 0; d < descriptor_dim; ++d) {
+      projection += w0[neuron * descriptor_dim + d] * q[d];
+    }
+    const float activation = tanhf(projection - b0[neuron]);
+    const float delta = w1[neuron] * (1.0f - activation * activation);
+    hidden_delta[neuron] = delta;
+    energy += w1[neuron] * activation;
+  }
+  for (int offset = lanes_per_atom / 2; offset > 0; offset >>= 1) {
+    energy += __shfl_down_sync(atom_mask, energy, offset, lanes_per_atom);
+  }
+  __syncwarp(atom_mask);
+
+  if (work_lane == 0) {
+    energy -= b1[0];
+    potential[atom] += static_cast<double>(energy + spin_baseline[atom_type]);
+  }
+  for (int d = work_lane; d < descriptor_dim; d += lanes_per_atom) {
+    float fp = 0.0f;
+    for (int neuron = 0; neuron < hidden_neurons; ++neuron) {
+      fp += hidden_delta[neuron] * w0[neuron * descriptor_dim + d];
+    }
+    Fp[static_cast<std::size_t>(N) * d + atom] = fp * q_scaler[d];
+  }
+}
+
+template <int atoms_per_warp, int edge_lanes, bool l4_q222_only>
+__global__ void find_force_angular_warp(
+  const NEP::ParaMB paramb,
+  const NEP::ANN ann,
+  const int N,
+  const Box box,
+  const int* NN_angular,
+  const int* NL_angular,
+  const int* __restrict__ type,
+  const double* __restrict__ x,
+  const double* __restrict__ y,
+  const double* __restrict__ z,
+  const float* __restrict__ Fp,
+  const float* __restrict__ sum_fxyz,
+  double* force,
+  double* virial)
+{
+  static_assert(atoms_per_warp * edge_lanes == 32, "one tile must fill one warp");
+  constexpr int warps_per_block = 4;
+  constexpr int centers_per_block = warps_per_block * atoms_per_warp;
+  const int warp = threadIdx.x >> 5;
+  const int lane = threadIdx.x & 31;
+  const int atom_lane = lane / edge_lanes;
+  const int edge_lane = lane - atom_lane * edge_lanes;
+  unsigned int center_mask;
+  if constexpr (edge_lanes == 32) {
+    center_mask = 0xffffffffu;
+  } else {
+    center_mask =
+      ((1u << edge_lanes) - 1u) << (atom_lane * edge_lanes);
+  }
+  const int center_local = warp * atoms_per_warp + atom_lane;
+  const int n1 = blockIdx.x * centers_per_block + center_local;
+
+  const int abc_count = (paramb.L_max + 1) * (paramb.L_max + 1) - 1;
+  const int sum_count = (paramb.n_max_angular + 1) * NUM_OF_ABC;
+  const int state_size = paramb.dim_angular + sum_count;
+  extern __shared__ float center_state[];
+  float* center_Fp = center_state + center_local * state_size;
+  float* center_sum_fxyz = center_Fp + paramb.dim_angular;
+
+  if (n1 < N) {
+    for (int d = edge_lane; d < paramb.dim_angular; d += edge_lanes) {
+      center_Fp[d] = Fp[static_cast<size_t>(N) * (paramb.n_max_radial + 1 + d) + n1];
+    }
+    const int compact_sum_count = (paramb.n_max_angular + 1) * abc_count;
+    for (int d = edge_lane; d < compact_sum_count; d += edge_lanes) {
+      const int n = d / abc_count;
+      const int abc = d - n * abc_count;
+      center_sum_fxyz[n * NUM_OF_ABC + abc] =
+        sum_fxyz[static_cast<size_t>(N) * d + n1];
+    }
+  }
+  __syncwarp();
+
+  if (n1 >= N) {
+    return;
+  }
+  const int t1 = type[n1];
+  const double x1 = x[n1];
+  const double y1 = y[n1];
+  const double z1 = z[n1];
+  float center_force[3] = {};
+  for (int i1 = edge_lane; i1 < NN_angular[n1]; i1 += edge_lanes) {
+    const int index = i1 * N + n1;
+    const int n2 = NL_angular[index];
+    float x12 = x[n2] - x1;
+    float y12 = y[n2] - y1;
+    float z12 = z[n2] - z1;
+    apply_mic(box, x12, y12, z12);
+    float r12[3] = {x12, y12, z12};
+    const float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
+    float f12[3] = {0.0f};
+    float fc12;
+    float fcp12;
+    const int t2 = type[n2];
+    const float rc = (paramb.rc_angular[t1] + paramb.rc_angular[t2]) * 0.5f;
+    const float rcinv = 1.0f / rc;
+    find_fc_and_fcp(rc, rcinv, d12, fc12, fcp12);
+
+    float fn12[MAX_NUM_N];
+    float fnp12[MAX_NUM_N];
+    find_fn_and_fnp(
+      paramb.basis_size_angular, rcinv, d12, fc12, fcp12, fn12, fnp12);
+    for (int n = 0; n <= paramb.n_max_angular; ++n) {
+      float gn12 = 0.0f;
+      float gnp12 = 0.0f;
+      for (int k = 0; k <= paramb.basis_size_angular; ++k) {
+        int c_index = paramb.num_c_radial;
+        c_index += (t1 * paramb.num_types + t2) *
+                   ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
+        c_index += n * (paramb.basis_size_angular + 1) + k;
+        gn12 += fn12[k] * ann.c_type_pair[c_index];
+        gnp12 += fnp12[k] * ann.c_type_pair[c_index];
+      }
+      if (l4_q222_only) {
+        accumulate_f12(
+          4,
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          5,
+          n,
+          paramb.n_max_angular + 1,
+          d12,
+          r12,
+          gn12,
+          gnp12,
+          center_Fp,
+          center_sum_fxyz,
+          f12);
+      } else {
+        accumulate_f12(
+          paramb.L_max,
+          paramb.has_q_222,
+          paramb.has_q_1111,
+          paramb.has_q_112,
+          paramb.has_q_123,
+          paramb.has_q_233,
+          paramb.has_q_134,
+          paramb.num_L,
+          n,
+          paramb.n_max_angular + 1,
+          d12,
+          r12,
+          gn12,
+          gnp12,
+          center_Fp,
+          center_sum_fxyz,
+          f12);
+      }
+    }
+    // One directed response contributes +f12 to its center and -f12 to its
+    // neighbor. The neighbor-owned virial is (-r12) tensor f12.
+    for (int d = 0; d < 3; ++d) {
+      center_force[d] += f12[d];
+      atomicAdd(force + d * N + n2, -static_cast<double>(f12[d]));
+    }
+    for (int a = 0; a < 3; ++a) {
+      for (int b = 0; b < 3; ++b) {
+        const int component = virial_internal_component(3 * a + b);
+        atomicAdd(
+          virial + component * N + n2,
+          -static_cast<double>(r12[a] * f12[b]));
+      }
+    }
+  }
+  for (int offset = edge_lanes / 2; offset > 0; offset >>= 1) {
+    for (int d = 0; d < 3; ++d) {
+      center_force[d] +=
+        __shfl_down_sync(center_mask, center_force[d], offset, edge_lanes);
+    }
+  }
+  if (edge_lane == 0) {
+    for (int d = 0; d < 3; ++d) {
+      atomicAdd(force + d * N + n1, static_cast<double>(center_force[d]));
+    }
+  }
+}
+
+template <int atoms_per_warp, int edge_lanes, bool l4_q222_only>
+void launch_force_angular_warp(
+  const NEP::ParaMB& paramb,
+  const NEP::ANN& ann,
+  const Box& box,
+  const GPU_Vector<int>& type,
+  const GPU_Vector<double>& position,
+  const NEP_Spin_Data& data,
+  GPU_Vector<double>& force,
+  GPU_Vector<double>& virial,
+  const int grid_size,
+  const int block_size,
+  const std::size_t shared_size)
+{
+  const int N = type.size();
+  find_force_angular_warp<atoms_per_warp, edge_lanes, l4_q222_only>
+    <<<grid_size, block_size, shared_size>>>(
+    paramb,
+    ann,
+    N,
+    box,
+    data.NN_angular.data(),
+    data.NL_angular.data(),
+    type.data(),
+    position.data(),
+    position.data() + N,
+    position.data() + 2 * N,
+    data.Fp.data(),
+    data.sum_fxyz.data(),
+    force.data(),
+    virial.data());
+}
 
 std::vector<std::string> split(const std::string& line)
 {
@@ -1215,12 +1472,14 @@ void launch_spin2_descriptors_typed(
   const GPU_Vector<double>& spin,
   NEP_Spin_Data& data,
   const double* slot_r12 = nullptr,
-  int r12_plane_size = 0)
+  int r12_plane_size = 0,
+  gpuStream_t stream = nullptr)
 {
   constexpr int block_size = 128;
   const int N = type.size();
   const int density_work = C * N;
-  build_spin2_oc_density_bank<C><<<(density_work + block_size - 1) / block_size, block_size>>>(
+  build_spin2_oc_density_bank<C><<<
+    (density_work + block_size - 1) / block_size, block_size, 0, stream>>>(
     model.spin_polynomial_layout,
     N,
     N,
@@ -1242,7 +1501,8 @@ void launch_spin2_descriptors_typed(
     data.descriptor_parameters_type_pair.data(),
     data.descriptor.data(),
     data.spin2_moments.data());
-  contract_spin2_oc_descriptors<C><<<(N + block_size - 1) / block_size, block_size>>>(
+  contract_spin2_oc_descriptors<C><<<
+    (N + block_size - 1) / block_size, block_size, 0, stream>>>(
     model.spin_polynomial_layout,
     N,
     N,
@@ -1264,18 +1524,19 @@ void launch_spin2_descriptors(
   const GPU_Vector<double>& spin,
   NEP_Spin_Data& data,
   const double* slot_r12 = nullptr,
-  int r12_plane_size = 0)
+  int r12_plane_size = 0,
+  gpuStream_t stream = nullptr)
 {
   switch (model.spin_compress) {
-    case 1: launch_spin2_descriptors_typed<1>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 2: launch_spin2_descriptors_typed<2>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 3: launch_spin2_descriptors_typed<3>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 4: launch_spin2_descriptors_typed<4>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 5: launch_spin2_descriptors_typed<5>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 6: launch_spin2_descriptors_typed<6>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 7: launch_spin2_descriptors_typed<7>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 8: launch_spin2_descriptors_typed<8>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
-    case 9: launch_spin2_descriptors_typed<9>(model, box, type, position, spin, data, slot_r12, r12_plane_size); break;
+    case 1: launch_spin2_descriptors_typed<1>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 2: launch_spin2_descriptors_typed<2>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 3: launch_spin2_descriptors_typed<3>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 4: launch_spin2_descriptors_typed<4>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 5: launch_spin2_descriptors_typed<5>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 6: launch_spin2_descriptors_typed<6>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 7: launch_spin2_descriptors_typed<7>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 8: launch_spin2_descriptors_typed<8>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
+    case 9: launch_spin2_descriptors_typed<9>(model, box, type, position, spin, data, slot_r12, r12_plane_size, stream); break;
   }
 }
 
@@ -1295,35 +1556,16 @@ void launch_spin2_forces_typed(
 {
   constexpr int block_size = 128;
   const int N = type.size();
-  const int pull_values = N * model.spin_polynomial_layout.moment_count;
-  clear_spin2_oc_pulls<<<(pull_values + block_size - 1) / block_size, block_size>>>(
-    pull_values, data.spin2_pulls.data());
-  accumulate_spin2_oc_onsite_mforces<<<(N + block_size - 1) / block_size, block_size>>>(
-    model.spin_polynomial_layout,
-    N,
-    N,
-    model.struct_descriptor_dim,
-    type.data(),
-    data.spin_dof_type_active.data(),
-    spin.data(),
-    data.Fp.data(),
-    mforce.data());
-  const int pull_work = C * N;
-  build_spin2_oc_center_pulls<C><<<(pull_work + block_size - 1) / block_size, block_size>>>(
-    model.spin_polynomial_layout,
-    N,
-    N,
-    model.struct_descriptor_dim,
-    type.data(),
-    data.spin_dof_type_active.data(),
-    spin.data(),
-    data.Fp.data(),
-    data.spin_projection_parameters.data(),
-    data.spin2_moments.data(),
-    data.spin2_pulls.data(),
-    mforce.data());
-  accumulate_spin2_oc_native_forces<C, SpinVirialMode::center_owned, false>
-    <<<(N + block_size - 1) / block_size, block_size>>>(
+  constexpr int edge_lanes = C <= 4 ? 8 : (C <= 8 ? 16 : 32);
+  constexpr int atoms_per_warp = 32 / edge_lanes;
+  constexpr int centers_per_block = block_size / 32 * atoms_per_warp;
+  const int grid_size = (N - 1) / centers_per_block + 1;
+  const std::size_t shared_size =
+    static_cast<std::size_t>(centers_per_block) *
+    model.spin_polynomial_layout.moment_count * sizeof(float);
+  accumulate_spin2_oc_native_forces<
+    C, SpinVirialMode::center_owned, false, atoms_per_warp, true>
+    <<<grid_size, block_size, shared_size>>>(
       model.spin_polynomial_layout,
       N,
       N,
@@ -1343,6 +1585,8 @@ void launch_spin2_forces_typed(
       data.NL_spin.data(),
       data.Fp.data(),
       data.descriptor_parameters_type_pair.data(),
+      data.spin_projection_parameters.data(),
+      data.spin2_moments.data(),
       data.spin2_pulls.data(),
       static_cast<int>(model.radial_parameter_count + model.angular_parameter_count),
       force.data(),
@@ -1552,6 +1796,10 @@ NEP_Spin::NEP_Spin(const char* file_potential, const int num_atoms) : num_atoms_
   } catch (const std::exception& error) {
     PRINT_INPUT_ERROR(error.what());
   }
+  if (model_.spin_mode == 2) {
+    CHECK(gpuStreamCreate(&structural_descriptor_stream_));
+    CHECK(gpuStreamCreate(&spin_descriptor_stream_));
+  }
 
   rc = std::max({model_.cutoff_radial, model_.cutoff_angular, model_.spin_cutoff[0]});
   neighbor_.initialize(rc, num_atoms_, model_.neighbor_capacity);
@@ -1610,6 +1858,16 @@ NEP_Spin::NEP_Spin(const char* file_potential, const int num_atoms) : num_atoms_
     model_.cutoff_radial,
     model_.cutoff_angular,
     model_.spin_cutoff[0]);
+}
+
+NEP_Spin::~NEP_Spin(void)
+{
+  if (structural_descriptor_stream_ != nullptr) {
+    CHECK(gpuStreamDestroy(structural_descriptor_stream_));
+  }
+  if (spin_descriptor_stream_ != nullptr) {
+    CHECK(gpuStreamDestroy(spin_descriptor_stream_));
+  }
 }
 
 void NEP_Spin::read_model(const char* file_potential)
@@ -2398,7 +2656,9 @@ void NEP_Spin::compute(
     data_.NL_spin.data());
   GPU_CHECK_KERNEL
 
-  find_structural_descriptor<<<grid_size, block_size>>>(
+  const gpuStream_t structural_stream =
+    model_.spin_mode == 2 ? structural_descriptor_stream_ : nullptr;
+  find_structural_descriptor<<<grid_size, block_size, 0, structural_stream>>>(
     paramb_,
     ann_,
     N,
@@ -2419,22 +2679,56 @@ void NEP_Spin::compute(
   GPU_CHECK_KERNEL
 
   if (model_.spin_mode == 2) {
-    launch_spin2_descriptors(model_, box, type, position, spin, data_);
+    launch_spin2_descriptors(
+      model_, box, type, position, spin, data_, nullptr, 0, spin_descriptor_stream_);
+#ifdef USE_HIP
+    CHECK(hipStreamSynchronize(structural_descriptor_stream_));
+    CHECK(hipStreamSynchronize(spin_descriptor_stream_));
+#else
+    CHECK(cudaStreamSynchronize(structural_descriptor_stream_));
+    CHECK(cudaStreamSynchronize(spin_descriptor_stream_));
+#endif
   } else {
     launch_spin_descriptors(model_, box, type, position, spin, data_);
   }
-  find_potential<<<grid_size, block_size>>>(
-    N,
-    model_.descriptor_dim,
-    model_.hidden_neurons,
-    model_.num_types,
-    type.data(),
-    data_.descriptor.data(),
-    data_.parameters.data(),
-    data_.parameters.data() + model_.model_parameter_count,
-    data_.spin_baseline.data(),
-    potential.data(),
-    data_.Fp.data());
+  constexpr int potential_lanes_per_atom = 4;
+  constexpr int potential_block_size = 128;
+  constexpr int potential_atoms_per_block =
+    potential_block_size / potential_lanes_per_atom;
+  const int potential_grid_size =
+    (N - 1) / potential_atoms_per_block + 1;
+  const std::size_t potential_shared_size =
+    static_cast<std::size_t>(potential_atoms_per_block) *
+    (model_.descriptor_dim + model_.hidden_neurons) * sizeof(float);
+  constexpr std::size_t maximum_potential_shared_size = 48 * 1024;
+  if (potential_shared_size <= maximum_potential_shared_size) {
+    find_potential_warp<potential_lanes_per_atom>
+      <<<potential_grid_size, potential_block_size, potential_shared_size>>>(
+      N,
+      model_.descriptor_dim,
+      model_.hidden_neurons,
+      model_.num_types,
+      type.data(),
+      data_.descriptor.data(),
+      data_.parameters.data(),
+      data_.parameters.data() + model_.model_parameter_count,
+      data_.spin_baseline.data(),
+      potential.data(),
+      data_.Fp.data());
+  } else {
+    find_potential<<<grid_size, block_size>>>(
+      N,
+      model_.descriptor_dim,
+      model_.hidden_neurons,
+      model_.num_types,
+      type.data(),
+      data_.descriptor.data(),
+      data_.parameters.data(),
+      data_.parameters.data() + model_.model_parameter_count,
+      data_.spin_baseline.data(),
+      potential.data(),
+      data_.Fp.data());
+  }
   GPU_CHECK_KERNEL
 
   find_force_radial<<<grid_size, block_size>>>(
@@ -2458,36 +2752,88 @@ void NEP_Spin::compute(
     virial.data());
   GPU_CHECK_KERNEL
 
-  find_partial_force_angular<<<grid_size, block_size>>>(
-    paramb_,
-    ann_,
-    N,
-    0,
-    N,
-    box,
-    data_.NN_angular.data(),
-    data_.NL_angular.data(),
-    type.data(),
-    position.data(),
-    position.data() + N,
-    position.data() + 2 * N,
-    data_.Fp.data(),
-    data_.sum_fxyz.data(),
-    data_.f12x.data(),
-    data_.f12y.data(),
-    data_.f12z.data());
+  constexpr int angular_atoms_per_warp = 4;
+  constexpr int angular_edge_lanes = 8;
+  constexpr int angular_block_size = 128;
+  constexpr int angular_centers_per_block =
+    angular_block_size / 32 * angular_atoms_per_warp;
+  const int angular_grid_size =
+    (N - 1) / angular_centers_per_block + 1;
+  const int angular_state_size =
+    paramb_.dim_angular + (paramb_.n_max_angular + 1) * NUM_OF_ABC;
+  const std::size_t angular_shared_size =
+    static_cast<std::size_t>(angular_centers_per_block) * angular_state_size * sizeof(float);
+  constexpr std::size_t maximum_angular_shared_size = 48 * 1024;
+  const bool use_direct_angular_force =
+    angular_shared_size <= maximum_angular_shared_size;
+  if (use_direct_angular_force) {
+    // The body-channel signature comes from l_max in the model input. Keep a
+    // generic instance for every signature other than the common L4+q222 case.
+    const bool l4_q222_only =
+      paramb_.L_max == 4 && paramb_.has_q_222 && !paramb_.has_q_1111 &&
+      !paramb_.has_q_112 && !paramb_.has_q_123 && !paramb_.has_q_233 &&
+      !paramb_.has_q_134 && paramb_.num_L == 5;
+    if (l4_q222_only) {
+      launch_force_angular_warp<angular_atoms_per_warp, angular_edge_lanes, true>(
+        paramb_,
+        ann_,
+        box,
+        type,
+        position,
+        data_,
+        force,
+        virial,
+        angular_grid_size,
+        angular_block_size,
+        angular_shared_size);
+    } else {
+      launch_force_angular_warp<angular_atoms_per_warp, angular_edge_lanes, false>(
+        paramb_,
+        ann_,
+        box,
+        type,
+        position,
+        data_,
+        force,
+        virial,
+        angular_grid_size,
+        angular_block_size,
+        angular_shared_size);
+    }
+  } else {
+    find_partial_force_angular<<<grid_size, block_size>>>(
+      paramb_,
+      ann_,
+      N,
+      0,
+      N,
+      box,
+      data_.NN_angular.data(),
+      data_.NL_angular.data(),
+      type.data(),
+      position.data(),
+      position.data() + N,
+      position.data() + 2 * N,
+      data_.Fp.data(),
+      data_.sum_fxyz.data(),
+      data_.f12x.data(),
+      data_.f12y.data(),
+      data_.f12z.data());
+  }
   GPU_CHECK_KERNEL
-  find_properties_many_body(
-    box,
-    data_.NN_angular.data(),
-    data_.NL_angular.data(),
-    data_.f12x.data(),
-    data_.f12y.data(),
-    data_.f12z.data(),
-    false,
-    position,
-    force,
-    virial);
+  if (!use_direct_angular_force) {
+    find_properties_many_body(
+      box,
+      data_.NN_angular.data(),
+      data_.NL_angular.data(),
+      data_.f12x.data(),
+      data_.f12y.data(),
+      data_.f12z.data(),
+      false,
+      position,
+      force,
+      virial);
+  }
 
   if (model_.spin_mode == 2) {
     launch_spin2_forces(model_, box, type, position, spin, data_, force, mforce, virial);

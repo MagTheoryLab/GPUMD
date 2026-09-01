@@ -575,7 +575,12 @@ __global__ void build_spin2_oc_center_pulls(
 }
 
 
-template <int C, SpinVirialMode VirialMode, bool AccumulateSpinTransfer>
+template <
+    int C,
+    SpinVirialMode VirialMode,
+    bool AccumulateSpinTransfer,
+    int AtomsPerWarp = 32,
+    bool BuildPullsInline = false>
 __global__ void accumulate_spin2_oc_native_forces(
     SpinPolynomialLayout layout,
     int atom_count,
@@ -596,6 +601,8 @@ __global__ void accumulate_spin2_oc_native_forces(
     const int* __restrict__ nl_radial,
     const float* __restrict__ fp,
     const float* __restrict__ descriptor_coefficients,
+    const float* __restrict__ projection,
+    const float* __restrict__ moments,
     const float* __restrict__ pulls,
     int spin_coefficient_offset,
     double* __restrict__ force_soa3,
@@ -606,16 +613,76 @@ __global__ void accumulate_spin2_oc_native_forces(
   constexpr bool AccumulateCenterVirial =
       VirialMode == SpinVirialMode::center_owned ||
       VirialMode == SpinVirialMode::center_and_neighbor_float_sink;
-  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
-  if (atom >= atom_count || spin_dof_type_active[types[atom]] == 0) return;
+  static_assert(32 % AtomsPerWarp == 0, "one warp must contain complete center tiles");
+  constexpr int EdgeLanes = 32 / AtomsPerWarp;
+  static_assert(!BuildPullsInline || EdgeLanes >= C,
+      "inline pull construction requires at least one lane per compression row");
+  constexpr int WarpsPerBlock = 4;
+  constexpr int CentersPerBlock = WarpsPerBlock * AtomsPerWarp;
+  const int warp = threadIdx.x >> 5;
+  const int lane = threadIdx.x & 31;
+  const int atom_lane = lane / EdgeLanes;
+  const int edge_lane = lane - atom_lane * EdgeLanes;
+  const int center_local = warp * AtomsPerWarp + atom_lane;
+  const int atom = blockIdx.x * CentersPerBlock + center_local;
+  unsigned int center_mask;
+  if constexpr (EdgeLanes == 32) {
+    center_mask = 0xffffffffu;
+  } else {
+    center_mask = ((1u << EdgeLanes) - 1u) << (atom_lane * EdgeLanes);
+  }
+  const bool active =
+      atom < atom_count && spin_dof_type_active[types[atom]] != 0;
+  if (!active) return;
+
+  extern __shared__ float inline_pull_state[];
+  float* inline_pull =
+      inline_pull_state + static_cast<std::size_t>(center_local) * layout.moment_count;
   const float* pull = pulls + atom * layout.moment_count;
+  if constexpr (BuildPullsInline) {
+    for (int k = edge_lane; k < layout.moment_count; k += EdgeLanes) {
+      inline_pull[k] = 0.0f;
+    }
+    __syncwarp(center_mask);
+    if (edge_lane < C) {
+      unsigned int row_mask;
+      if constexpr (C == 32) {
+        row_mask = 0xffffffffu;
+      } else {
+        row_mask = ((1u << C) - 1u) << (atom_lane * EdgeLanes);
+      }
+      build_spin2_oc_center_pull_row<C, true>(
+          layout,
+          atom,
+          edge_lane,
+          row_mask,
+          atom_stride,
+          struct_dim,
+          spins_soa3,
+          fp,
+          projection,
+          moments,
+          inline_pull,
+          mforce_soa3);
+    }
+    __syncwarp(center_mask);
+    pull = inline_pull;
+    if (edge_lane == 0) {
+      const double scale = 2.0 * static_cast<double>(
+          fp[atom + atom_stride * (struct_dim + layout.local_s2)]);
+      for (int d = 0; d < 3; ++d) {
+        mforce_soa3[d * atom_stride + atom] -=
+            scale * spins_soa3[d * atom_stride + atom];
+      }
+    }
+  }
   float center_force[3] = {};
   float center_mforce[3] = {};
   float center_virial[AccumulateCenterVirial ? 9 : 1] = {};
 #define NEP_SPIN2_OC_FP_EDGE(index)                                     \
   fp[atom + atom_stride * (struct_dim + (index))]
   const int neighbor_count = nn_radial[atom];
-  for (int slot = 0; slot < neighbor_count; ++slot) {
+  for (int slot = edge_lane; slot < neighbor_count; slot += EdgeLanes) {
     const int neighbor = nl_radial[slot * atom_stride + atom];
     if (neighbor < 0 || spin_env_type_active[types[neighbor]] == 0) continue;
     float r[3], dist, si[3], sj[3], weights[C], derivatives[C];
@@ -767,16 +834,32 @@ __global__ void accumulate_spin2_oc_native_forces(
       }
     }
   }
-  for (int d = 0; d < 3; ++d) {
-    atomicAdd(force_soa3 + d * atom_stride + atom,
-        static_cast<double>(center_force[d]));
-    atomicAdd(mforce_soa3 + d * atom_stride + atom,
-        static_cast<double>(center_mforce[d]));
+  for (int offset = EdgeLanes / 2; offset > 0; offset >>= 1) {
+    for (int d = 0; d < 3; ++d) {
+      center_force[d] +=
+          __shfl_down_sync(center_mask, center_force[d], offset, EdgeLanes);
+      center_mforce[d] +=
+          __shfl_down_sync(center_mask, center_mforce[d], offset, EdgeLanes);
+    }
+    if constexpr (AccumulateCenterVirial) {
+      for (int component = 0; component < 9; ++component) {
+        center_virial[component] += __shfl_down_sync(
+            center_mask, center_virial[component], offset, EdgeLanes);
+      }
+    }
   }
-  if constexpr (AccumulateCenterVirial) {
-    for (int component = 0; component < 9; ++component) {
-      atomicAdd(virial_soa9 + component * atom_stride + atom,
-          static_cast<double>(center_virial[component]));
+  if (edge_lane == 0) {
+    for (int d = 0; d < 3; ++d) {
+      atomicAdd(force_soa3 + d * atom_stride + atom,
+          static_cast<double>(center_force[d]));
+      atomicAdd(mforce_soa3 + d * atom_stride + atom,
+          static_cast<double>(center_mforce[d]));
+    }
+    if constexpr (AccumulateCenterVirial) {
+      for (int component = 0; component < 9; ++component) {
+        atomicAdd(virial_soa9 + component * atom_stride + atom,
+            static_cast<double>(center_virial[component]));
+      }
     }
   }
 #undef NEP_SPIN2_OC_FP_EDGE

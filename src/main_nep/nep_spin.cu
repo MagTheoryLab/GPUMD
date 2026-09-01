@@ -816,6 +816,8 @@ void launch_spin2_force(
         NL_spin,
         Fp,
         descriptor_coefficients,
+        projection,
+        moments,
         pulls,
         spin_coefficient_offset,
         force,
