@@ -671,7 +671,8 @@ __global__ void find_potential(
     }
   }
   energy -= b1[0];
-  potential[atom] += static_cast<double>(energy + spin_baseline[atom_type]);
+  potential[atom] +=
+    static_cast<double>(energy) + static_cast<double>(spin_baseline[atom_type]);
   for (int d = 0; d < descriptor_dim; ++d) {
     Fp[static_cast<std::size_t>(N) * d + atom] = fp[d] * q_scaler[d];
   }
@@ -746,7 +747,8 @@ __global__ void find_potential_warp(
 
   if (work_lane == 0) {
     energy -= b1[0];
-    potential[atom] += static_cast<double>(energy + spin_baseline[atom_type]);
+    potential[atom] +=
+      static_cast<double>(energy) + static_cast<double>(spin_baseline[atom_type]);
   }
   for (int d = work_lane; d < descriptor_dim; d += lanes_per_atom) {
     float fp = 0.0f;
