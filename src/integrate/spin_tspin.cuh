@@ -28,9 +28,8 @@ public:
     double initial_temperature,
     double temperature_coupling,
     double time_step,
-    double mass_factor,
+    const std::vector<double>& mass_factor_by_type,
     int seed,
-    const std::vector<int>& spin_dof_type_active,
     Atom& atom);
 
   void compute1(const double time_step, Atom& atom) override;
@@ -44,12 +43,11 @@ private:
     int seed,
     Atom& atom);
 
-  double mass_factor_;
   double pos_nhc_[4];
   double vel_nhc_[4];
   double mas_nhc_[4];
   int number_of_active_atoms_ = 0;
-  std::vector<int> cpu_active_per_atom_;
-  GPU_Vector<int> active_per_atom_;
+  std::vector<double> cpu_mass_factor_per_atom_;
+  GPU_Vector<double> mass_factor_per_atom_;
   GPU_Vector<double> twice_kinetic_energy_;
 };

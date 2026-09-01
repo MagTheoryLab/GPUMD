@@ -37,8 +37,7 @@ public:
     Box& box,
     std::vector<Group>& group,
     GPU_Vector<double>& thermo,
-    int& total_steps,
-    const std::vector<int>& spin_dof_type_active);
+    int& total_steps);
 
   void finalize();
 
@@ -90,7 +89,8 @@ public:
   int num_target_pressure_components;
   double temperature_coupling;
   bool use_spin_tspin = false;
-  double spin_mass_factor = 1.0;
+  bool spin_lattice_enabled = true;
+  std::vector<double> spin_mass_factor_by_type;
   int spin_seed = 12345;
   double qtb_f_max = 200.0; // in ps^-1
   int qtb_n_f = 100;

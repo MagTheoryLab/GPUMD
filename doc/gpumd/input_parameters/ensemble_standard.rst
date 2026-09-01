@@ -32,25 +32,6 @@ The choice of :attr:`<T_coup>` is discussed :ref:`below <choice_of_parameters>`.
 ^^^^^^^^^^^^^^^
 If the first parameter is :attr:`nvt_nhc`, it is similar to the case of :attr:`nvt_ber`, but using the :ref:`Nose-Hoover chain method <nose_hoover_chain_thermostat>`.
 
-:attr:`nvt_tspin`
-^^^^^^^^^^^^^^^^^
-If the first parameter is :attr:`nvt_tspin`, GPUMD uses separate Nose-Hoover
-chains to integrate the lattice and the Cartesian spin coordinates of a
-``NEP_Spin`` model. The syntax is::
-
-    ensemble nvt_tspin <T_1> <T_2> <T_coup> [mass_factor <value>] [seed <value>]
-
-The spin and lattice thermostats share the same target-temperature ramp and
-coupling time. ``mass_factor`` is a positive scalar multiplying the atomic
-mass in the TSPIN equations and defaults to ``1.0``. ``seed`` is a positive
-integer and defaults to ``12345``. It is used only when ``spin_vel:R:3`` is
-absent from ``model.xyz``; initialized spin velocities are preserved across
-subsequent ``run`` commands.
-
-This ensemble requires exactly one ``NEP_Spin`` potential and explicit
-``spin:R:3`` values for every atom. It advances the full Cartesian spin
-vectors without normalizing them.
-
 :attr:`nvt_bdp`
 ^^^^^^^^^^^^^^^
 If the first parameter is :attr:`nvt_bdp`, it is similar to the case of :attr:`nvt_ber`, but using the :ref:`Bussi-Donadio-Parrinello method <bdp_thermostat>`.

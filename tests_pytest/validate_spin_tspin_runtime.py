@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Standalone TSPIN validation for minimal CUDA hosts without pytest/numpy."""
 
+import json
 import math
 import os
 import shutil
@@ -203,7 +204,8 @@ def max_error(candidate, expected):
     )
 
 
-def validate_one_step(root):
+def validate_one_step(root, pressure_control=False):
+    prefix = "npt_" if pressure_control else "nvt_"
     static_model = model_with_zero_lattice_velocity()
     lines = static_model.splitlines()
     lines[1] = lines[1].replace(":spin:R:3", ":spin:R:3:spin_vel:R:3")
@@ -211,7 +213,7 @@ def validate_one_step(root):
         lines[index] += " 0 0 0"
     static_case, static_result = run_case(
         root,
-        "static",
+        prefix + "static",
         "potential nep.txt\n"
         "ensemble nve\n"
         "time_step 0\n"
@@ -227,13 +229,19 @@ def validate_one_step(root):
     mass_factor = 1.5
     seed = 24681357
     time_step_fs = 0.1
-    tspin_case, result = run_case(
-        root,
-        "tspin",
-        "potential nep.txt\n"
+    ensemble = (
+        f"ensemble npt_tspin temp {temperature} {temperature} iso 0 0 "
+        f"tperiod {coupling} pperiod 1000 mass_factor {mass_factor} seed {seed}\n"
+        if pressure_control else
         f"ensemble nvt_tspin {temperature} {temperature} {coupling} "
         f"mass_factor {mass_factor} seed {seed}\n"
-        f"time_step {time_step_fs}\n"
+    )
+    tspin_case, result = run_case(
+        root,
+        prefix + "tspin",
+        "potential nep.txt\n"
+        + ensemble
+        + f"time_step {time_step_fs}\n"
         "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     if result.returncode != 0:
@@ -299,7 +307,15 @@ def validate_fail_closed(root):
         "nvt_tspin 300 300 100 seed nope",
         "nvt_tspin 300 300 100 seed 1 seed 2",
         "nvt_tspin 300 300 100 mass_factor 1 mass_factor 2",
+        "nvt_tspin 300 300 100 mass_factor X 0.001 Fe 0",
+        "nvt_tspin 300 300 100 mass_factor Fe -1 O 0.001",
+        "nvt_tspin 300 300 100 mass_factor Fe 0 O 0",
+        "nvt_tspin 300 300 100 lattice maybe",
+        "nvt_tspin 300 300 100 lattice off lattice on",
         "nvt_tspin 300 300 100 future 1",
+        "npt_tspin temp 300 300 iso 0 0 mass_factor",
+        "npt_tspin temp 300 300 iso 0 0 seed 1 seed 2",
+        "npt_tspin temp 300 300 iso 0 0 future 1",
     )
     for index, ensemble in enumerate(bad_ensembles):
         _, result = run_case(
@@ -311,6 +327,22 @@ def validate_fail_closed(root):
         if result.returncode == 0:
             raise AssertionError(f"bad parser case was accepted: {ensemble}")
 
+    two_element_model = (
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
+        'O 3 0 0 0 0 0 0.4 -0.3 0.7\n')
+    _, missing_element = run_case(
+        root,
+        "bad_missing_element_factor",
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0.001\n"
+        "run 1\n",
+        model_text=two_element_model,
+        potential_text=selective_type_model())
+    if missing_element.returncode == 0:
+        raise AssertionError("element-wise mass_factor accepted a missing element")
+
     _, ordinary = run_case(
         root,
         "ordinary",
@@ -320,7 +352,7 @@ def validate_fail_closed(root):
         ordinary=True)
     if ordinary.returncode == 0:
         raise AssertionError("nvt_tspin accepted a non-spin potential")
-    return len(bad_ensembles) + 1
+    return len(bad_ensembles) + 2
 
 
 def validate_lifecycle(root):
@@ -338,7 +370,7 @@ def validate_lifecycle(root):
         raise RuntimeError(first.stdout + first.stderr)
     if first.stdout.count("Initialized TSPIN velocities with seed") != 1:
         raise AssertionError("spin velocity was initialized more than once")
-    reuse_message = "Reuse initialized spin velocities; nvt_tspin seed is not used."
+    reuse_message = "Reuse initialized spin velocities; TSPIN seed is not used."
     if reuse_message not in first.stdout:
         raise AssertionError("second run did not reuse spin velocity")
 
@@ -409,12 +441,13 @@ def validate_fixed_spin_nhc(root):
     return error
 
 
-def validate_selective_types(root):
+def validate_integrator_ignores_potential_mask(root):
     model_text = (
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
-        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
-        'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
-        'O 3 0 0 0 0 0 0.4 -0.3 0.7\n')
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
+        'pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
+        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
     initial_inactive_spin = [0.4, -0.3, 0.7]
     case, result = run_case(
         root,
@@ -422,7 +455,7 @@ def validate_selective_types(root):
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 1 state.xyz spin spin_velocity\n"
+        "dump_xyz -1 0 1 state.xyz spin mforce spin_velocity\n"
         "run 1\n",
         model_text,
         potential_text=selective_type_model())
@@ -435,21 +468,148 @@ def validate_selective_types(root):
     ]
     active_spin = rows[0][3:6]
     inactive_spin = rows[1][3:6]
-    inactive_velocity = rows[1][6:9]
-    inactive_spin_error = max(
+    inactive_mforce = rows[1][6:9]
+    inactive_velocity = rows[1][9:12]
+    inactive_spin_change = max(
         abs(actual - expected)
         for actual, expected in zip(inactive_spin, initial_inactive_spin))
     inactive_velocity_max = max(abs(value) for value in inactive_velocity)
+    inactive_mforce_max = max(abs(value) for value in inactive_mforce)
     active_spin_change = max(
         abs(actual - expected)
         for actual, expected in zip(active_spin, [1.0, 0.2, -0.1]))
-    if inactive_spin_error != 0.0 or inactive_velocity_max != 0.0:
+    if inactive_mforce_max != 0.0:
         raise AssertionError(
-            "nvt_tspin advanced an inactive spin DOF: "
-            f"spin={inactive_spin_error:.3e}, velocity={inactive_velocity_max:.3e}")
+            "spin_dof_type did not mask the public magnetic force: "
+            f"mforce={inactive_mforce_max:.3e}")
+    if inactive_spin_change <= 1.0e-12 or inactive_velocity_max <= 1.0e-12:
+        raise AssertionError(
+            "nvt_tspin incorrectly treated spin_dof_type as an integration mask: "
+            f"spin change={inactive_spin_change:.3e}, "
+            f"velocity={inactive_velocity_max:.3e}")
     if active_spin_change <= 1.0e-12:
         raise AssertionError("nvt_tspin did not advance the active spin DOF")
-    return inactive_spin_error, inactive_velocity_max
+    return inactive_spin_change, inactive_mforce_max
+
+
+def validate_lattice_switch(root):
+    source_lines = (FIXTURE / "model_large_box.xyz").read_text().splitlines()
+    source_lines[1] = source_lines[1].replace(
+        "Properties=species:S:1:pos:R:3:spin:R:3",
+        "Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3")
+    initial_position = []
+    initial_velocity = []
+    initial_spin = []
+    for index in range(2, len(source_lines)):
+        fields = source_lines[index].split()
+        velocity = [0.01 * index, -0.02 * index, 0.03 * index]
+        initial_position.append([float(value) for value in fields[1:4]])
+        initial_velocity.append(velocity)
+        initial_spin.append([float(value) for value in fields[4:7]])
+        source_lines[index] = " ".join(
+            fields[:4] + [str(value) for value in velocity] + fields[4:])
+
+    case, result = run_case(
+        root,
+        "lattice_off",
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 lattice off "
+        "mass_factor 0.001 seed 2468\n"
+        "time_step 0.01\n"
+        "dump_xyz -1 0 5 state.xyz velocity spin spin_velocity\n"
+        "run 5\n",
+        "\n".join(source_lines) + "\n")
+    if result.returncode != 0:
+        raise RuntimeError(result.stdout + result.stderr)
+    rows = [
+        [float(value) for value in line.split()[1:]]
+        for line in (case / "state.xyz").read_text().splitlines()
+        [-len(initial_position):]
+    ]
+    position_error = max_error([row[0:3] for row in rows], initial_position)
+    velocity_error = max_error([row[3:6] for row in rows], initial_velocity)
+    spin_change = max(
+        abs(row[6 + component] - initial_spin[atom_index][component])
+        for atom_index, row in enumerate(rows)
+        for component in range(3))
+    if position_error != 0.0 or velocity_error != 0.0:
+        raise AssertionError(
+            "lattice off changed lattice state: "
+            f"position={position_error:.3e}, velocity={velocity_error:.3e}")
+    if spin_change <= 1.0e-12:
+        raise AssertionError("lattice off did not integrate spins")
+    return position_error, velocity_error, spin_change
+
+
+def validate_element_mass_factors(root):
+    model_text = (
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
+        'pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
+        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+    case, result = run_case(
+        root,
+        "element_mass_factor",
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 O 1.5 seed 97531\n"
+        "time_step 0.1\n"
+        "dump_xyz -1 0 1 state.xyz spin spin_velocity\n"
+        "run 1\n",
+        model_text,
+        potential_text=selective_type_model())
+    if result.returncode != 0:
+        raise RuntimeError(result.stdout + result.stderr)
+    rows = [
+        [float(value) for value in line.split()[1:]]
+        for line in (case / "state.xyz").read_text().splitlines()[-2:]
+    ]
+    frozen_spin_error = max(
+        abs(actual - expected)
+        for actual, expected in zip(rows[0][3:6], [1.0, 0.2, -0.1]))
+    frozen_velocity_max = max(abs(value) for value in rows[0][6:9])
+    mobile_spin_change = max(
+        abs(actual - expected)
+        for actual, expected in zip(rows[1][3:6], [0.4, -0.3, 0.7]))
+    if frozen_spin_error != 0.0 or frozen_velocity_max != 0.0:
+        raise AssertionError(
+            "zero element mass factor did not freeze spin: "
+            f"spin={frozen_spin_error:.3e}, velocity={frozen_velocity_max:.3e}")
+    if mobile_spin_change <= 1.0e-12:
+        raise AssertionError("positive element mass factor did not integrate spin")
+    return frozen_spin_error, frozen_velocity_max, mobile_spin_change
+
+
+def validate_spin2_npt(root):
+    fixture = Path(__file__).parent / "fixtures" / "nep_spin2"
+    case = json.loads((fixture / "o3c2_oracle.json").read_text())["cases"]["chiral_soc"]
+    lattice = " ".join(str(value) for value in case["cell"])
+    lines = [
+        str(len(case["types"])),
+        f'Lattice="{lattice}" Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 '
+        'pbc="T T T"',
+    ]
+    for symbol, position, spin in zip(
+            case["types"], case["positions"], case["spins"]):
+        values = position + [0.0, 0.0, 0.0] + spin
+        lines.append(symbol + " " + " ".join(str(value) for value in values))
+    directory, result = run_case(
+        root,
+        "spin2_npt",
+        "potential nep.txt\n"
+        "ensemble npt_tspin temp 300 300 iso 0 0 "
+        "tperiod 100 pperiod 1000 seed 13579\n"
+        "time_step 0.01\n"
+        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "run 1\n",
+        "\n".join(lines) + "\n",
+        potential_text=(fixture / "nep4_spin2_o3c2.nep").read_text())
+    if result.returncode != 0:
+        raise RuntimeError(result.stdout + result.stderr)
+    rows = (directory / "state.xyz").read_text().splitlines()[-len(case["types"]):]
+    values = [float(value) for row in rows for value in row.split()[1:]]
+    if not values or not all(math.isfinite(value) for value in values):
+        raise AssertionError("Spin2 NPT produced a non-finite state")
 
 
 def main():
@@ -458,21 +618,34 @@ def main():
     with tempfile.TemporaryDirectory(prefix="gpumd-tspin-validation-") as directory:
         root = Path(directory)
         spin_error, velocity_error = validate_one_step(root)
+        npt_spin_error, npt_velocity_error = validate_one_step(
+            root, pressure_control=True)
         negative_count = validate_fail_closed(root)
         validate_lifecycle(root)
         fixed_spin_error = validate_fixed_spin_nhc(root)
-        inactive_spin_error, inactive_velocity_max = (
-            validate_selective_types(root))
+        masked_spin_change, masked_mforce_max = (
+            validate_integrator_ignores_potential_mask(root))
+        lattice_position_error, lattice_velocity_error, lattice_spin_change = (
+            validate_lattice_switch(root))
+        frozen_spin_error, frozen_velocity_max, mobile_spin_change = (
+            validate_element_mass_factors(root))
+        validate_spin2_npt(root)
         minimum_temperature, maximum_temperature, mean_temperature = (
             validate_short_dynamics(root))
     print(
         "TSPIN validation passed: "
         f"one-step max spin error={spin_error:.3e}, "
         f"max spin_velocity error={velocity_error:.3e}, "
-        f"fail-closed cases={negative_count}, lifecycle/restart=passed, "
+        f"NPT one-step spin/velocity error={npt_spin_error:.3e}/"
+        f"{npt_velocity_error:.3e}, "
+        f"fail-closed cases={negative_count}, lifecycle/restart=passed, Spin2 NPT=passed, "
         f"fixed-spin nvt_nhc error={fixed_spin_error:.1e}, "
-        f"selective inactive spin/velocity={inactive_spin_error:.1e}/"
-        f"{inactive_velocity_max:.1e}, "
+        f"potential-masked spin change/mforce={masked_spin_change:.1e}/"
+        f"{masked_mforce_max:.1e}, "
+        f"lattice-off position/velocity/spin={lattice_position_error:.1e}/"
+        f"{lattice_velocity_error:.1e}/{lattice_spin_change:.1e}, "
+        f"element-freeze spin/velocity/mobile={frozen_spin_error:.1e}/"
+        f"{frozen_velocity_max:.1e}/{mobile_spin_change:.1e}, "
         f"short spin T min/mean/max={minimum_temperature:.3f}/"
         f"{mean_temperature:.3f}/{maximum_temperature:.3f} K")
     return 0

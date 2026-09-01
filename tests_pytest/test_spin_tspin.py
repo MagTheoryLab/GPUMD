@@ -1,13 +1,17 @@
 """TSPIN parser, initialization, splitting, and restart regression tests."""
 
+import json
 import math
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
 import pytest
+
+from validate_nep_spin_runtime import selective_type_model
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin" / "spin_chiral_protocol"
@@ -54,7 +58,7 @@ def _prepare_case(case_dir, run_input, model_text=None):
 
 def _read_spin_frame(path):
     lines = path.read_text().splitlines()
-    number_of_atoms = int(lines[-6])
+    number_of_atoms = int(lines[0])
     values = np.array([
         [float(value) for value in line.split()[1:]]
         for line in lines[-number_of_atoms:]
@@ -65,6 +69,15 @@ def _read_spin_frame(path):
         "mforce": values[:, 7:10],
         "spin_velocity": values[:, 10:13] * TIME_UNIT_CONVERSION,
     }
+
+
+def _read_last_lattice(path):
+    comments = [
+        line for line in path.read_text().splitlines()
+        if line.startswith("Lattice=")
+    ]
+    values = re.search(r'Lattice="([^"]+)"', comments[-1]).group(1)
+    return np.array([float(value) for value in values.split()])
 
 
 def _splitmix64(value):
@@ -155,7 +168,9 @@ def _nhc(position, velocity, mass, twice_kinetic_energy,
     return factor
 
 
-def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(tmp_path):
+@pytest.mark.parametrize("pressure_control", [False, True], ids=["nvt", "npt"])
+def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
+        tmp_path, pressure_control):
     # Obtain the initial magnetic force from a fixed-spin run. This keeps the
     # integrator oracle independent of the NEP_Spin derivative implementation.
     static_model = _model_with_zero_lattice_velocity()
@@ -179,12 +194,18 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(tmp_path):
     mass_factor = 1.5
     seed = 24681357
     time_step_fs = 0.1
+    ensemble = (
+        f"ensemble npt_tspin temp {temperature} {temperature} iso 0 0 "
+        f"tperiod {coupling} pperiod 1000 mass_factor {mass_factor} seed {seed}\n"
+        if pressure_control else
+        f"ensemble nvt_tspin {temperature} {temperature} {coupling} "
+        f"mass_factor {mass_factor} seed {seed}\n"
+    )
     result = _prepare_case(
         tmp_path / "tspin",
         "potential nep.txt\n"
-        f"ensemble nvt_tspin {temperature} {temperature} {coupling} "
-        f"mass_factor {mass_factor} seed {seed}\n"
-        f"time_step {time_step_fs}\n"
+        + ensemble
+        + f"time_step {time_step_fs}\n"
         "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -236,7 +257,15 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(tmp_path):
         "nvt_tspin 300 300 100 seed nope",
         "nvt_tspin 300 300 100 seed 1 seed 2",
         "nvt_tspin 300 300 100 mass_factor 1 mass_factor 2",
+        "nvt_tspin 300 300 100 mass_factor X 0.001 Fe 0",
+        "nvt_tspin 300 300 100 mass_factor Fe -1 O 0.001",
+        "nvt_tspin 300 300 100 mass_factor Fe 0 O 0",
+        "nvt_tspin 300 300 100 lattice maybe",
+        "nvt_tspin 300 300 100 lattice off lattice on",
         "nvt_tspin 300 300 100 future 1",
+        "npt_tspin temp 300 300 iso 0 0 mass_factor",
+        "npt_tspin temp 300 300 iso 0 0 seed 1 seed 2",
+        "npt_tspin temp 300 300 iso 0 0 future 1",
     ],
 )
 def test_tspin_parser_fails_closed(tmp_path, ensemble):
@@ -246,6 +275,179 @@ def test_tspin_parser_fails_closed(tmp_path, ensemble):
         f"ensemble {ensemble}\n"
         "run 1\n")
     assert result.returncode != 0
+
+
+def test_element_mass_factor_requires_every_present_element(tmp_path):
+    directory = tmp_path / "missing_element"
+    directory.mkdir()
+    (directory / "nep.txt").write_text(selective_type_model())
+    (directory / "model.xyz").write_text(
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
+        'O 3 0 0 0 0 0 0.4 -0.3 0.7\n')
+    (directory / "run.in").write_text(
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0.001\n"
+        "run 1\n")
+    result = subprocess.run(
+        [str(GPUMD)], cwd=directory, env=_environment(),
+        capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+
+
+def test_npt_tspin_composes_mttk_pressure_and_spin_integrators(tmp_path):
+    initial_lattice = _read_last_lattice(FIXTURE / "model_large_box.xyz")
+    initial_spin = np.array([
+        [float(value) for value in line.split()[-3:]]
+        for line in (FIXTURE / "model_large_box.xyz").read_text().splitlines()[2:]
+    ])
+    result = _prepare_case(
+        tmp_path / "npt",
+        "potential nep.txt\n"
+        "ensemble npt_tspin temp 300 300 iso 0 0 tperiod 100 pperiod 1000 "
+        "mass_factor 1.5 seed 2468\n"
+        "time_step 0.1\n"
+        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "run 1\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Integrate spins with TSPIN" in result.stdout
+    assert "Use Nose-Hoover thermostat and Parrinello-Rahman barostat" in result.stdout
+
+    actual = _read_spin_frame(tmp_path / "npt" / "state.xyz")
+    final_lattice = _read_last_lattice(tmp_path / "npt" / "state.xyz")
+    assert np.max(np.abs(actual["spin"] - initial_spin)) > 1.0e-10
+    assert np.all(np.isfinite(final_lattice))
+    assert np.max(np.abs(final_lattice - initial_lattice)) > 0.0
+
+
+def test_nvt_tspin_lattice_off_only_integrates_spins(tmp_path):
+    lines = (FIXTURE / "model_large_box.xyz").read_text().splitlines()
+    lines[1] = lines[1].replace(
+        "Properties=species:S:1:pos:R:3:spin:R:3",
+        "Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3")
+    initial_position = []
+    initial_velocity = []
+    initial_spin = []
+    for index in range(2, len(lines)):
+        fields = lines[index].split()
+        velocity = [0.01 * index, -0.02 * index, 0.03 * index]
+        initial_position.append([float(value) for value in fields[1:4]])
+        initial_velocity.append(velocity)
+        initial_spin.append([float(value) for value in fields[4:7]])
+        lines[index] = " ".join(
+            fields[:4] + [str(value) for value in velocity] + fields[4:])
+
+    result = _prepare_case(
+        tmp_path / "spin_only",
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 lattice off "
+        "mass_factor 0.001 seed 2468\n"
+        "time_step 0.01\n"
+        "dump_xyz -1 0 5 state.xyz velocity spin spin_velocity\n"
+        "run 5\n",
+        "\n".join(lines) + "\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "keep lattice positions and velocities fixed" in result.stdout
+
+    rows = np.array([
+        [float(value) for value in line.split()[1:]]
+        for line in (tmp_path / "spin_only" / "state.xyz").read_text().splitlines()
+        [-len(initial_position):]
+    ])
+    np.testing.assert_allclose(rows[:, 0:3], initial_position, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(rows[:, 3:6], initial_velocity, rtol=0.0, atol=0.0)
+    assert np.max(np.abs(rows[:, 6:9] - np.array(initial_spin))) > 1.0e-12
+
+
+def test_tspin_integrates_coordinates_excluded_by_potential_response_mask(tmp_path):
+    directory = tmp_path / "potential_mask"
+    directory.mkdir()
+    (directory / "nep.txt").write_text(selective_type_model())
+    (directory / "model.xyz").write_text(
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
+        'pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
+        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+    (directory / "run.in").write_text(
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
+        "time_step 0.1\n"
+        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "run 1\n")
+    result = subprocess.run(
+        [str(GPUMD)], cwd=directory, env=_environment(),
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    actual = _read_spin_frame(directory / "state.xyz")
+    initial_excluded_spin = np.array([0.4, -0.3, 0.7])
+    assert np.max(np.abs(actual["mforce"][1])) <= 1.0e-12
+    assert np.max(np.abs(actual["spin"][1] - initial_excluded_spin)) > 1.0e-12
+    assert np.max(np.abs(actual["spin_velocity"][1])) > 1.0e-12
+
+
+def test_element_mass_factor_zero_freezes_only_selected_spins(tmp_path):
+    directory = tmp_path / "element_mass"
+    directory.mkdir()
+    (directory / "nep.txt").write_text(selective_type_model())
+    (directory / "model.xyz").write_text(
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
+        'pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
+        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+    (directory / "run.in").write_text(
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 O 1.5 seed 97531\n"
+        "time_step 0.1\n"
+        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "run 1\n")
+    result = subprocess.run(
+        [str(GPUMD)], cwd=directory, env=_environment(),
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    actual = _read_spin_frame(directory / "state.xyz")
+    np.testing.assert_allclose(actual["spin"][0], [1.0, 0.2, -0.1], atol=0.0)
+    np.testing.assert_allclose(actual["spin_velocity"][0], 0.0, atol=0.0)
+    assert np.max(np.abs(actual["spin"][1] - [0.4, -0.3, 0.7])) > 1.0e-12
+    assert "spin mass factor for Fe is 0" in result.stdout
+    assert "spin mass factor for O is 1.5" in result.stdout
+
+
+def test_npt_tspin_runs_with_spin2_force_path(tmp_path):
+    fixture = Path(__file__).parent / "fixtures" / "nep_spin2"
+    case = json.loads((fixture / "o3c2_oracle.json").read_text())["cases"]["chiral_soc"]
+    directory = tmp_path / "spin2"
+    directory.mkdir()
+    shutil.copy(fixture / "nep4_spin2_o3c2.nep", directory / "nep.txt")
+    lattice = " ".join(str(value) for value in case["cell"])
+    lines = [
+        str(len(case["types"])),
+        f'Lattice="{lattice}" Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 '
+        'pbc="T T T"',
+    ]
+    for symbol, position, spin in zip(
+            case["types"], case["positions"], case["spins"]):
+        values = position + [0.0, 0.0, 0.0] + spin
+        lines.append(symbol + " " + " ".join(str(value) for value in values))
+    (directory / "model.xyz").write_text("\n".join(lines) + "\n")
+    (directory / "run.in").write_text(
+        "potential nep.txt\n"
+        "ensemble npt_tspin temp 300 300 iso 0 0 "
+        "tperiod 100 pperiod 1000 seed 13579\n"
+        "time_step 0.01\n"
+        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "run 1\n")
+    result = subprocess.run(
+        [str(GPUMD)], cwd=directory, env=_environment(),
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    actual = _read_spin_frame(directory / "state.xyz")
+    assert np.all(np.isfinite(actual["spin"]))
+    assert np.all(np.isfinite(actual["mforce"]))
 
 
 def test_tspin_requires_spin_potential(tmp_path):
@@ -279,7 +481,7 @@ def test_tspin_reuses_velocity_across_runs_and_restart(tmp_path):
         "run 1\n")
     assert first.returncode == 0, first.stdout + first.stderr
     assert first.stdout.count("Initialized TSPIN velocities with seed") == 1
-    assert "Reuse initialized spin velocities; nvt_tspin seed is not used." in first.stdout
+    assert "Reuse initialized spin velocities; TSPIN seed is not used." in first.stdout
 
     restart_model = (tmp_path / "first" / "restart.xyz").read_text()
     restarted = _prepare_case(
@@ -290,5 +492,5 @@ def test_tspin_reuses_velocity_across_runs_and_restart(tmp_path):
         "run 1\n",
         restart_model)
     assert restarted.returncode == 0, restarted.stdout + restarted.stderr
-    assert "Reuse initialized spin velocities; nvt_tspin seed is not used." in restarted.stdout
+    assert "Reuse initialized spin velocities; TSPIN seed is not used." in restarted.stdout
     assert "Initialized TSPIN velocities with seed" not in restarted.stdout

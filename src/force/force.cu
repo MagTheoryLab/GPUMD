@@ -131,8 +131,6 @@ void Force::parse_potential(
       PRINT_INPUT_ERROR("NEP_Spin requires exactly one visible GPU.");
     }
     potential.reset(new NEP_Spin(param[1], number_of_atoms));
-    spin_dof_type_active_ =
-      static_cast<NEP_Spin*>(potential.get())->model().spin_dof_type_active;
     is_nep = true;
     has_spin_potential_ = true;
     check_types(param[1]);

@@ -215,19 +215,13 @@ void Run::execute_run_in()
 void Run::perform_a_run()
 {
   if (integrate.use_spin_tspin && !force.has_spin_potential()) {
-    PRINT_INPUT_ERROR("ensemble nvt_tspin requires one NEP_Spin potential.");
+    PRINT_INPUT_ERROR("A TSPIN ensemble requires one Spin potential.");
   }
   if (integrate.use_spin_tspin && !atom.has_spin) {
-    PRINT_INPUT_ERROR("ensemble nvt_tspin requires spin:R:3 in model.xyz.");
+    PRINT_INPUT_ERROR("A TSPIN ensemble requires spin:R:3 in model.xyz.");
   }
   integrate.initialize(
-    time_step,
-    atom,
-    box,
-    group,
-    thermo,
-    number_of_steps,
-    force.spin_dof_type_active());
+    time_step, atom, box, group, thermo, number_of_steps);
   mc.initialize();
   measure.initialize(number_of_steps, time_step, integrate, group, atom, box, force);
 
@@ -439,7 +433,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
   } else if (strcmp(param[0], "ensemble") == 0) {
     if (num_param < 2 ||
         (strcmp(param[1], "nve") != 0 && strcmp(param[1], "nvt_nhc") != 0 &&
-         strcmp(param[1], "nvt_tspin") != 0)) {
+         strcmp(param[1], "nvt_tspin") != 0 && strcmp(param[1], "npt_tspin") != 0)) {
       mark_spin_unsupported(param[0]);
     }
     integrate.parse_ensemble(param, num_param, time_step, atom, box, group, thermo);

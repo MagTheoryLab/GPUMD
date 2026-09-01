@@ -20,6 +20,7 @@ The driver class for the various integrators.
 #include "ensemble_bao.cuh"
 #include "ensemble_bdp.cuh"
 #include "ensemble_ber.cuh"
+#include "ensemble_fixed_lattice.cuh"
 #include "ensemble_lan.cuh"
 #include "ensemble_heat_hybrid.cuh"
 #include "ensemble_msst.cuh"
@@ -45,8 +46,35 @@ The driver class for the various integrators.
 #include "utilities/common.cuh"
 #include "utilities/gpu_macro.cuh"
 #include "utilities/read_file.cuh"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+
+namespace
+{
+bool is_tspin_option(const char* value)
+{
+  return strcmp(value, "lattice") == 0 ||
+    strcmp(value, "mass_factor") == 0 || strcmp(value, "seed") == 0;
+}
+
+void print_spin_mass_factors(
+  const Atom& atom,
+  const std::vector<double>& mass_factor_by_type)
+{
+  for (std::size_t type = 0; type < mass_factor_by_type.size(); ++type) {
+    for (int atom_index = 0; atom_index < atom.number_of_atoms; ++atom_index) {
+      if (atom.cpu_type[atom_index] == static_cast<int>(type)) {
+        printf(
+          "    spin mass factor for %s is %g.\n",
+          atom.cpu_atom_symbol[atom_index].c_str(),
+          mass_factor_by_type[type]);
+        break;
+      }
+    }
+  }
+}
+} // namespace
 
 void Integrate::initialize(
   double time_step,
@@ -54,8 +82,7 @@ void Integrate::initialize(
   Box& box,
   std::vector<Group>& group,
   GPU_Vector<double>& thermo,
-  int& total_steps,
-  const std::vector<int>& spin_dof_type_active)
+  int& total_steps)
 {
   this->total_steps = total_steps;
   int number_of_atoms = atom.number_of_atoms;
@@ -86,14 +113,18 @@ void Integrate::initialize(
         new Ensemble_BER(type, move_group, move_velocity, temperature, temperature_coupling));
       break;
     case 2: // NVT-NHC
-      ensemble.reset(new Ensemble_NHC(
-        type,
-        move_group,
-        move_velocity,
-        number_of_atoms,
-        temperature,
-        temperature_coupling,
-        time_step));
+      if (use_spin_tspin && !spin_lattice_enabled) {
+        ensemble.reset(new Ensemble_Fixed_Lattice(type));
+      } else {
+        ensemble.reset(new Ensemble_NHC(
+          type,
+          move_group,
+          move_velocity,
+          number_of_atoms,
+          temperature,
+          temperature_coupling,
+          time_step));
+      }
       break;
     case 3: // NVT-Langevin
       ensemble.reset(new Ensemble_LAN(type, number_of_atoms, temperature, temperature_coupling));
@@ -289,9 +320,8 @@ void Integrate::initialize(
       temperature1,
       temperature_coupling,
       time_step,
-      spin_mass_factor,
+      spin_mass_factor_by_type,
       spin_seed,
-      spin_dof_type_active,
       atom));
     spin_integrator->temperature = temperature;
   }
@@ -359,6 +389,9 @@ void Integrate::compute1(
   } else if (type > 0 && (type <= 20 || type == 33)) {
     target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
+  } else if (type == -3 && use_spin_tspin) {
+    target_temperature =
+      temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
   }
   ensemble->temperature = target_temperature;
   if (spin_integrator) {
@@ -411,6 +444,9 @@ void Integrate::compute2(
   } else if (type > 0 && (type <= 20 || type == 33)) {
     target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
+  } else if (type == -3 && use_spin_tspin) {
+    target_temperature =
+      temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
   } else if (type == -11) {
     ensemble->compute3(time_step, group, box, atom, thermo, force);
     return;
@@ -445,8 +481,11 @@ void Integrate::parse_ensemble(
   qtb_f_max = 200.0;
   qtb_n_f = 100;
   use_spin_tspin = false;
-  spin_mass_factor = 1.0;
+  spin_lattice_enabled = true;
+  spin_mass_factor_by_type.assign(atom.cpu_type_size.size(), 1.0);
   spin_seed = 12345;
+  int ensemble_num_param = num_param;
+  int spin_option_start = num_param;
 
   // 1. Determine the integration method
   if (strcmp(param[1], "nve") == 0) {
@@ -467,7 +506,8 @@ void Integrate::parse_ensemble(
   } else if (strcmp(param[1], "nvt_tspin") == 0) {
     type = 2;
     use_spin_tspin = true;
-    if (num_param < 5 || num_param > 9 || num_param % 2 == 0) {
+    spin_option_start = 5;
+    if (num_param < 5) {
       PRINT_INPUT_ERROR(
         "ensemble nvt_tspin should have 3 required parameters plus "
         "optional key-value pairs.");
@@ -503,6 +543,28 @@ void Integrate::parse_ensemble(
     if (num_param != 18 && num_param != 12 && num_param != 8) {
       PRINT_INPUT_ERROR("ensemble npt_scr should have 6, 10, or 16 parameters.");
     }
+  } else if (strcmp(param[1], "npt_tspin") == 0) {
+    type = -3;
+    use_spin_tspin = true;
+    for (int index = 2; index < num_param; ++index) {
+      if (is_tspin_option(param[index])) {
+        ensemble_num_param = index;
+        break;
+      }
+    }
+    spin_option_start = ensemble_num_param;
+    if (ensemble_num_param < 8) {
+      PRINT_INPUT_ERROR(
+        "ensemble npt_tspin should have npt_mttk parameters plus optional "
+        "TSPIN options.");
+    }
+    std::vector<const char*> mttk_param(param, param + ensemble_num_param);
+    mttk_param[1] = "npt_mttk";
+    Ensemble_MTTK* ptr_temp = new Ensemble_MTTK(mttk_param.data(), ensemble_num_param);
+    ensemble.reset(ptr_temp);
+    temperature1 = ptr_temp->t_start;
+    temperature2 = ptr_temp->t_stop;
+    temperature_coupling = ptr_temp->get_temperature_period();
   } else if (
     strcmp(param[1], "nvt_mttk") == 0 || strcmp(param[1], "npt_mttk") == 0 ||
     strcmp(param[1], "nph_mttk") == 0) {
@@ -644,28 +706,100 @@ void Integrate::parse_ensemble(
   }
 
   if (use_spin_tspin) {
+    bool has_lattice = false;
     bool has_mass_factor = false;
     bool has_seed = false;
-    for (int index = 5; index < num_param; index += 2) {
-      if (strcmp(param[index], "mass_factor") == 0) {
+    int index = spin_option_start;
+    while (index < num_param) {
+      if (strcmp(param[index], "lattice") == 0) {
+        if (index + 1 >= num_param) {
+          PRINT_INPUT_ERROR("TSPIN lattice requires on or off.");
+        }
+        if (strcmp(param[1], "nvt_tspin") != 0) {
+          PRINT_INPUT_ERROR("TSPIN lattice is only valid for nvt_tspin.");
+        }
+        if (has_lattice) {
+          PRINT_INPUT_ERROR("TSPIN lattice cannot be repeated.");
+        }
+        has_lattice = true;
+        if (strcmp(param[index + 1], "on") == 0) {
+          spin_lattice_enabled = true;
+        } else if (strcmp(param[index + 1], "off") == 0) {
+          spin_lattice_enabled = false;
+        } else {
+          PRINT_INPUT_ERROR("TSPIN lattice should be on or off.");
+        }
+        index += 2;
+      } else if (strcmp(param[index], "mass_factor") == 0) {
         if (has_mass_factor) {
-          PRINT_INPUT_ERROR("nvt_tspin mass_factor cannot be repeated.");
+          PRINT_INPUT_ERROR("TSPIN mass_factor cannot be repeated.");
         }
         has_mass_factor = true;
-        if (!is_valid_real(param[index + 1], &spin_mass_factor) ||
-            !std::isfinite(spin_mass_factor) || spin_mass_factor <= 0.0) {
-          PRINT_INPUT_ERROR("nvt_tspin mass_factor should be finite and > 0.");
+        if (index + 1 >= num_param) {
+          PRINT_INPUT_ERROR("TSPIN mass_factor requires a value or element-value pairs.");
+        }
+        double common_factor = 0.0;
+        if (is_valid_real(param[index + 1], &common_factor)) {
+          if (!std::isfinite(common_factor) || common_factor <= 0.0) {
+            PRINT_INPUT_ERROR("Scalar TSPIN mass_factor should be finite and > 0.");
+          }
+          std::fill(
+            spin_mass_factor_by_type.begin(),
+            spin_mass_factor_by_type.end(),
+            common_factor);
+          index += 2;
+        } else {
+          std::vector<int> configured(atom.cpu_type_size.size(), 0);
+          ++index;
+          while (index < num_param && !is_tspin_option(param[index])) {
+            if (index + 1 >= num_param || is_tspin_option(param[index + 1])) {
+              PRINT_INPUT_ERROR(
+                "Element-wise TSPIN mass_factor requires element-value pairs.");
+            }
+            int type = -1;
+            for (int atom_index = 0; atom_index < atom.number_of_atoms; ++atom_index) {
+              if (atom.cpu_atom_symbol[atom_index] == param[index]) {
+                type = atom.cpu_type[atom_index];
+                break;
+              }
+            }
+            if (type < 0) {
+              PRINT_INPUT_ERROR("Unknown element in TSPIN mass_factor.");
+            }
+            if (configured[type] != 0) {
+              PRINT_INPUT_ERROR("Element in TSPIN mass_factor cannot be repeated.");
+            }
+            double factor = 0.0;
+            if (!is_valid_real(param[index + 1], &factor) ||
+                !std::isfinite(factor) || factor < 0.0) {
+              PRINT_INPUT_ERROR(
+                "Element-wise TSPIN mass_factor should be finite and >= 0.");
+            }
+            spin_mass_factor_by_type[type] = factor;
+            configured[type] = 1;
+            index += 2;
+          }
+          for (int atom_index = 0; atom_index < atom.number_of_atoms; ++atom_index) {
+            if (configured[atom.cpu_type[atom_index]] == 0) {
+              PRINT_INPUT_ERROR(
+                "Element-wise TSPIN mass_factor must list every element in model.xyz.");
+            }
+          }
         }
       } else if (strcmp(param[index], "seed") == 0) {
+        if (index + 1 >= num_param) {
+          PRINT_INPUT_ERROR("TSPIN seed requires a value.");
+        }
         if (has_seed) {
-          PRINT_INPUT_ERROR("nvt_tspin seed cannot be repeated.");
+          PRINT_INPUT_ERROR("TSPIN seed cannot be repeated.");
         }
         has_seed = true;
         if (!is_valid_int(param[index + 1], &spin_seed) || spin_seed <= 0) {
-          PRINT_INPUT_ERROR("nvt_tspin seed should be a positive integer.");
+          PRINT_INPUT_ERROR("TSPIN seed should be a positive integer.");
         }
+        index += 2;
       } else {
-        PRINT_INPUT_ERROR("Unknown nvt_tspin optional keyword.");
+        PRINT_INPUT_ERROR("Unknown TSPIN optional keyword.");
       }
     }
   }
@@ -1140,11 +1274,17 @@ void Integrate::parse_ensemble(
       break;
     case 2:
       printf("Use NVT ensemble for this run.\n");
-      printf("    choose the Nose-Hoover chain method.\n");
       if (use_spin_tspin) {
-        printf("    integrate spins with TSPIN.\n");
-        printf("    spin mass factor is %g.\n", spin_mass_factor);
+        printf("    integrate spins with the TSPIN Nose-Hoover chain.\n");
+        if (spin_lattice_enabled) {
+          printf("    integrate the lattice with a Nose-Hoover chain.\n");
+        } else {
+          printf("    keep lattice positions and velocities fixed.\n");
+        }
+        print_spin_mass_factors(atom, spin_mass_factor_by_type);
         printf("    spin velocity seed is %d.\n", spin_seed);
+      } else {
+        printf("    choose the Nose-Hoover chain method.\n");
       }
       printf("    initial temperature is %g K.\n", temperature1);
       printf("    final temperature is %g K.\n", temperature2);
@@ -1268,6 +1408,11 @@ void Integrate::parse_ensemble(
     case -2:
       break;
     case -3:
+      if (use_spin_tspin) {
+        printf("Integrate spins with TSPIN.\n");
+        print_spin_mass_factors(atom, spin_mass_factor_by_type);
+        printf("    spin velocity seed is %d.\n", spin_seed);
+      }
       break;
     case -4:
       break;

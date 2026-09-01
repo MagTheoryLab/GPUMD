@@ -585,7 +585,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
   } else if (strcmp(param[0], "ensemble") == 0) {
     integrate.parse_ensemble(param, num_param, time_step, atom, box, group, thermo);
     if (integrate.use_spin_tspin) {
-      PRINT_INPUT_ERROR("ensemble nvt_tspin is not supported by the MDI runtime.");
+      PRINT_INPUT_ERROR("TSPIN ensembles are not supported by the MDI runtime.");
     }
   } else if (strcmp(param[0], "time_step") == 0) {
     parse_time_step(param, num_param);

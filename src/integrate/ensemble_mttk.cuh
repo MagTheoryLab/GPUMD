@@ -41,6 +41,7 @@ public:
     GPU_Vector<double>& thermo);
 
   double t_current = 0, t_start = 0, t_stop = 0, t_target = 0;
+  double get_temperature_period() const { return t_period; }
 
 protected:
   virtual void init_mttk();

@@ -65,10 +65,6 @@ public:
     GPU_Vector<double>& mforce_per_atom);
 
   bool has_spin_potential(void) const { return has_spin_potential_; }
-  const std::vector<int>& spin_dof_type_active(void) const
-  {
-    return spin_dof_type_active_;
-  }
 
   void finalize();
 
@@ -98,7 +94,6 @@ private:
   bool is_fcp = false;
   bool has_non_nep = false;
   bool has_spin_potential_ = false;
-  std::vector<int> spin_dof_type_active_;
   std::string multiple_potentials_mode_ = "observe"; // "observe" or "average"
   std::string atom_types[NUM_ELEMENTS];
 

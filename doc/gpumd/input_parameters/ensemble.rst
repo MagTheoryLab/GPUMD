@@ -10,6 +10,7 @@ There are different categories of methods accessible via this keyword, which are
 
 * :ref:`"standard" ensembles <kw_ensemble_standard>`
 * :ref:`MTTK integrators <kw_ensemble_mttk>`
+* :ref:`TSPIN integrators for Spin potentials <kw_ensemble_tspin>`
 * :ref:`integrators for thermal conductivity simulations <kw_ensemble_heat>`
 * :ref:`integrators for path integral molecular dynamics simulations <kw_ensemble_pimd>`
 * :ref:`MSST integrator for simulating compressive shock wave <kw_ensemble_msst>`
