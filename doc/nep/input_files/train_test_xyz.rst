@@ -49,10 +49,48 @@ Essentially any keyword is allowed, but we only read the following ones:
   * :attr:`pos:R:3` position vector
   * :attr:`force:R:3` or :attr:`forces:R:3` target force vector
   * :attr:`bec:R:9` target Born effective charge (:term:`BEC`) tensor (optional)
+  * :attr:`spin:R:3`, :attr:`spins:R:3`, :attr:`moment:R:3`, or
+    :attr:`moments:R:3` dimensionless Cartesian spin vector (required when
+    :ref:`spin_mode <kw_spin_mode>` is nonzero)
+  * :attr:`mforce:R:3` target magnetic-force vector (optional). The aliases
+    ``mforces``, ``force_mag``, ``forces_mag``, ``magnetic_force``, and
+    ``magnetic_forces`` are also accepted.
+  * :attr:`spin_tangent:R:3` tangent of a user-defined rotation coordinate
+    (optional; used only by the grouped magnetic-response loss described
+    below)
 
 * If a dipole model is to be trained, energy, virial, stress, and force will be ignored and one should additionally provide :attr:`dipole="dx dy dz"`, which is the dipole vector of the structure. 
 
 * If a polarizability model is to be trained, energy, virial, stress, force, and dipole will be ignored and one should additionally provide :attr:`pol="pxx pxy pxz pyx pyy pyz pzx pzy pzz"`, which is the polarizability tensor of the structure.
+
+Magnetic-response groups
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The grouped response loss is optional and is enabled by
+:ref:`lambda_spin_response <kw_lambda_spin_response>`. Every participating
+frame must contain ``mforce:R:3``, ``spin_tangent:R:3``, and the following
+three line-2 metadata items:
+
+.. code::
+
+   response_probe=rotation response_group=<name> response_coordinate=<value>
+
+``response_group`` identifies frames belonging to one physical rotation path.
+``response_coordinate`` parameterizes points on that path; using the rotation
+angle in radians is recommended. The trainer uses it to validate distinct
+points and estimate a target-signal reliability weight from the target
+response slope. It does not reorder the input frames. The coordinate only
+needs to be meaningful within its group. It is explicit because a generic
+Cartesian spin snapshot does not uniquely determine which atoms were rotated,
+the rotation axis, or a nonuniform path parameter.
+
+Each response group needs at least three distinct coordinate values. If any
+frame in a group contains ``spin_tangent``, every frame in that group must
+contain it. Ordinary spin training does not require response metadata or
+``spin_tangent``.
+For atom types excluded by :ref:`spin_dof_type <kw_spin_dof_type>`, write a
+zero ``spin_tangent``. The grouped reduction visits every atom, while the
+predicted public magnetic force of an inactive type is masked to zero.
 
 Starting from line 3
 ^^^^^^^^^^^^^^^^^^^^
@@ -67,6 +105,7 @@ Units
 * Virials are expected in units of eV (such that the virial divided by the volume yields the stress).
 * Dipole and polarizability can be in arbitrary units (such as the Hartree atomic units) as liked (and remembered) by the user.
 * :term:`BEC` is in units of elementary charge e.
+* Spin is dimensionless and magnetic force is in eV per unit spin.
 
 Tips
 ----
@@ -79,4 +118,3 @@ Tips
 * The energy and virial data refer to the total energy and virial for the system.
   They are not per-atom but per-cell quantities.
 * The :term:`BEC` is optional. You can also have it only for some structures.
-

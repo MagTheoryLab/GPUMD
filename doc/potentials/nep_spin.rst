@@ -1,46 +1,519 @@
-NEP_Spin runtime
-****************
+.. _nep_spin:
+.. index::
+   single: Spin potential
+   single: NEP_Spin
+   single: magnetic force
 
-``NEP_Spin`` evaluates canonical ``nep4_spin1`` models exported by a compatible
-training implementation. It augments the ordinary NEP structural descriptor
-with a spin descriptor and returns energy, per-atom potential, force, magnetic
-force, and a complete per-atom raw9 virial.
+Spin potential
+**************
 
-Input contract
-==============
+``NEP_Spin`` extends the :ref:`NEP4 formalism <nep_formalism>` to a local
+energy surface that depends on both atomic positions and Cartesian spin
+vectors. The total energy is the only learned scalar output. Atomic forces,
+virials, magnetic forces, and spin torques are derivatives of this same energy
+and are not produced by independent response networks.
 
-The first line of the potential must start with ``nep4_spin1``. The following
-``spin_mode 1 <count>`` line introduces a counted spin header. Required header
-records, the numeric payload, and descriptor scalers are checked exactly.
-Unknown or duplicate records, legacy keywords, truncated or extra payloads,
-non-finite values, and unsupported descriptor shapes are rejected.
+The current unified format is ``nep4_spin2``. It uses the
+order/compression (O/C) descriptor described below. ``nep4_spin1`` is retained
+as the Spin NEP Lite compatibility format.
 
-The model uses independent radial, angular, and spin cutoffs and neighbor
-lists. The capacity in the ordinary ``cutoff`` record must cover neighbors out
-to the largest of those cutoffs. Overflow is reported before descriptor or
-force kernels consume the list.
+Energy model
+============
 
-``model.xyz`` must contain ``spin:R:3`` for every atom. There is no implicit
-zero-spin fallback. Only full periodic boundary conditions are supported.
+For atom :math:`i`, the ordinary structural descriptor
+:math:`\boldsymbol{q}^{i,\mathrm{str}}` is concatenated with a magnetic
+descriptor :math:`\boldsymbol{q}^{i,\mathrm{spin}}`:
 
-Outputs and units
-=================
+.. math::
 
-Energy and per-atom potential are in eV, force is in eV/Å, and magnetic force
-is the negative derivative of energy with respect to the dimensionless spin.
-The per-atom virial is written in row-major order
-``xx xy xz yx yy yz zx zy zz``. Edge contributions use neighbor-atom
-(``n2``) ownership.
+   \boldsymbol{q}^{i}
+   = \boldsymbol{q}^{i,\mathrm{str}}
+   \mathbin{\|} \boldsymbol{q}^{i,\mathrm{spin}}.
 
-Supported runtime boundary
+After componentwise scaling, this vector enters the same one-hidden-layer,
+element-dependent neural network used by ordinary NEP4. The total energy is
+
+.. math::
+
+   U(\{\boldsymbol{r}_i,\boldsymbol{s}_i\})
+   = \sum_i \left[
+       U_i(\boldsymbol{q}^{i}) + E^0_{Z_i}
+     \right] + U_\mathrm{ZBL},
+
+where :math:`\boldsymbol{r}_i` is the position, :math:`\boldsymbol{s}_i` is a
+dimensionless Cartesian spin vector, :math:`Z_i` denotes the atom type, and
+:math:`E^0_{Z_i}` is a fitted per-type energy baseline. The ZBL term is present
+only for ``nep4_spin2_zbl`` and contains no spin dependence.
+
+This architecture allows the nonlinear network to combine structural and
+magnetic coordinates. Therefore, ``spin_order`` describes the hierarchy of
+primitive magnetic contractions supplied to the network; it is not the body
+order of the final energy.
+
+Spin2 radial channels
+=====================
+
+Let
+
+.. math::
+
+   \boldsymbol{e}_{ij}
+   = \frac{\boldsymbol{r}_j-\boldsymbol{r}_i}{r_{ij}}
+
+be the minimum-image unit vector from center atom :math:`i` to neighbor
+:math:`j`. For each compressed radial channel :math:`c=1,\ldots,C`, Spin2
+forms the type-dependent edge weight
+
+.. math::
+
+   w^i_{jc}
+   = \sum_{k=0}^{8} c^{Z_i Z_j}_{ck} f_k(r_{ij}),
+
+where
+
+.. math::
+
+   f_k(r)
+   = \frac{1}{2}\left[
+       T_k\left(2(r/r_\mathrm{c}^{\mathrm{spin}}-1)^2-1\right)+1
+     \right] f_\mathrm{c}(r)
+
+and
+
+.. math::
+
+   f_\mathrm{c}(r)
+   = \begin{cases}
+       \frac{1}{2}\left[1+\cos(\pi r/r_\mathrm{c}^{\mathrm{spin}})\right],
+       & r\leq r_\mathrm{c}^{\mathrm{spin}},\\
+       0, & r>r_\mathrm{c}^{\mathrm{spin}}.
+     \end{cases}
+
+Thus :ref:`spin_compress <kw_spin_compress>` controls a shared latent radial
+rank rather than selecting individual Hamiltonian terms. All contraction
+families use the same :math:`C` radial channels.
+
+Canonical edge-moment bank
 ==========================
 
-This implementation supports one visible CUDA GPU, large boxes, expanded-cell
-small boxes, and fixed-spin ``nve`` or ``nvt_nhc`` runs. HIP is source-level
-compile-only until validated on AMD hardware.
+Spin2 organizes each neighbor edge into a canonical collection of scalar,
+vector, rank-2, and product-tensor objects. Define the symmetric traceless
+product
 
-NEP_Spin must be the only potential. Training inside GPUMD, ZBL combinations,
-multiple potentials, multi-GPU, MDI, PIMD, minimization, force constants,
-elastic calculations, Monte Carlo, deformation, HNEMD and spin heat-current
-paths, ``dump_exyz``, and ``dump_observer`` are rejected. No spin integrator is
-provided by this runtime.
+.. math::
+
+   \mathcal{Q}(\boldsymbol{a},\boldsymbol{b})
+   = \frac{1}{2}\left(
+       \boldsymbol{a}\otimes\boldsymbol{b}
+       +\boldsymbol{b}\otimes\boldsymbol{a}
+     \right)
+     -\frac{\boldsymbol{a}\cdot\boldsymbol{b}}{3}\boldsymbol{I}.
+
+The implementation stores this tensor in five orthonormal components,
+
+.. math::
+
+   \operatorname{stf}_5(\boldsymbol{a},\boldsymbol{b})
+   = \left(
+   \frac{2a_zb_z-a_xb_x-a_yb_y}{\sqrt{6}},
+   \frac{a_xb_x-a_yb_y}{\sqrt{2}},
+   \frac{a_xb_y+a_yb_x}{\sqrt{2}},
+   \frac{a_yb_z+a_zb_y}{\sqrt{2}},
+   \frac{a_zb_x+a_xb_z}{\sqrt{2}}
+   \right).
+
+For each center :math:`i` and channel :math:`c`, the neighbor reduction builds
+the following moment bank:
+
+.. math::
+
+   \boldsymbol{\rho}^{s}_{ic}
+   &= \sum_j w^i_{jc}\boldsymbol{s}_j,\\
+   \boldsymbol{\rho}^{r}_{ic}
+   &= \sum_j w^i_{jc}\boldsymbol{e}_{ij},\\
+   \rho^{rs}_{ic}
+   &= \sum_j w^i_{jc}(\boldsymbol{e}_{ij}\cdot\boldsymbol{s}_j),\\
+   \boldsymbol{\rho}^{r\times s}_{ic}
+   &= \sum_j w^i_{jc}(\boldsymbol{e}_{ij}\times\boldsymbol{s}_j),\\
+   \boldsymbol{\rho}^{\mathrm{stf}(rs)}_{ic}
+   &= \sum_j w^i_{jc}\operatorname{stf}_5(
+       \boldsymbol{e}_{ij},\boldsymbol{s}_j),\\
+   \boldsymbol{\rho}^{\mathrm{stf}(rr)}_{ic}
+   &= \sum_j w^i_{jc}\operatorname{stf}_5(
+       \boldsymbol{e}_{ij},\boldsymbol{e}_{ij}),\\
+   \boldsymbol{\rho}^{\mathrm{stf}(rr)s}_{ic}
+   &= \sum_j w^i_{jc}\operatorname{stf}_5(
+       \boldsymbol{e}_{ij},\boldsymbol{e}_{ij})\otimes\boldsymbol{s}_j,\\
+   \boldsymbol{\rho}^{(s\cdot s)s}_{ic}
+   &= \sum_j w^i_{jc}(\boldsymbol{s}_i\cdot\boldsymbol{s}_j)
+       \boldsymbol{s}_j.
+
+The last two objects have 15 and 3 components, respectively. Together with
+the scalar and vector entries above, each radial channel has a 38-component
+canonical moment state. Most density-derived descriptor coordinates are
+scalar contractions of this bank; the moments themselves are not passed
+directly to the neural network. Direct one-edge sums and same-edge
+channel-pair accumulators are reduced separately.
+
+.. _nep_spin_contractions:
+
+O/C contraction hierarchy
+==========================
+
+The hierarchy is nested: at fixed :math:`C`, every order-1 coordinate is a
+prefix of order 2, and every order-2 coordinate is a prefix of order 3.
+Representative exact contractions are listed below.
+
+Order 1 contains local and direct-edge magnetic information such as
+
+.. math::
+
+   q^{i,\mathrm{spin}}_\mathrm{local}
+   &= |\boldsymbol{s}_i|^2,\\
+   q^{i,\mathrm{spin}}_{c,\mathrm{dot}}
+   &= \boldsymbol{s}_i\cdot\boldsymbol{\rho}^{s}_{ic}
+    = \sum_j w^i_{jc}(\boldsymbol{s}_i\cdot\boldsymbol{s}_j),\\
+   q^{i,\mathrm{spin}}_{c,\mathrm{neighbor}}
+   &= \sum_j w^i_{jc}|\boldsymbol{s}_j|^2.
+
+When joint spin--orbit channels with :math:`l_\mathrm{max}=2` are enabled,
+order 1 also contains the rank-2 contractions
+
+.. math::
+
+   \sum_j w^i_{jc}\,
+   \mathcal{Q}(\boldsymbol{s}_i,\boldsymbol{s}_j)
+   :\mathcal{Q}(\boldsymbol{e}_{ij},\boldsymbol{e}_{ij})
+
+and
+
+.. math::
+
+   \mathcal{Q}(\boldsymbol{s}_i,\boldsymbol{s}_i)
+   :\boldsymbol{\rho}^{\mathrm{stf}(rr)}_{ic}.
+
+Order 2 adds edge powers, density norms, and correlations between two magnetic
+density legs. Examples include
+
+.. math::
+
+   \sum_j w^i_{jc}(\boldsymbol{s}_i\cdot\boldsymbol{s}_j)^2,
+   \qquad
+   |\boldsymbol{\rho}^{s}_{ic}|^2,
+   \qquad
+   (\rho^{rs}_{ic})^2,
+   \qquad
+   |\boldsymbol{\rho}^{r\times s}_{ic}|^2,
+
+and
+
+.. math::
+
+   \boldsymbol{\rho}^{s}_{ic}\cdot
+   \boldsymbol{\rho}^{(s\cdot s)s}_{ic}.
+
+For a radial-channel pair :math:`c\leq d`, Spin2 keeps same-edge and
+distinct-neighbor correlations separately:
+
+.. math::
+
+   S^i_{cd}
+   &= \sum_j w^i_{jc}w^i_{jd}
+      (\boldsymbol{s}_i\cdot\boldsymbol{s}_j)^2,\\
+   D^i_{cd}
+   &= (\boldsymbol{s}_i\cdot\boldsymbol{\rho}^{s}_{ic})
+      (\boldsymbol{s}_i\cdot\boldsymbol{\rho}^{s}_{id})-S^i_{cd}\\
+   &= \sum_{j\neq k}w^i_{jc}w^i_{kd}
+      (\boldsymbol{s}_i\cdot\boldsymbol{s}_j)
+      (\boldsymbol{s}_i\cdot\boldsymbol{s}_k).
+
+This separation prevents a two-density contraction from conflating repeated
+use of one neighbor edge with a correlation between distinct neighbors.
+
+Joint spin--orbit contractions use four learned radial-leg mixing matrices
+:math:`A^{(\alpha)}\in\mathbb{R}^{C\times C}`. For any moment family
+:math:`\boldsymbol{\rho}`, a projected leg is
+
+.. math::
+
+   \overline{\boldsymbol{\rho}}^{(\alpha)}_{ic}
+   = \sum_{d=1}^{C} A^{(\alpha)}_{cd}\boldsymbol{\rho}_{id}.
+
+This permits non-collinear contraction legs while retaining one shared radial
+seam. Representative order-2 joint invariants are
+
+.. math::
+
+   \left(
+     \overline{\boldsymbol{\rho}}^{r,(0)}_{ic}
+     \times
+     \overline{\boldsymbol{\rho}}^{r,(1)}_{ic}
+   \right)\cdot
+   \left(
+     \boldsymbol{s}_i\times
+     \overline{\boldsymbol{\rho}}^{s,(0)}_{ic}
+   \right)
+
+and
+
+.. math::
+
+   \operatorname{axial}\left([
+     \overline{\mathcal{Q}}^{(0)}_{ic},
+     \overline{\mathcal{Q}}^{(1)}_{ic}
+   ]\right)\cdot
+   \left(
+     \boldsymbol{s}_i\times
+     \overline{\boldsymbol{\rho}}^{s,(0)}_{ic}
+   \right),
+
+where :math:`[\mathcal{A},\mathcal{B}]=\mathcal{A}\mathcal{B}-
+\mathcal{B}\mathcal{A}` and ``axial`` maps the resulting antisymmetric tensor
+to an axial vector.
+
+Order 3 adds dot-gated and triple-density contractions. Its direct-edge member
+is
+
+.. math::
+
+   \sum_j w^i_{jc}
+   (\boldsymbol{s}_i\cdot\boldsymbol{s}_j)
+   \left(|\boldsymbol{s}_i|^2+|\boldsymbol{s}_j|^2\right),
+
+while representative joint contractions include scalar triple products such
+as
+
+.. math::
+
+   \overline{\boldsymbol{\rho}}^{r,(0)}_{ic}\cdot
+   \left(
+     \overline{\boldsymbol{\rho}}^{s,(1)}_{ic}
+     \times
+     \overline{\boldsymbol{\rho}}^{r\times s,(2)}_{ic}
+   \right).
+
+These coordinates supply a symmetry-respecting polynomial basis to a
+nonlinear energy model. They do not assign a fixed exchange, DMI, anisotropy,
+or other spin-Hamiltonian coefficient to any individual descriptor channel.
+
+Symmetries
+==========
+
+All Spin2 descriptor coordinates are even under global time reversal,
+
+.. math::
+
+   \boldsymbol{s}_i\longrightarrow-\boldsymbol{s}_i.
+
+With ``spin_soc 0``, the spatial vectors and spin vectors may be rotated
+independently and the descriptor is invariant under both rotations. With
+``spin_soc 1``, the extra channels are invariant under a joint orthogonal
+transformation of the lattice vectors and axial spin vectors,
+
+.. math::
+
+   \boldsymbol{e}_{ij}\longrightarrow R\boldsymbol{e}_{ij},
+   \qquad
+   \boldsymbol{s}_i\longrightarrow\det(R)R\boldsymbol{s}_i,
+   \qquad R\in O(3).
+
+The :ref:`spin_dof_type <kw_spin_dof_type>` mask selects center atoms that
+receive public magnetic forces. The
+:ref:`spin_env_type <kw_spin_env_type>` mask selects neighbor types that enter
+the moment sums. An environment-only spin is therefore a frozen model input:
+it can affect the energy and active spins, but GPUMD masks its public magnetic
+force to zero.
+
+.. _nep_spin_dimensions:
+
+Model dimensions
+================
+
+Let :math:`P=C(C+1)/2`, :math:`I_X` be 1 when condition :math:`X` is true and
+0 otherwise, and define
+
+.. math::
+
+   a_C=1+I_{C\geq2},\qquad b_C=1+2I_{C\geq2}.
+
+For :math:`L=l_\mathrm{max}` and :math:`S=\texttt{spin\_soc}`, the order-1
+Spin2 dimension is
+
+.. math::
+
+   D_1=1+2C+2C I_S I_{L\geq2}.
+
+The order-2 increment is
+
+.. math::
+
+   \Delta D_2 &= 2C
+   +C I_{L\geq1}\left(3I_S+1-I_S\right)
+   +C I_{L\geq2}+C+2P\\
+   &+a_C C I_S I_{L\geq1}
+   +a_C C I_S I_{L\geq2},
+
+and the order-3 increment is
+
+.. math::
+
+   \Delta D_3 &= C
+   +a_C C I_S I_{L\geq1}\\
+   &+b_C C I_S I_{L\geq2}
+   +C I_S I_{L\geq1} I_{C\geq3}.
+
+Therefore :math:`D_2=D_1+\Delta D_2` and
+:math:`D_3=D_2+\Delta D_3`. For the common :math:`L=2`, ``spin_soc 1`` shape,
+O2-C2 has 37 magnetic coordinates and O3-C2 has 49. The implementation limits
+the magnetic part to 96 coordinates and requires the combined structural and
+magnetic dimension to satisfy :math:`D_\mathrm{str}+D_\mathrm{spin}\leq103`.
+With the ordinary structural defaults, :math:`D_\mathrm{str}=42`; the common
+O3-C2-L2-SOC1 shape therefore gives :math:`42+49=91` total coordinates.
+
+The trainable magnetic descriptor parameters comprise
+:math:`9C N_\mathrm{typ}^2` radial coefficients and, for Spin2,
+:math:`4C^2` radial-leg mixing coefficients. These are optimized together
+with the neural-network parameters by SNES.
+
+Energy derivatives
+==================
+
+The atomic force and the unmasked magnetic derivative are defined by
+
+.. math::
+
+   \boldsymbol{F}_k=-\frac{\partial U}{\partial\boldsymbol{r}_k},
+   \qquad
+   \widetilde{\boldsymbol{M}}_k
+   =-\frac{\partial U}{\partial\boldsymbol{s}_k}.
+
+For an atom type enabled by :ref:`spin_dof_type <kw_spin_dof_type>`, the
+public magnetic force is
+:math:`\boldsymbol{M}_k=\widetilde{\boldsymbol{M}}_k`. For an inactive type it
+is explicitly set to zero, even when that atom is retained as an
+environment-only, frozen spin input.
+
+Writing :math:`q^i_\nu` for either a structural or magnetic descriptor
+component, the chain rule gives
+
+.. math::
+
+   \boldsymbol{F}_k
+   =-\sum_{i,\nu}
+     \frac{\partial U_i}{\partial q^i_\nu}
+     \frac{\partial q^i_\nu}{\partial\boldsymbol{r}_k}
+     -\frac{\partial U_\mathrm{ZBL}}{\partial\boldsymbol{r}_k},
+
+.. math::
+
+   \widetilde{\boldsymbol{M}}_k
+   =-\sum_{i,\nu}
+     \frac{\partial U_i}{\partial q^i_\nu}
+     \frac{\partial q^i_\nu}{\partial\boldsymbol{s}_k}.
+
+The implementation first evaluates
+:math:`\partial U_i/\partial q^i_\nu` through the neural network and then
+applies the analytical vector--Jacobian product of every Spin2 contraction,
+moment reduction, and radial basis function. The same position derivative
+produces the full per-atom virial. No finite-difference force path is used.
+
+The spin torque used for training diagnostics is
+
+.. math::
+
+   \boldsymbol{\tau}_i
+   =\boldsymbol{s}_i\times\boldsymbol{M}_i.
+
+ZBL contributes to energy, atomic force, and virial but not to magnetic force
+or torque because it is spin independent.
+
+Spin loss terms
+===============
+
+Spin training augments the ordinary :ref:`NEP loss <nep_loss_function>` with
+magnetic-force and torque RMSE terms,
+
+.. math::
+
+   L_\mathrm{spin}
+   = \lambda_\mathrm{m} L_\mathrm{m}
+   + \lambda_\mathrm{tau} L_\mathrm{tau}
+   + \lambda_\mathrm{resp} L_\mathrm{resp},
+
+where, for :math:`N_\mathrm{m}` labeled active atoms,
+
+.. math::
+
+   L_\mathrm{m}
+   &=\left[
+     \frac{1}{3N_\mathrm{m}}
+     \sum_i |\boldsymbol{M}^{\mathrm{NEP}}_i-
+                  \boldsymbol{M}^{\mathrm{tar}}_i|^2
+     \right]^{1/2},\\
+   L_\mathrm{tau}
+   &=\left[
+     \frac{1}{3N_\mathrm{m}}
+     \sum_i |\boldsymbol{s}_i\times\boldsymbol{M}^{\mathrm{NEP}}_i-
+                  \boldsymbol{s}_i\times\boldsymbol{M}^{\mathrm{tar}}_i|^2
+     \right]^{1/2}.
+
+For a grouped rotation path with coordinate :math:`\theta`, the response
+generator evaluated for frame :math:`n` is
+
+.. math::
+
+   G_n
+   =\sum_i \boldsymbol{M}_{ni}\cdot
+      \frac{\partial\boldsymbol{s}_{ni}}{\partial\theta}
+   =-\frac{\partial U_n}{\partial\theta}.
+
+The grouped response loss first centers :math:`G_n` within each group. A
+linear fit of the target response against ``response_coordinate`` defines a
+reliability score (with a floor of 0.05), which weights a Huber loss for the
+centered curve. Residuals are normalized by the global RMS magnitude of the
+centered targets. A second Huber term compares group means, normalized by the
+RMS magnitude of the target group means and multiplied by 0.25. Thus the loss
+retains both response shape and a constant response component while reducing
+the influence of groups whose target path is weakly resolved by its supplied
+coordinate.
+
+The tangent
+:math:`\partial\boldsymbol{s}/\partial\theta` and the group coordinate are
+explicit data because a Cartesian spin snapshot alone does not determine the
+chosen rotation axis, rotated atom subset, or path parameterization.
+For an atom type excluded by ``spin_dof_type``, the supplied tangent must be
+zero: grouped response accumulation visits every atom, whereas the predicted
+public magnetic force of an inactive type has already been masked to zero.
+
+When :ref:`spin_curriculum <kw_spin_curriculum>` is enabled, ANN weights
+connected to order-3 magnetic coordinates are held fixed during the first
+third of SNES training, released linearly during the second third, and fully
+active during the final third.
+
+Model formats and input
+=======================
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 30 45
+
+   * - Header in ``nep.txt``
+     - Training mode
+     - Description
+   * - ``nep4_spin1``
+     - ``spin_mode 1``
+     - Spin NEP Lite compatibility model, including its optional chiral
+       channel.
+   * - ``nep4_spin2``
+     - ``spin_mode 2``
+     - Unified O/C descriptor described on this page.
+   * - ``nep4_spin2_zbl``
+     - ``spin_mode 2`` and :ref:`zbl <kw_zbl>`
+     - Spin2 plus a spin-independent short-range ZBL contribution.
+
+See :ref:`spin_mode <kw_spin_mode>` and the neighboring ``spin_*`` keyword
+pages for descriptor configuration. The complete extended-XYZ data contract,
+including magnetic-force labels and grouped response metadata, is documented
+under :ref:`train_test_xyz`. Runtime ``model.xyz`` files require one
+``spin:R:3`` vector per atom. Spin dynamics with separate lattice and spin
+thermostats is available through :attr:`nvt_tspin`.

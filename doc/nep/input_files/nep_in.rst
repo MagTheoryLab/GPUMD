@@ -48,6 +48,30 @@ Keywords
      - select between training and prediction (inference)
    * - :ref:`zbl <kw_zbl>`
      - outer cutoff for the universal :term:`ZBL` potential [Ziegler1985]_
+   * - :ref:`spin_mode <kw_spin_mode>`
+     - enable Spin NEP Lite or the unified Spin2 descriptor
+   * - :ref:`spin_cutoff <kw_spin_cutoff>`
+     - radial and angular cutoffs used by the spin descriptor
+   * - :ref:`spin_n_max <kw_spin_n_max>`
+     - radial and angular channel indices for Spin NEP Lite
+   * - :ref:`spin_basis_size <kw_spin_basis_size>`
+     - radial and angular basis sizes used by the spin descriptor
+   * - :ref:`spin_l_max <kw_spin_l_max>`
+     - maximum spatial tensor rank used by the spin descriptor
+   * - :ref:`spin_compress <kw_spin_compress>`
+     - number of shared compressed radial channels
+   * - :ref:`spin_order <kw_spin_order>`
+     - highest Spin2 contraction level supplied to the neural network
+   * - :ref:`spin_soc <kw_spin_soc>`
+     - enable joint spin--space rotation-invariant Spin2 channels
+   * - :ref:`spin_chiral <kw_spin_chiral>`
+     - enable the optional chiral channel in Spin NEP Lite
+   * - :ref:`spin_dof_type <kw_spin_dof_type>`
+     - atom types whose spins are active degrees of freedom
+   * - :ref:`spin_env_type <kw_spin_env_type>`
+     - atom types allowed to contribute to magnetic environments
+   * - :ref:`spin_curriculum <kw_spin_curriculum>`
+     - progressively activate order-3 Spin2 neural-network connections
    * - :ref:`cutoff <kw_cutoff>`
      - radial (:math:`r_\mathrm{c}^\mathrm{R}`) and angular (:math:`r_\mathrm{c}^\mathrm{A}`) cutoffs
    * - :ref:`n_max <kw_n_max>`
@@ -60,7 +84,7 @@ Keywords
      - number of neurons in the hidden layer (:math:`N_\mathrm{neu}`)
    * - :ref:`lambda_1 <kw_lambda_1>`
      - weight of :math:`\mathcal{L}_1`-norm regularization term
-   * - :ref:`lambda_2 <kw_lambda_1>`
+   * - :ref:`lambda_2 <kw_lambda_2>`
      - weight of :math:`\mathcal{L}_2`-norm regularization term
    * - :ref:`lambda_e <kw_lambda_e>`
      - weight of energy loss term
@@ -68,6 +92,12 @@ Keywords
      - weight of force loss term
    * - :ref:`lambda_v <kw_lambda_v>`
      - weight of virial loss term
+   * - :ref:`lambda_m <kw_lambda_m>`
+     - weight of Cartesian magnetic-force loss term
+   * - :ref:`lambda_tau <kw_lambda_tau>`
+     - weight of spin-torque loss term
+   * - :ref:`lambda_spin_response <kw_lambda_spin_response>`
+     - weight of grouped magnetic-response loss term
    * - :ref:`atomic_v <kw_atomic_v>`
      - fit atomic or global virial
    * - :ref:`force_delta <kw_force_delta>`
@@ -99,3 +129,29 @@ Here is an example :attr:`nep.in` file using all the default parameters::
 
 The `NEP tutorial <https://github.com/brucefan1983/GPUMD/tree/master/examples/11_NEP_potential_PbTe/tutorial.ipynb>`_ illustrates the construction of a :term:`NEP` model.
 More examples can be found in `this repository <https://gitlab.com/brucefan1983/nep-data>`_.
+
+Spin2 example
+-------------
+
+The following is a compact, valid Spin2 setup. The explicit shape keywords
+are important: the defaults of ``spin_basis_size`` and ``spin_l_max`` do not
+define a valid Spin2 descriptor, and the complete descriptor must fit within
+the Spin2 dimension limit described in :ref:`nep_spin_dimensions`::
+
+  version          4
+  type             2 Fe Ge
+  spin_mode        2
+  spin_basis_size  8 0
+  spin_l_max       2 0 0
+  spin_compress    2
+  spin_order       3
+  spin_soc         1
+  neuron           30
+  lambda_m         1.0
+  batch            1000
+  generation       100000
+
+Each frame in ``train.xyz`` and ``test.xyz`` must then contain a Cartesian
+``spin:R:3`` property. Add ``mforce:R:3`` when training magnetic forces. See
+:ref:`train_test_xyz` for the complete data contract and :ref:`nep_spin` for
+the Spin2 formalism.

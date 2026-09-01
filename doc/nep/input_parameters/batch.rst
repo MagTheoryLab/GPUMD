@@ -8,9 +8,15 @@
 This keyword sets the size of each batch used during the :ref:`optimization procedure <nep_optimization_procedure>`.
 The syntax is::
 
-  batch <batch_size>
+  batch <batch_size> [<use_full_batch>]
 
 Here, :attr:`<batch_size>` sets the batch size :math:`N_\mathrm{bat}`, which must satisfy :math:`N_\mathrm{bat}\geq 1` and defaults to :math:`N_\mathrm{bat}=1000`.
+The optional :attr:`<use_full_batch>` can be 0 (default) or 1. When it is 1,
+all batches are evaluated for every candidate in every generation and their
+RMSE values are combined, while :attr:`<batch_size>` still controls how many
+structures are resident in each batch. This mode is required by
+:ref:`lambda_spin_response <kw_lambda_spin_response>` so that complete
+response groups enter each fitness evaluation.
 
 In principle one can train against the entire training set during every iteration of the optimization procedure (equivalent to :math:`N_\mathrm{bat}` being identical to the number of structures in the training set).
 It is, however, often beneficial for computational speed and potentially necessary for memory reasons to consider only a subset of the training data at any given iteration.

@@ -17,7 +17,12 @@ The "inner" cutoff of the :term:`ZBL` potential, below which value the pair inte
 
 When this keyword is absent, the :term:`ZBL` potential will not be enabled and the value of :math:`r_\mathrm{c}^\mathrm{ZBL-outer}` is irrelevant.
 
-Permissible values are 1 Å :math:`\leq r_\mathrm{c}^\mathrm{ZBL-outer} \leq` 3 Å
+ZBL is compatible with :ref:`spin_mode 2 <kw_spin_mode>` and produces a
+``nep4_spin2_zbl`` model. It is not supported with ``spin_mode 1``. Since ZBL
+is spin independent, it contributes to energy, force, and virial but not to
+magnetic force or torque.
+
+Permissible values are 1 Å :math:`\leq r_\mathrm{c}^\mathrm{ZBL-outer} \leq` 4 Å.
 
 One can also use flexible ZBL parameters by providing a `zbl.in` file in the working directory, in which case the :attr:`<cutoff>` parameter is still needed but will not be used.
 For a :math:`n`-species system, there should be :math:`n(n+1)/2` lines in the `zbl.in` files.
