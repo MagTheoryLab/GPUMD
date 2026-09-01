@@ -81,12 +81,10 @@ void Parameters::set_default_parameters()
   is_use_typewise_cutoff_zbl_set = false;
   is_charge_mode_set = false;
   is_spin_mode_set = false;
-  is_spin_chiral_set = false;
   is_spin_compress_set = false;
   is_spin_order_set = false;
   is_spin_soc_set = false;
   is_spin_curriculum_set = false;
-  is_spin_n_max_set = false;
   is_spin_basis_size_set = false;
   is_spin_l_max_set = false;
   is_spin_cutoff_set = false;
@@ -135,13 +133,10 @@ void Parameters::set_default_parameters()
   output_descriptor = false;
   charge_mode = 0;
   spin_mode = 0;
-  spin_chiral = 0;
   spin_compress = 4;
   spin_order = 3;
   spin_soc = 1;
   spin_curriculum = 0;
-  spin_n_max[0] = 3;
-  spin_n_max[1] = 0;
   spin_basis_size[0] = 3;
   spin_basis_size[1] = 3;
   spin_l_max[0] = 4;
@@ -229,17 +224,13 @@ void Parameters::calculate_parameters()
     }
   }
 
-  if (spin_chiral && spin_mode != 1) {
-    PRINT_INPUT_ERROR("spin_chiral requires spin_mode 1.\n");
-  }
   if (spin_mode) {
     if (version != 4 || train_mode != 0) {
       PRINT_INPUT_ERROR("Spin NEP only supports a NEP4 potential model.\n");
     }
-    if (charge_mode || has_multiple_cutoffs || (enable_zbl && spin_mode != 2)) {
+    if (charge_mode || has_multiple_cutoffs) {
       PRINT_INPUT_ERROR(
-        "Spin NEP does not support charge or type-dependent cutoffs; "
-        "ZBL is supported only for spin_mode 2.\n");
+        "Spin2 does not support charge or type-dependent cutoffs.\n");
     }
     if (num_hidden_layers == 2) {
       PRINT_INPUT_ERROR("Spin NEP only supports one hidden layer.\n");
@@ -249,18 +240,7 @@ void Parameters::calculate_parameters()
         "Spin NEP fine_tune/import_q_scaler is not supported until the "
         "counted spin checkpoint reader is implemented.\n");
     }
-    if (spin_mode == 1) {
-      if (spin_compress < 1 || spin_compress > 4 ||
-          spin_basis_size[0] + 1 < spin_compress ||
-          spin_basis_size[0] + 1 > 8 ||
-          spin_n_max[0] > spin_basis_size[0] ||
-          spin_n_max[1] > spin_basis_size[1] ||
-          spin_l_max[0] < 0 || spin_l_max[0] > 4 ||
-          spin_l_max[1] != 0 || spin_l_max[2] != 0 ||
-          spin_cutoff[0] <= 0.0f || spin_cutoff[1] <= 0.0f) {
-        PRINT_INPUT_ERROR("Unsupported Spin NEP Lite shape in nep.in.\n");
-      }
-    } else if (
+    if (
       spin_compress < 1 || spin_compress > 9 ||
       spin_basis_size[0] != 8 || spin_basis_size[1] != 0 ||
       spin_l_max[0] < 0 || spin_l_max[0] > 2 ||
@@ -270,13 +250,8 @@ void Parameters::calculate_parameters()
       spin_cutoff[0] <= 0.0f) {
       PRINT_INPUT_ERROR("Unsupported unified Spin NEP O/C shape in nep.in.\n");
     }
-    if (spin_curriculum && (spin_mode != 2 || spin_order != 3)) {
-      PRINT_INPUT_ERROR(
-        "spin_curriculum requires spin_mode 2 and spin_order 3.\n");
-    }
-    if (lambda_spin_response > 0.0f && spin_mode != 2) {
-      PRINT_INPUT_ERROR(
-        "lambda_spin_response requires spin_mode 2.\n");
+    if (spin_curriculum && spin_order != 3) {
+      PRINT_INPUT_ERROR("spin_curriculum requires spin_order 3.\n");
     }
     if (lambda_spin_response > 0.0f && !use_full_batch) {
       PRINT_INPUT_ERROR(
@@ -368,37 +343,31 @@ void Parameters::calculate_parameters()
   if (spin_mode) {
     const int C = spin_compress;
     const int L = spin_l_max[0];
-    if (spin_mode == 1) {
-      dim_spin =
-        2 + C * (7 + 4 * (L >= 1) + (L >= 2) + (L >= 3) + (L >= 4)) +
-        spin_chiral * ((C < 2 ? C : 2) + 2 * C);
-    } else {
-      const int pairs = C * (C + 1) / 2;
-      dim_spin = 1 + 2 * C;
-      if (spin_soc && L >= 2) dim_spin += 2 * C;
-      if (spin_order >= 2) {
-        dim_spin += 2 * C;
-        if (L >= 1) dim_spin += (spin_soc ? 3 : 1) * C;
-        if (L >= 2) dim_spin += C;
-        dim_spin += C + 2 * pairs;
-        if (spin_soc && L >= 1) {
-          dim_spin += (C >= 2 ? 2 : 1) * C;
-        }
-        if (spin_soc && L >= 2) {
-          dim_spin += (C >= 2 ? 2 : 1) * C;
-        }
+    const int pairs = C * (C + 1) / 2;
+    dim_spin = 1 + 2 * C;
+    if (spin_soc && L >= 2) dim_spin += 2 * C;
+    if (spin_order >= 2) {
+      dim_spin += 2 * C;
+      if (L >= 1) dim_spin += (spin_soc ? 3 : 1) * C;
+      if (L >= 2) dim_spin += C;
+      dim_spin += C + 2 * pairs;
+      if (spin_soc && L >= 1) {
+        dim_spin += (C >= 2 ? 2 : 1) * C;
       }
-      spin_order3_descriptor_start = dim_struct + dim_spin;
-      if (spin_order >= 3) {
-        dim_spin += C;
-        if (spin_soc && L >= 1) {
-          dim_spin += (C >= 2 ? 2 : 1) * C;
-        }
-        if (spin_soc && L >= 2) {
-          dim_spin += (C >= 2 ? 3 : 1) * C;
-        }
-        if (spin_soc && L >= 1 && C >= 3) dim_spin += C;
+      if (spin_soc && L >= 2) {
+        dim_spin += (C >= 2 ? 2 : 1) * C;
       }
+    }
+    spin_order3_descriptor_start = dim_struct + dim_spin;
+    if (spin_order >= 3) {
+      dim_spin += C;
+      if (spin_soc && L >= 1) {
+        dim_spin += (C >= 2 ? 2 : 1) * C;
+      }
+      if (spin_soc && L >= 2) {
+        dim_spin += (C >= 2 ? 3 : 1) * C;
+      }
+      if (spin_soc && L >= 1 && C >= 3) dim_spin += C;
     }
     if (dim_spin > 96) {
       PRINT_INPUT_ERROR("Number of spin descriptors should not exceed 96.\n");
@@ -428,7 +397,9 @@ void Parameters::calculate_parameters()
     num_types * num_types *
     (dim_radial * (basis_size_radial + 1) + (n_max_angular + 1) * (basis_size_angular + 1));
   number_of_variables_descriptor_spin =
-    spin_mode ? num_types * num_types * spin_compress * (spin_basis_size[0] + 1) : 0;
+    spin_mode == 2
+      ? num_types * num_types * spin_compress * (spin_basis_size[0] + 1)
+      : 0;
   number_of_variables_spin_projection =
     spin_mode == 2 ? 4 * spin_compress * spin_compress : 0;
   number_of_variables_descriptor +=
@@ -683,38 +654,19 @@ void Parameters::report_inputs()
   }
 
   if (spin_mode) {
-    if (spin_mode == 1) {
-      printf("    (input)   use Spin NEP Lite training.\n");
-      printf(
-        "        spin_compress/n_max/basis_size/l_max = %d / %d,%d / %d,%d / %d,%d,%d.\n",
-        spin_compress,
-        spin_n_max[0],
-        spin_n_max[1],
-        spin_basis_size[0],
-        spin_basis_size[1],
-        spin_l_max[0],
-        spin_l_max[1],
-        spin_l_max[2]);
-      printf(
-        "        spin cutoff/chiral = %g,%g A / %d.\n",
-        spin_cutoff[0],
-        spin_cutoff[1],
-        spin_chiral);
-    } else {
-      printf("    (input)   use unified Spin NEP O/C training.\n");
-      printf(
-        "        spin_compress/basis_size/l_max/order/soc = %d/%d/%d/%d/%d.\n",
-        spin_compress,
-        spin_basis_size[0],
-        spin_l_max[0],
-        spin_order,
-        spin_soc);
-      printf("        spin cutoff = %g A.\n", spin_cutoff[0]);
-      printf(
-        "        spin curriculum/response loss = %d/%g.\n",
-        spin_curriculum,
-        lambda_spin_response);
-    }
+    printf("    (input)   use Spin2 O/C training.\n");
+    printf(
+      "        spin_compress/basis_size/l_max/order/soc = %d/%d/%d/%d/%d.\n",
+      spin_compress,
+      spin_basis_size[0],
+      spin_l_max[0],
+      spin_order,
+      spin_soc);
+    printf("        spin cutoff = %g A.\n", spin_cutoff[0]);
+    printf(
+      "        spin curriculum/response loss = %d/%g.\n",
+      spin_curriculum,
+      lambda_spin_response);
     printf("        spin_dof_type =");
     for (int type = 0; type < num_types; ++type) {
       if (spin_dof_type_active[type]) {
@@ -957,8 +909,6 @@ void Parameters::parse_one_keyword(std::vector<std::string>& tokens)
     parse_charge_mode(param, num_param);
   } else if (strcmp(param[0], "spin_mode") == 0) {
     parse_spin_mode(param, num_param);
-  } else if (strcmp(param[0], "spin_chiral") == 0) {
-    parse_spin_chiral(param, num_param);
   } else if (strcmp(param[0], "spin_compress") == 0) {
     parse_spin_compress(param, num_param);
   } else if (strcmp(param[0], "spin_order") == 0) {
@@ -967,8 +917,6 @@ void Parameters::parse_one_keyword(std::vector<std::string>& tokens)
     parse_spin_soc(param, num_param);
   } else if (strcmp(param[0], "spin_curriculum") == 0) {
     parse_spin_curriculum(param, num_param);
-  } else if (strcmp(param[0], "spin_n_max") == 0) {
-    parse_spin_n_max(param, num_param);
   } else if (strcmp(param[0], "spin_basis_size") == 0) {
     parse_spin_basis_size(param, num_param);
   } else if (strcmp(param[0], "spin_l_max") == 0) {
@@ -1761,20 +1709,8 @@ void Parameters::parse_spin_mode(const char** param, int num_param)
   }
   is_spin_mode_set = true;
   if (num_param != 2 || !is_valid_int(param[1], &spin_mode) ||
-      spin_mode < 0 || spin_mode > 2) {
-    PRINT_INPUT_ERROR("spin_mode should be 0, 1, or 2.\n");
-  }
-}
-
-void Parameters::parse_spin_chiral(const char** param, int num_param)
-{
-  if (is_spin_chiral_set) {
-    PRINT_INPUT_ERROR("Duplicate spin_chiral keyword.\n");
-  }
-  is_spin_chiral_set = true;
-  if (num_param != 2 || !is_valid_int(param[1], &spin_chiral) ||
-      spin_chiral < 0 || spin_chiral > 1) {
-    PRINT_INPUT_ERROR("spin_chiral should be 0 or 1.\n");
+      (spin_mode != 0 && spin_mode != 2)) {
+    PRINT_INPUT_ERROR("spin_mode should be 0 or 2.\n");
   }
 }
 
@@ -1823,20 +1759,6 @@ void Parameters::parse_spin_curriculum(const char** param, int num_param)
   if (num_param != 2 || !is_valid_int(param[1], &spin_curriculum) ||
       (spin_curriculum != 0 && spin_curriculum != 1)) {
     PRINT_INPUT_ERROR("spin_curriculum should be 0 or 1.\n");
-  }
-}
-
-void Parameters::parse_spin_n_max(const char** param, int num_param)
-{
-  if (is_spin_n_max_set) {
-    PRINT_INPUT_ERROR("Duplicate spin_n_max keyword.\n");
-  }
-  is_spin_n_max_set = true;
-  if (num_param != 3 ||
-      !is_valid_int(param[1], &spin_n_max[0]) ||
-      !is_valid_int(param[2], &spin_n_max[1]) ||
-      spin_n_max[0] < 0 || spin_n_max[1] < 0) {
-    PRINT_INPUT_ERROR("spin_n_max should have two non-negative integers.\n");
   }
 }
 

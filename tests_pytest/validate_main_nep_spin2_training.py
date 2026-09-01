@@ -132,7 +132,8 @@ def validate_parser(root):
         "invalid_second_basis": NEP_IN.replace("spin_basis_size 8 0", "spin_basis_size 8 1"),
         "invalid_order": NEP_IN.replace("spin_order 3", "spin_order 4"),
         "invalid_soc": NEP_IN.replace("spin_soc 1", "spin_soc 2"),
-        "spin1_only_chiral": NEP_IN.replace("spin_soc 1", "spin_soc 1\nspin_chiral 1"),
+        "removed_spin_mode_1": NEP_IN.replace("spin_mode 2", "spin_mode 1"),
+        "removed_spin_chiral": NEP_IN.replace("spin_soc 1", "spin_soc 1\nspin_chiral 1"),
         "curriculum_requires_o3": NEP_IN.replace("spin_order 3", "spin_order 2").replace(
             "lambda_tau 0.5", "lambda_tau 0.5\nspin_curriculum 1"),
         "response_requires_full_batch": NEP_IN.replace(

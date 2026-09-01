@@ -13,8 +13,7 @@ This keyword enables Spin NEP training. The syntax is::
 Value     Model
 ========  ================================================================
 0         Ordinary non-spin NEP (default)
-1         Spin NEP Lite; writes ``nep4_spin1``
-2         Unified order/coupling Spin2; writes ``nep4_spin2``
+2         Order/coupling Spin2; writes ``nep4_spin2``
 ========  ================================================================
 
 Spin training requires ``version 4``, ``model_type 0``, and one hidden layer.
@@ -22,11 +21,11 @@ Every frame in ``train.xyz`` and ``test.xyz`` must contain a Cartesian
 ``spin:R:3`` property (accepted aliases are listed in
 :ref:`train_test_xyz`). Add ``mforce:R:3`` to train magnetic forces.
 
-Charge mode and type-dependent cutoffs are not supported. ZBL is supported
-only with mode 2. ``fine_tune`` and ``import_q_scaler`` are not currently
-supported for Spin NEP.
+Charge mode and type-dependent cutoffs are not supported. ``spin_mode 2`` can
+be combined with :ref:`zbl <kw_zbl>` and then writes ``nep4_spin2_zbl``.
+``fine_tune`` and ``import_q_scaler`` are not currently supported for Spin2.
 
-Mode 2 requires ``spin_basis_size 8 0`` and an explicit supported
+Spin2 requires ``spin_basis_size 8 0`` and an explicit supported
 ``spin_l_max``. A complete, commonly used shape is::
 
   spin_mode        2

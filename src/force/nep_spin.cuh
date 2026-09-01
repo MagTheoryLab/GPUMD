@@ -27,18 +27,6 @@ struct NEP_Spin_Data {
   GPU_Vector<float> spin_baseline;
   GPU_Vector<int> spin_dof_type_active;
   GPU_Vector<int> spin_env_type_active;
-  GPU_Vector<float> rho0;
-  GPU_Vector<float> raw1;
-  GPU_Vector<float> angular2;
-  GPU_Vector<float> angular3;
-  GPU_Vector<float> angular4;
-  GPU_Vector<float> geom;
-  GPU_Vector<float> rho0_dot;
-  GPU_Vector<float> raw1_dot;
-  GPU_Vector<float> polar;
-  GPU_Vector<float> octupole;
-  GPU_Vector<float> hexadecapole;
-  GPU_Vector<float> chirals;
   GPU_Vector<float> spin_projection_parameters;
   GPU_Vector<float> spin2_moments;
   GPU_Vector<float> spin2_pulls;
@@ -102,27 +90,8 @@ public:
     int count(void) const;
   };
 
-  struct Spin_Layout {
-    int channels = 0;
-    int basis_count = 0;
-    int l_max = 0;
-    int chi_channels = 0;
-    int rho0_offset = -1;
-    int l1_rdot_offset = -1;
-    int l1_cross_offset = -1;
-    int l1_stf_offset = -1;
-    int angular2_offset = -1;
-    int angular3_offset = -1;
-    int angular4_offset = -1;
-    int geom_offset = -1;
-    int rho0_dot_offset = -1;
-    int raw1_dot_offset = -1;
-    int chiral_offset = -1;
-    int descriptor_dim = 0;
-  };
-
   struct Model {
-    int spin_mode = 0;
+    int spin_mode = 2;
     int num_types = 0;
     int n_max_radial = 0;
     int n_max_angular = 0;
@@ -132,11 +101,9 @@ public:
     int max_neighbors_global = 0;
     int max_neighbors_angular = 0;
     int neighbor_capacity = 0;
-    int spin_n_max[2] = {0, 0};
     int spin_basis_size[2] = {0, 0};
     int spin_l_max[3] = {0, 0, 0};
     int spin_compress = 0;
-    int spin_chiral = 0;
     int spin_order = 0;
     int spin_soc = 0;
     int spin_projection_size = 0;
@@ -157,7 +124,6 @@ public:
     std::vector<int> spin_dof_type_active;
     std::vector<int> spin_env_type_active;
     Body_Channels body;
-    Spin_Layout spin_layout;
     Spin_Polynomial_Layout spin_polynomial_layout;
   };
 

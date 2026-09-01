@@ -49,11 +49,9 @@ Keywords
    * - :ref:`zbl <kw_zbl>`
      - outer cutoff for the universal :term:`ZBL` potential [Ziegler1985]_
    * - :ref:`spin_mode <kw_spin_mode>`
-     - enable Spin NEP Lite or the unified Spin2 descriptor
+     - enable the Spin2 descriptor
    * - :ref:`spin_cutoff <kw_spin_cutoff>`
      - radial and angular cutoffs used by the spin descriptor
-   * - :ref:`spin_n_max <kw_spin_n_max>`
-     - radial and angular channel indices for Spin NEP Lite
    * - :ref:`spin_basis_size <kw_spin_basis_size>`
      - radial and angular basis sizes used by the spin descriptor
    * - :ref:`spin_l_max <kw_spin_l_max>`
@@ -64,8 +62,6 @@ Keywords
      - highest Spin2 contraction level supplied to the neural network
    * - :ref:`spin_soc <kw_spin_soc>`
      - enable joint spin--space rotation-invariant Spin2 channels
-   * - :ref:`spin_chiral <kw_spin_chiral>`
-     - enable the optional chiral channel in Spin NEP Lite
    * - :ref:`spin_dof_type <kw_spin_dof_type>`
      - atom types whose spins are active degrees of freedom
    * - :ref:`spin_env_type <kw_spin_env_type>`

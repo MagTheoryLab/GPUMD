@@ -10,9 +10,8 @@ descriptor::
 
   spin_l_max <l_3body> <l_4body> <l_5body>
 
-The default is ``4 0 0``. For ``spin_mode 1``, ``l_3body`` can range from 0
-to 4. For ``spin_mode 2``, it can range from 0 to 2. In both modes the other
-two values must be zero.
+The default is ``4 0 0``. For ``spin_mode 2``, ``l_3body`` can range from 0
+to 2 and the other two values must be zero.
 
 For Spin2, the first value has the following interpretation:
 

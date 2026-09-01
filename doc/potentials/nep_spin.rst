@@ -13,9 +13,9 @@ vectors. The total energy is the only learned scalar output. Atomic forces,
 virials, magnetic forces, and spin torques are derivatives of this same energy
 and are not produced by independent response networks.
 
-The current unified format is ``nep4_spin2``. It uses the
-order/compression (O/C) descriptor described below. ``nep4_spin1`` is retained
-as the Spin NEP Lite compatibility format.
+The published format is ``nep4_spin2``. It uses the order/compression (O/C)
+descriptor described below. ``nep4_spin2_zbl`` adds a spin-independent ZBL
+term to the same model.
 
 Energy model
 ============
@@ -555,10 +555,6 @@ Model formats and input
    * - Header in ``nep.txt``
      - Training mode
      - Description
-   * - ``nep4_spin1``
-     - ``spin_mode 1``
-     - Spin NEP Lite compatibility model, including its optional chiral
-       channel.
    * - ``nep4_spin2``
      - ``spin_mode 2``
      - Unified O/C descriptor described on this page.

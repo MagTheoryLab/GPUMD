@@ -10,11 +10,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from validate_nep_spin_runtime import selective_type_model
+from validate_nep_spin2_runtime import selective_type_model
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin" / "spin_chiral_protocol"
+FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin2"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", ROOT / "src" / "gpumd"))
 K_B = 8.617343e-5
 PI = 3.14159265358979
@@ -51,7 +51,7 @@ def run_case(
             case / "model.xyz")
     else:
         if potential_text is None:
-            shutil.copy(FIXTURE / "nep.txt", case / "nep.txt")
+            shutil.copy(FIXTURE / "nep4_spin2_o3c2.nep", case / "nep.txt")
         else:
             (case / "nep.txt").write_text(potential_text)
         (case / "model.xyz").write_text(
@@ -308,8 +308,8 @@ def validate_fail_closed(root):
         "nvt_tspin 300 300 100 seed 1 seed 2",
         "nvt_tspin 300 300 100 mass_factor 1 mass_factor 2",
         "nvt_tspin 300 300 100 mass_factor X 0.001 Fe 0",
-        "nvt_tspin 300 300 100 mass_factor Fe -1 O 0.001",
-        "nvt_tspin 300 300 100 mass_factor Fe 0 O 0",
+        "nvt_tspin 300 300 100 mass_factor Fe -1 Ge 0.001",
+        "nvt_tspin 300 300 100 mass_factor Fe 0 Ge 0",
         "nvt_tspin 300 300 100 lattice maybe",
         "nvt_tspin 300 300 100 lattice off lattice on",
         "nvt_tspin 300 300 100 future 1",
@@ -331,7 +331,7 @@ def validate_fail_closed(root):
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
-        'O 3 0 0 0 0 0 0.4 -0.3 0.7\n')
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7\n')
     _, missing_element = run_case(
         root,
         "bad_missing_element_factor",
@@ -399,7 +399,7 @@ def validate_short_dynamics(root):
         "time_step 0.1\n"
         "dump_xyz -1 0 10 trajectory.xyz mass spin spin_velocity\n"
         "run 500\n",
-        model_with_zero_lattice_velocity("model_small_pbc.xyz"))
+        model_with_zero_lattice_velocity())
     if result.returncode != 0:
         raise RuntimeError(result.stdout + result.stderr)
     temperatures = read_spin_temperatures(
@@ -447,7 +447,7 @@ def validate_integrator_ignores_potential_mask(root):
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
         'pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
-        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
     initial_inactive_spin = [0.4, -0.3, 0.7]
     case, result = run_case(
         root,
@@ -547,12 +547,12 @@ def validate_element_mass_factors(root):
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
         'pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
-        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
     case, result = run_case(
         root,
         "element_mass_factor",
         "potential nep.txt\n"
-        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 O 1.5 seed 97531\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 Ge 1.5 seed 97531\n"
         "time_step 0.1\n"
         "dump_xyz -1 0 1 state.xyz spin spin_velocity\n"
         "run 1\n",

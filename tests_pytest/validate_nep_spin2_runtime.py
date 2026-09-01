@@ -16,6 +16,11 @@ FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin2"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", ROOT / "src" / "gpumd"))
 
 
+def selective_type_model():
+    """Return the Spin2 fixture with Fe spin DOFs and Fe/Ge environments."""
+    return (FIXTURE / "nep4_spin2_o3c2.nep").read_text()
+
+
 def write_xyz(path, case):
     lattice = " ".join(f"{value:.17g}" for value in case["cell"])
     lines = [
@@ -167,6 +172,22 @@ def run_case(root, name, case, model):
     return read_frame(directory / "result.xyz")
 
 
+def validate_removed_spin1(root):
+    model, oracle = load_fixture("c2")
+    case = next(iter(oracle["cases"].values()))
+    directory = root / "removed_spin1"
+    directory.mkdir()
+    write_xyz(directory / "model.xyz", case)
+    (directory / "nep.txt").write_text(
+        model.replace("nep4_spin2", "nep4_spin1", 1))
+    (directory / "run.in").write_text(
+        "potential nep.txt\nensemble nve\ntime_step 0\nrun 1\n")
+    result = subprocess.run(
+        [str(GPUMD)], cwd=directory, capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        raise AssertionError("removed nep4_spin1 model was accepted")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -181,6 +202,7 @@ def main():
     errors = {}
     with tempfile.TemporaryDirectory(prefix="gpumd-spin2-") as temp:
         root = Path(temp)
+        validate_removed_spin1(root)
         for fixture in args.fixtures:
             model, oracle = load_fixture(fixture)
             selected = args.cases or list(oracle["cases"])
@@ -227,7 +249,9 @@ def main():
                         f"{key}: tolerance {args.tolerance:.3e} exceeded: {failed}")
 
     worst = max(error for case in errors.values() for error in case.values())
-    print(f"spin2 oracle validation passed: cases={len(errors)} max_error={worst:.3e}")
+    print(
+        f"spin2 oracle validation passed: cases={len(errors)} "
+        f"max_error={worst:.3e}; nep4_spin1 rejected")
 
 
 if __name__ == "__main__":

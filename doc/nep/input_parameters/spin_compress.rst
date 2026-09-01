@@ -15,10 +15,9 @@ radial basis, and every Spin2 contraction family reuses the same :math:`C`
 channels. It therefore controls descriptor rank and cost; it does not select
 a fixed list of Hamiltonian terms.
 
-For ``spin_mode 1``, the value is additionally limited to 1--4 and cannot
-exceed ``spin_basis_size + 1``. For ``spin_mode 2``, the resulting complete
-descriptor must not exceed 96 magnetic coordinates. The exact count also
-depends on :ref:`spin_order <kw_spin_order>`,
+For ``spin_mode 2``, the resulting complete descriptor must not exceed 96
+magnetic coordinates. The exact count also depends on
+:ref:`spin_order <kw_spin_order>`,
 :ref:`spin_l_max <kw_spin_l_max>`, and :ref:`spin_soc <kw_spin_soc>`.
 
 For example, the commonly used order-3, :math:`l_\mathrm{max}=2`, SOC-enabled

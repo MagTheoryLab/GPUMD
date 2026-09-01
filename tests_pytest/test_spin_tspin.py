@@ -11,10 +11,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from validate_nep_spin_runtime import selective_type_model
+from validate_nep_spin2_runtime import selective_type_model
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin" / "spin_chiral_protocol"
+FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin2"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", Path(__file__).parents[1] / "src" / "gpumd"))
 K_B = 8.617343e-5
 PI = 3.14159265358979
@@ -43,7 +43,7 @@ def _model_with_zero_lattice_velocity():
 
 def _prepare_case(case_dir, run_input, model_text=None):
     case_dir.mkdir()
-    shutil.copy(FIXTURE / "nep.txt", case_dir / "nep.txt")
+    shutil.copy(FIXTURE / "nep4_spin2_o3c2.nep", case_dir / "nep.txt")
     (case_dir / "model.xyz").write_text(
         model_text if model_text is not None else _model_with_zero_lattice_velocity())
     (case_dir / "run.in").write_text(run_input)
@@ -258,8 +258,8 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
         "nvt_tspin 300 300 100 seed 1 seed 2",
         "nvt_tspin 300 300 100 mass_factor 1 mass_factor 2",
         "nvt_tspin 300 300 100 mass_factor X 0.001 Fe 0",
-        "nvt_tspin 300 300 100 mass_factor Fe -1 O 0.001",
-        "nvt_tspin 300 300 100 mass_factor Fe 0 O 0",
+        "nvt_tspin 300 300 100 mass_factor Fe -1 Ge 0.001",
+        "nvt_tspin 300 300 100 mass_factor Fe 0 Ge 0",
         "nvt_tspin 300 300 100 lattice maybe",
         "nvt_tspin 300 300 100 lattice off lattice on",
         "nvt_tspin 300 300 100 future 1",
@@ -285,7 +285,7 @@ def test_element_mass_factor_requires_every_present_element(tmp_path):
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
-        'O 3 0 0 0 0 0 0.4 -0.3 0.7\n')
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7\n')
     (directory / "run.in").write_text(
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor Fe 0.001\n"
@@ -369,7 +369,7 @@ def test_tspin_integrates_coordinates_excluded_by_potential_response_mask(tmp_pa
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
         'pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
-        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
     (directory / "run.in").write_text(
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
@@ -397,10 +397,10 @@ def test_element_mass_factor_zero_freezes_only_selected_spins(tmp_path):
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
         'pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
-        'O 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
     (directory / "run.in").write_text(
         "potential nep.txt\n"
-        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 O 1.5 seed 97531\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 Ge 1.5 seed 97531\n"
         "time_step 0.1\n"
         "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
@@ -414,7 +414,7 @@ def test_element_mass_factor_zero_freezes_only_selected_spins(tmp_path):
     np.testing.assert_allclose(actual["spin_velocity"][0], 0.0, atol=0.0)
     assert np.max(np.abs(actual["spin"][1] - [0.4, -0.3, 0.7])) > 1.0e-12
     assert "spin mass factor for Fe is 0" in result.stdout
-    assert "spin mass factor for O is 1.5" in result.stdout
+    assert "spin mass factor for Ge is 1.5" in result.stdout
 
 
 def test_npt_tspin_runs_with_spin2_force_path(tmp_path):

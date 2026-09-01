@@ -1,5 +1,0 @@
-replicate 10 10 10
-potential nep.txt
-ensemble nvt_nhc 300 300 100
-time_step 0.1
-run 200

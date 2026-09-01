@@ -593,16 +593,15 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
     tokens = get_tokens(input);
     int num_lines_to_be_skipped = 5;
     const bool spin2_zbl = tokens[0] == "nep4_spin2_zbl";
-    if (tokens[0] == "nep4_spin1" || tokens[0] == "nep4_spin2" || spin2_zbl) {
-      const int expected_mode = tokens[0] == "nep4_spin1" ? 1 : 2;
+    if (tokens[0] == "nep4_spin2" || spin2_zbl) {
       tokens = get_tokens(input);
       if (tokens.size() != 3 || tokens[0] != "spin_mode" ||
-          get_int_from_token(tokens[1], __FILE__, __LINE__) != expected_mode) {
+          get_int_from_token(tokens[1], __FILE__, __LINE__) != 2) {
         PRINT_INPUT_ERROR("Invalid counted spin header in nep.txt.");
       }
       const int spin_header_lines =
         get_int_from_token(tokens[2], __FILE__, __LINE__);
-      const int minimum_lines = expected_mode == 2 ? 9 : 8;
+      constexpr int minimum_lines = 9;
       if (spin_header_lines < minimum_lines ||
           spin_header_lines > minimum_lines + 2) {
         PRINT_INPUT_ERROR("Invalid counted spin header length in nep.txt.");

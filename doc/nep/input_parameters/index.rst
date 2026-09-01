@@ -44,11 +44,9 @@ Below you can find a listing of keywords for the ``nep.in`` input file.
    charge_mode
    spin_mode
    spin_compress
-   spin_n_max
    spin_basis_size
    spin_l_max
    spin_cutoff
-   spin_chiral
    spin_order
    spin_soc
    spin_dof_type
