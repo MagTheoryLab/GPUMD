@@ -5,13 +5,13 @@
 :attr:`spin_soc`
 =================
 
-This Spin2 keyword controls whether the descriptor can couple spin direction
+This Spin3 keyword controls whether the descriptor can couple spin direction
 to the local spatial environment::
 
   spin_soc <flag>
 
 The flag can be 0 or 1 and defaults to 1. It is used only with
-``spin_mode 2``.
+``spin_mode 3``.
 
 .. list-table::
    :header-rows: 1
@@ -24,7 +24,7 @@ The flag can be 0 or 1 and defaults to 1. It is used only with
    * - 1
      - joint rotations of positions and axial spin vectors (default)
 
-With value 0, Spin2 retains only the separately spin-rotation-invariant
+With value 0, Spin3 retains only the separately spin-rotation-invariant
 subset. With value 1, it also includes scalar contractions between spin and
 spatial rank-1/rank-2 objects up to
 :ref:`spin_l_max <kw_spin_l_max>`. The flag changes the descriptor's allowed

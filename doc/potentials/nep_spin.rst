@@ -13,8 +13,8 @@ vectors. The total energy is the only learned scalar output. Atomic forces,
 virials, magnetic forces, and spin torques are derivatives of this same energy
 and are not produced by independent response networks.
 
-The published format is ``nep4_spin2``. It uses the order/compression (O/C)
-descriptor described below. ``nep4_spin2_zbl`` adds a spin-independent ZBL
+The published format is ``nep4_spin3``. It uses the order/compression (O/C)
+descriptor described below. ``nep4_spin3_zbl`` adds a spin-independent ZBL
 term to the same model.
 
 Energy model
@@ -43,14 +43,14 @@ element-dependent neural network used by ordinary NEP4. The total energy is
 where :math:`\boldsymbol{r}_i` is the position, :math:`\boldsymbol{s}_i` is a
 dimensionless Cartesian spin vector, :math:`Z_i` denotes the atom type, and
 :math:`E^0_{Z_i}` is a fitted per-type energy baseline. The ZBL term is present
-only for ``nep4_spin2_zbl`` and contains no spin dependence.
+only for ``nep4_spin3_zbl`` and contains no spin dependence.
 
 This architecture allows the nonlinear network to combine structural and
 magnetic coordinates. Therefore, ``spin_order`` describes the hierarchy of
 primitive magnetic contractions supplied to the network; it is not the body
 order of the final energy.
 
-Spin2 radial channels
+Spin3 radial channels
 =====================
 
 Let
@@ -61,7 +61,7 @@ Let
    = \frac{\boldsymbol{r}_j-\boldsymbol{r}_i}{r_{ij}}
 
 be the minimum-image unit vector from center atom :math:`i` to neighbor
-:math:`j`. For each compressed radial channel :math:`c=1,\ldots,C`, Spin2
+:math:`j`. For each compressed radial channel :math:`c=1,\ldots,C`, Spin3
 forms the type-dependent edge weight
 
 .. math::
@@ -96,7 +96,7 @@ families use the same :math:`C` radial channels.
 Canonical edge-moment bank
 ==========================
 
-Spin2 organizes each neighbor edge into a canonical collection of scalar,
+Spin3 organizes each neighbor edge into a canonical collection of scalar,
 vector, rank-2, and product-tensor objects. Define the symmetric traceless
 product
 
@@ -212,7 +212,7 @@ and
    \boldsymbol{\rho}^{s}_{ic}\cdot
    \boldsymbol{\rho}^{(s\cdot s)s}_{ic}.
 
-For a radial-channel pair :math:`c\leq d`, Spin2 keeps same-edge and
+For a radial-channel pair :math:`c\leq d`, Spin3 keeps same-edge and
 distinct-neighbor correlations separately:
 
 .. math::
@@ -229,6 +229,33 @@ distinct-neighbor correlations separately:
 
 This separation prevents a two-density contraction from conflating repeated
 use of one neighbor edge with a correlation between distinct neighbors.
+
+Spin3 additionally resolves the distinct-neighbor exchange by spatial angular
+rank. Define
+
+.. math::
+
+   \boldsymbol{A}^{(1)}_{ic}
+   &=\sum_j w^i_{jc}(\boldsymbol{s}_i\cdot\boldsymbol{s}_j)
+     \boldsymbol{e}_{ij},\\
+   \boldsymbol{A}^{(2)}_{ic}
+   &=\sum_j w^i_{jc}(\boldsymbol{s}_i\cdot\boldsymbol{s}_j)
+     \operatorname{stf}_5(\boldsymbol{e}_{ij},\boldsymbol{e}_{ij}).
+
+For every :math:`c\leq d`, the new coordinates are
+
+.. math::
+
+   D^{i,(1)}_{cd}
+   &=\boldsymbol{A}^{(1)}_{ic}\cdot\boldsymbol{A}^{(1)}_{id}-S^i_{cd},\\
+   D^{i,(2)}_{cd}
+   &=\frac{3}{2}\boldsymbol{A}^{(2)}_{ic}\cdot
+     \boldsymbol{A}^{(2)}_{id}-S^i_{cd}.
+
+The subtraction removes the repeated-edge contribution, while the
+:math:`3/2` factor compensates the norm of the rank-2 STF representation.
+These blocks distinguish angular exchange environments that have the same
+scalar distinct-neighbor contraction.
 
 Joint spin--orbit contractions use four learned radial-leg mixing matrices
 :math:`A^{(\alpha)}\in\mathbb{R}^{C\times C}`. For any moment family
@@ -299,7 +326,7 @@ or other spin-Hamiltonian coefficient to any individual descriptor channel.
 Symmetries
 ==========
 
-All Spin2 descriptor coordinates are even under global time reversal,
+All Spin3 descriptor coordinates are even under global time reversal,
 
 .. math::
 
@@ -338,7 +365,7 @@ Let :math:`P=C(C+1)/2`, :math:`I_X` be 1 when condition :math:`X` is true and
    a_C=1+I_{C\geq2},\qquad b_C=1+2I_{C\geq2}.
 
 For :math:`L=l_\mathrm{max}` and :math:`S=\texttt{spin\_soc}`, the order-1
-Spin2 dimension is
+Spin3 dimension is
 
 .. math::
 
@@ -352,7 +379,8 @@ The order-2 increment is
    +C I_{L\geq1}\left(3I_S+1-I_S\right)
    +C I_{L\geq2}+C+2P\\
    &+a_C C I_S I_{L\geq1}
-   +a_C C I_S I_{L\geq2},
+   +a_C C I_S I_{L\geq2}
+   +P I_{L\geq1}+P I_{L\geq2},
 
 and the order-3 increment is
 
@@ -365,16 +393,22 @@ and the order-3 increment is
 
 Therefore :math:`D_2=D_1+\Delta D_2` and
 :math:`D_3=D_2+\Delta D_3`. For the common :math:`L=2`, ``spin_soc 1`` shape,
-O2-C2 has 37 magnetic coordinates and O3-C2 has 49. The implementation limits
+O2-C2 has 43 magnetic coordinates and O3-C2 has 55. The implementation limits
 the magnetic part to 96 coordinates and requires the combined structural and
 magnetic dimension to satisfy :math:`D_\mathrm{str}+D_\mathrm{spin}\leq103`.
 With the ordinary structural defaults, :math:`D_\mathrm{str}=42`; the common
-O3-C2-L2-SOC1 shape therefore gives :math:`42+49=91` total coordinates.
+O3-C2-L2-SOC1 shape therefore gives :math:`42+55=97` total coordinates.
 
 The trainable magnetic descriptor parameters comprise
-:math:`9C N_\mathrm{typ}^2` radial coefficients and, for Spin2,
+:math:`9C N_\mathrm{typ}^2` radial coefficients and, for Spin3,
 :math:`4C^2` radial-leg mixing coefficients. These are optimized together
 with the neural-network parameters by SNES.
+
+Structural coordinates retain the ordinary inverse-range scaler. Magnetic
+coordinates use
+:math:`1/\max(\operatorname{RMS}(q),\operatorname{range}(q),1)`, without
+centering. Their gain is therefore never larger than one, including for a
+constant or initially unresolved magnetic channel.
 
 Energy derivatives
 ==================
@@ -415,7 +449,7 @@ component, the chain rule gives
 
 The implementation first evaluates
 :math:`\partial U_i/\partial q^i_\nu` through the neural network and then
-applies the analytical vector--Jacobian product of every Spin2 contraction,
+applies the analytical vector--Jacobian product of every Spin3 contraction,
 moment reduction, and radial basis function. The same position derivative
 produces the full per-atom virial. No finite-difference force path is used.
 
@@ -495,22 +529,33 @@ magnetic-force and torque RMSE terms,
    + \lambda_\mathrm{tau} L_\mathrm{tau}
    + \lambda_\mathrm{resp} L_\mathrm{resp},
 
-where, for :math:`N_\mathrm{m}` labeled active atoms,
+where, for :math:`N_\mathrm{m}` labeled active nonzero spins,
 
 .. math::
 
-   L_\mathrm{m}
+   L_\mathrm{m,full}
    &=\left[
      \frac{1}{3N_\mathrm{m}}
      \sum_i |\boldsymbol{M}^{\mathrm{NEP}}_i-
                   \boldsymbol{M}^{\mathrm{tar}}_i|^2
      \right]^{1/2},\\
+   L_\mathrm{m,transverse}
+   &=\left[
+     \frac{1}{2N_\mathrm{m}}
+     \sum_i |P_i^\perp(\boldsymbol{M}^{\mathrm{NEP}}_i-
+                  \boldsymbol{M}^{\mathrm{tar}}_i)|^2
+     \right]^{1/2},\\
    L_\mathrm{tau}
    &=\left[
-     \frac{1}{3N_\mathrm{m}}
+     \frac{1}{2N_\mathrm{m}}
      \sum_i |\boldsymbol{s}_i\times\boldsymbol{M}^{\mathrm{NEP}}_i-
                   \boldsymbol{s}_i\times\boldsymbol{M}^{\mathrm{tar}}_i|^2
      \right]^{1/2}.
+
+Here :math:`P_i^\perp=I-\boldsymbol{s}_i\boldsymbol{s}_i^T/
+|\boldsymbol{s}_i|^2`. The required :ref:`spin_mforce_mode
+<kw_spin_mforce_mode>` keyword selects the full or transverse magnetic-force
+loss. Zero spins are excluded from the transverse and torque denominators.
 
 For a grouped rotation path with coordinate :math:`\theta`, the response
 generator evaluated for frame :math:`n` is
@@ -555,12 +600,12 @@ Model formats and input
    * - Header in ``nep.txt``
      - Training mode
      - Description
-   * - ``nep4_spin2``
-     - ``spin_mode 2``
+   * - ``nep4_spin3``
+     - ``spin_mode 3``
      - Unified O/C descriptor described on this page.
-   * - ``nep4_spin2_zbl``
-     - ``spin_mode 2`` and :ref:`zbl <kw_zbl>`
-     - Spin2 plus a spin-independent short-range ZBL contribution.
+   * - ``nep4_spin3_zbl``
+     - ``spin_mode 3`` and :ref:`zbl <kw_zbl>`
+     - Spin3 plus a spin-independent short-range ZBL contribution.
 
 See :ref:`spin_mode <kw_spin_mode>` and the neighboring ``spin_*`` keyword
 pages for descriptor configuration. The complete extended-XYZ data contract,

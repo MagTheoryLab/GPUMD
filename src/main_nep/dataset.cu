@@ -564,7 +564,7 @@ void Dataset::find_neighbor(Parameters& para)
       atomic_numbers.data(),
       rc_radial.data(),
       rc_angular.data(),
-      para.spin_cutoff[0],
+      para.spin_cutoff,
       box.data(),
       box_original.data(),
       num_cell.data(),
@@ -680,7 +680,7 @@ void Dataset::find_neighbor(Parameters& para)
       atomic_numbers.data(),
       rc_radial.data(),
       rc_angular.data(),
-      para.spin_cutoff[0],
+      para.spin_cutoff,
       box.data(),
       box_original.data(),
       num_cell.data(),
@@ -747,7 +747,7 @@ void Dataset::find_neighbor(Parameters& para)
   printf("    Maximum number of neighbors for one atom = %d.\n", max_NN_angular);
   printf("    Average number of neighbors for one atom = %g.\n", sum_NN_angular / float(N));
   if (para.spin_mode) {
-    printf("Spin descriptor with a cutoff of %g A:\n", para.spin_cutoff[0]);
+    printf("Spin descriptor with a maximum cutoff of %g A:\n", para.spin_cutoff);
     printf("    Minimum number of neighbors for one atom = %d.\n", min_NN_spin);
     printf("    Maximum number of neighbors for one atom = %d.\n", max_NN_spin);
     printf(
@@ -893,6 +893,7 @@ static __global__ void gpu_sum_mforce_error(
   const double* spin,
   const float* mforce,
   const float* mforce_ref,
+  const int mforce_mode,
   float* error)
 {
   const int configuration = blockIdx.x;
@@ -913,10 +914,14 @@ static __global__ void gpu_sum_mforce_error(
         mforce_ref[atom],
         mforce_ref[N + atom],
         mforce_ref[2 * N + atom]};
+      const double sx = spin[atom];
+      const double sy = spin[N + atom];
+      const double sz = spin[2 * N + atom];
+      const double spin2 = sx * sx + sy * sy + sz * sz;
+      if ((Torque || mforce_mode == 1) && spin2 <= 1.0e-20) {
+        continue;
+      }
       if constexpr (Torque) {
-        const double sx = spin[atom];
-        const double sy = spin[N + atom];
-        const double sz = spin[2 * N + atom];
         const float predicted_tau[3] = {
           static_cast<float>(sy * predicted[2] - sz * predicted[1]),
           static_cast<float>(sz * predicted[0] - sx * predicted[2]),
@@ -931,6 +936,19 @@ static __global__ void gpu_sum_mforce_error(
           sum += difference * difference;
         }
       } else {
+        if (mforce_mode == 1) {
+          const double inverse_spin2 = 1.0 / spin2;
+          const double predicted_parallel =
+            (sx * predicted[0] + sy * predicted[1] + sz * predicted[2]) * inverse_spin2;
+          const double reference_parallel =
+            (sx * reference[0] + sy * reference[1] + sz * reference[2]) * inverse_spin2;
+          predicted[0] -= static_cast<float>(predicted_parallel * sx);
+          predicted[1] -= static_cast<float>(predicted_parallel * sy);
+          predicted[2] -= static_cast<float>(predicted_parallel * sz);
+          reference[0] -= static_cast<float>(reference_parallel * sx);
+          reference[1] -= static_cast<float>(reference_parallel * sy);
+          reference[2] -= static_cast<float>(reference_parallel * sz);
+        }
         for (int component = 0; component < 3; ++component) {
           const float difference = predicted[component] - reference[component];
           sum += difference * difference;
@@ -971,6 +989,7 @@ static std::vector<float> get_rmse_spin_impl(
       dataset.spin.data(),
       dataset.mforce.data(),
       dataset.mforce_ref_gpu.data(),
+      para.spin_mforce_mode,
       dataset.error_gpu.data());
   GPU_CHECK_KERNEL
   dataset.error_gpu.copy_to_host(dataset.error_cpu.data());
@@ -982,8 +1001,18 @@ static std::vector<float> get_rmse_spin_impl(
       continue;
     }
     int active_count = 0;
-    for (int type : dataset.structures[configuration].type) {
-      active_count += para.spin_dof_type_active[type];
+    const auto& structure = dataset.structures[configuration];
+    for (int atom = 0; atom < structure.num_atom; ++atom) {
+      if (!para.spin_dof_type_active[structure.type[atom]]) {
+        continue;
+      }
+      const double spin2 =
+        structure.sx[atom] * structure.sx[atom] +
+        structure.sy[atom] * structure.sy[atom] +
+        structure.sz[atom] * structure.sz[atom];
+      if ((!Torque && para.spin_mforce_mode == 0) || spin2 > 1.0e-20) {
+        ++active_count;
+      }
     }
     const float weighted_error =
       use_weight
@@ -999,7 +1028,10 @@ static std::vector<float> get_rmse_spin_impl(
   }
   for (int type = 0; type <= para.num_types; ++type) {
     if (count_array[type] > 0) {
-      rmse_array[type] = sqrt(rmse_array[type] / (3 * count_array[type]));
+      const int degrees_of_freedom =
+        Torque || para.spin_mforce_mode == 1 ? 2 : 3;
+      rmse_array[type] = sqrt(
+        rmse_array[type] / (degrees_of_freedom * count_array[type]));
     }
   }
   return rmse_array;

@@ -116,8 +116,8 @@ void Force::parse_potential(
     potential.reset(new FCP(fid_potential, num_types, number_of_atoms, box));
     is_fcp = true;
   } else if (
-    strcmp(potential_name, "nep4_spin2") == 0 ||
-    strcmp(potential_name, "nep4_spin2_zbl") == 0) {
+    strcmp(potential_name, "nep4_spin3") == 0 ||
+    strcmp(potential_name, "nep4_spin3_zbl") == 0) {
     if (!potentials.empty()) {
       PRINT_INPUT_ERROR("NEP_Spin must be the only potential in a run.");
     }

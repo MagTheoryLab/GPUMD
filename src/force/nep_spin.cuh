@@ -27,9 +27,10 @@ struct NEP_Spin_Data {
   GPU_Vector<float> spin_baseline;
   GPU_Vector<int> spin_dof_type_active;
   GPU_Vector<int> spin_env_type_active;
+  GPU_Vector<float> spin_cutoff_pair;
   GPU_Vector<float> spin_projection_parameters;
-  GPU_Vector<float> spin2_moments;
-  GPU_Vector<float> spin2_pulls;
+  GPU_Vector<float> spin3_moments;
+  GPU_Vector<float> spin3_pulls;
   GPU_Vector<int> NN_radial;
   GPU_Vector<int> NL_radial;
   GPU_Vector<int> NN_angular;
@@ -64,6 +65,10 @@ public:
     int density_l0_dot_response = -1;
     int correlation_same_edge = -1;
     int correlation_distinct_neighbor = -1;
+    int correlation_distinct_l1 = -1;
+    int correlation_distinct_l2 = -1;
+    int angular_l1_moment_offset = -1;
+    int angular_l2_moment_offset = -1;
     int coupling_l11_axial = -1;
     int edge_l11_axial = -1;
     int coupling_l22_axial = -1;
@@ -91,7 +96,7 @@ public:
   };
 
   struct Model {
-    int spin_mode = 2;
+    int spin_mode = 3;
     int num_types = 0;
     int n_max_radial = 0;
     int n_max_angular = 0;
@@ -109,7 +114,7 @@ public:
     int spin_projection_size = 0;
     double cutoff_radial = 0.0;
     double cutoff_angular = 0.0;
-    double spin_cutoff[2] = {0.0, 0.0};
+    double spin_cutoff = 0.0;
     int struct_descriptor_dim = 0;
     int spin_descriptor_dim = 0;
     int descriptor_dim = 0;
@@ -123,6 +128,7 @@ public:
     std::vector<double> spin_baseline;
     std::vector<int> spin_dof_type_active;
     std::vector<int> spin_env_type_active;
+    std::vector<double> spin_cutoff_by_type;
     Body_Channels body;
     Spin_Polynomial_Layout spin_polynomial_layout;
   };

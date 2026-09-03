@@ -73,14 +73,15 @@ public:
   float typewise_cutoff_zbl_factor;
   int output_descriptor;
   int charge_mode; // add dynamic charge to NEP potential model
-  int spin_mode;   // 0=ordinary NEP, 2=Spin2 O/C polynomial
+  int spin_mode;   // 0=ordinary NEP, 3=Spin3 angular-exchange O/C polynomial
   int spin_compress;
   int spin_order;
   int spin_soc;
   int spin_curriculum;
+  int spin_mforce_mode; // 0=full -dE/dS, 1=transverse projection
   int spin_basis_size[2];
   int spin_l_max[3];
-  float spin_cutoff[2];
+  float spin_cutoff;
   bool has_bec = false; // check if there are target BEC values
   int flip_charge = 0; // 1 for flipping charges upon restarting
   int fine_tune = 0; // fine_tune option; 0=no, 1=yes
@@ -124,6 +125,7 @@ public:
   bool is_spin_order_set;
   bool is_spin_soc_set;
   bool is_spin_curriculum_set;
+  bool is_spin_mforce_mode_set;
   bool is_spin_basis_size_set;
   bool is_spin_l_max_set;
   bool is_spin_cutoff_set;
@@ -154,6 +156,7 @@ public:
   std::vector<int> spin_dof_type_active;
   std::vector<int> spin_env_type_active;
   std::vector<float> spin_baseline;
+  std::vector<float> spin_cutoff_by_type;
   std::vector<int> atomic_numbers;    // atomic numbers
   std::vector<float> zbl_para;        // parameters of zbl potential
   std::vector<float> rc_radial;       // radial cutoff distance
@@ -165,6 +168,8 @@ public:
   GPU_Vector<float> q_scaler_gpu[16]; // used to scale some descriptor components (GPU)
   GPU_Vector<float> q_scaler_max[16]; // used to scale some descriptor components (GPU)
   GPU_Vector<float> q_scaler_min[16]; // used to scale some descriptor components (GPU)
+  GPU_Vector<float> q_scaler_square_sum[16];
+  GPU_Vector<unsigned long long> q_scaler_count[16];
 
 private:
   void set_default_parameters();
@@ -213,6 +218,7 @@ private:
   void parse_spin_order(const char** param, int num_param);
   void parse_spin_soc(const char** param, int num_param);
   void parse_spin_curriculum(const char** param, int num_param);
+  void parse_spin_mforce_mode(const char** param, int num_param);
   void parse_spin_basis_size(const char** param, int num_param);
   void parse_spin_l_max(const char** param, int num_param);
   void parse_spin_cutoff(const char** param, int num_param);

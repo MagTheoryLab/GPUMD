@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate spin2 training, checkpoint prediction, and GPUMD runtime parity."""
+"""Validate spin3 training, checkpoint prediction, and GPUMD runtime parity."""
 
 import argparse
 import json
@@ -18,7 +18,8 @@ GPUMD = Path(os.environ.get("GPUMD_COMMAND", ROOT / "src" / "gpumd"))
 NEP_IN = """\
 type 2 Fe Ge
 version 4
-spin_mode 2
+spin_mode 3
+spin_mforce_mode full
 spin_dof_type Fe
 spin_env_type Fe Ge
 cutoff 6.0 5.0
@@ -29,7 +30,7 @@ neuron 4
 spin_compress 2
 spin_basis_size 8 0
 spin_l_max 2 0 0
-spin_cutoff 6.0 6.0
+spin_cutoff 6.0
 spin_order 3
 spin_soc 1
 lambda_m 1.0
@@ -132,7 +133,13 @@ def validate_parser(root):
         "invalid_second_basis": NEP_IN.replace("spin_basis_size 8 0", "spin_basis_size 8 1"),
         "invalid_order": NEP_IN.replace("spin_order 3", "spin_order 4"),
         "invalid_soc": NEP_IN.replace("spin_soc 1", "spin_soc 2"),
-        "removed_spin_mode_1": NEP_IN.replace("spin_mode 2", "spin_mode 1"),
+        "removed_spin_mode_1": NEP_IN.replace("spin_mode 3", "spin_mode 1"),
+        "removed_spin_mode_2": NEP_IN.replace("spin_mode 3", "spin_mode 2"),
+        "missing_mforce_mode": NEP_IN.replace("spin_mforce_mode full\n", ""),
+        "invalid_mforce_mode": NEP_IN.replace(
+            "spin_mforce_mode full", "spin_mforce_mode radial"),
+        "invalid_spin_cutoff_arity": NEP_IN.replace(
+            "spin_cutoff 6.0", "spin_cutoff 4.0 5.0 6.0"),
         "removed_spin_chiral": NEP_IN.replace("spin_soc 1", "spin_soc 1\nspin_chiral 1"),
         "curriculum_requires_o3": NEP_IN.replace("spin_order 3", "spin_order 2").replace(
             "lambda_tau 0.5", "lambda_tau 0.5\nspin_curriculum 1"),
@@ -169,25 +176,30 @@ def validate_response_training(root):
     return {"training_loss": loss, "curriculum_schedule": "0 -> 1"}
 
 
-def validate_training_and_runtime(root, enable_zbl=False, spin_compress=2):
+def validate_training_and_runtime(
+        root, enable_zbl=False, spin_compress=2, typewise_spin_cutoff=False,
+        mforce_mode="full"):
     root.mkdir()
     training = root / "training"
     nep_in = NEP_IN.replace("version 4", "version 4\nzbl 2.5") \
         if enable_zbl else NEP_IN
     nep_in = nep_in.replace(
         "spin_compress 2", f"spin_compress {spin_compress}")
+    nep_in = nep_in.replace("spin_mforce_mode full", f"spin_mforce_mode {mforce_mode}")
+    if typewise_spin_cutoff:
+        nep_in = nep_in.replace("spin_cutoff 6.0", "spin_cutoff 5.0 7.0")
     write_case(training, nep_in)
     result = run(NEP, training)
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
 
     checkpoint = (training / "nep.txt").read_text()
-    expected_header = "nep4_spin2_zbl" if enable_zbl else "nep4_spin2"
+    expected_header = "nep4_spin3_zbl" if enable_zbl else "nep4_spin3"
     if not checkpoint.startswith(
-            f"{expected_header} 2 Fe Ge \nspin_mode 2 11\n"):
-        raise AssertionError("invalid counted spin2 checkpoint")
+            f"{expected_header} 2 Fe Ge \nspin_mode 3 11\n"):
+        raise AssertionError("invalid counted spin3 checkpoint")
     if enable_zbl and "\nzbl 1.25 2.5\ncutoff " not in checkpoint:
-        raise AssertionError("spin2 ZBL checkpoint is missing its zbl line")
+        raise AssertionError("spin3 ZBL checkpoint is missing its zbl line")
     projection_size = 4 * spin_compress * spin_compress
     required = (
         "spin_basis_size 8\n",
@@ -206,22 +218,29 @@ def validate_training_and_runtime(root, enable_zbl=False, spin_compress=2):
             f"spin_projection_size {projection_size}\n"):
         if line not in checkpoint:
             raise AssertionError(f"missing checkpoint line: {line.strip()}")
+    expected_spin_cutoff = (
+        "spin_cutoff 5.0000000000000000e+00 7.0000000000000000e+00\n"
+        if typewise_spin_cutoff else
+        "spin_cutoff 6.0000000000000000e+00\n")
+    if expected_spin_cutoff not in checkpoint:
+        raise AssertionError("Spin3 checkpoint did not preserve spin_cutoff arity")
 
     loss = (training / "loss.out").read_text().splitlines()[-1]
     if re.search(r"\b(?:nan|inf)\b", loss, re.IGNORECASE):
-        raise AssertionError("spin2 training produced a non-finite loss")
+        raise AssertionError("spin3 training produced a non-finite loss")
     loss_values = [float(value) for value in loss.split()]
     regularization_only = loss_values[2] + loss_values[3]
     if loss_values[1] <= regularization_only + 1.0e-4:
         raise AssertionError(
             "generation-one total loss does not contain the training fitness")
 
-    descriptor_dim = 22 if spin_compress == 1 else 52
+    spin_descriptor_dims = {1: 21, 2: 55, 3: 91}
+    descriptor_dim = 3 + spin_descriptor_dims[spin_compress]
     q_scaler = [
         float(value) for value in checkpoint.splitlines()[-descriptor_dim:]]
     if max(q_scaler) >= 1.0e4:
         raise AssertionError(
-            f"spin2 q_scaler is ill-conditioned: max={max(q_scaler)}")
+            f"spin3 q_scaler is ill-conditioned: max={max(q_scaler)}")
 
     prediction = root / "prediction"
     prediction.mkdir()
@@ -285,6 +304,8 @@ def validate_training_and_runtime(root, enable_zbl=False, spin_compress=2):
         "q_scaler_max": max(q_scaler),
         "zbl": enable_zbl,
         "spin_compress": spin_compress,
+        "typewise_spin_cutoff": typewise_spin_cutoff,
+        "mforce_mode": mforce_mode,
         "descriptor_dim": descriptor_dim,
     }
     for name in ("energy_per_atom", "force", "mforce", "virial_per_atom"):
@@ -312,14 +333,17 @@ def main():
     args = parser.parse_args()
     NEP = args.nep.resolve()
     GPUMD = args.gpumd.resolve()
-    with tempfile.TemporaryDirectory(prefix="gpumd-main-nep-spin2-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="gpumd-main-nep-spin3-") as tmp:
         root = Path(tmp)
         report = {
             "parser_negative_exit_codes": validate_parser(root / "parser"),
             "response_training": validate_response_training(root / "response"),
             "training_runtime": validate_training_and_runtime(root / "correctness"),
+            "o3c3_training_runtime": validate_training_and_runtime(
+                root / "o3c3", spin_compress=3),
             "rank_one_training_runtime": validate_training_and_runtime(
-                root / "rank-one", spin_compress=1),
+                root / "rank-one", spin_compress=1,
+                typewise_spin_cutoff=True, mforce_mode="transverse"),
             "zbl_training_runtime": validate_training_and_runtime(
                 root / "zbl", enable_zbl=True),
         }

@@ -1,6 +1,6 @@
 #pragma once
 
-// Small device helpers shared by the Spin2 runtime and training paths.
+// Small device helpers shared by the Spin3 runtime and training paths.
 
 __device__ __forceinline__ void minimum_image_delta(
   const SimulationBox& box,

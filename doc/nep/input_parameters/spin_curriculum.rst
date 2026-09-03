@@ -5,11 +5,11 @@
 :attr:`spin_curriculum`
 ========================
 
-This keyword enables a staged SNES search for third-order Spin2 channels::
+This keyword enables a staged SNES search for third-order Spin3 channels::
 
   spin_curriculum <flag>
 
-The flag can be 0 (default) or 1. It requires ``spin_mode 2`` and
+The flag can be 0 (default) or 1. It requires ``spin_mode 3`` and
 ``spin_order 3``.
 
 When enabled, training is divided by the requested number of generations:

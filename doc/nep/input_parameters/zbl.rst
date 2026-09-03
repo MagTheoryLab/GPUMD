@@ -17,8 +17,8 @@ The "inner" cutoff of the :term:`ZBL` potential, below which value the pair inte
 
 When this keyword is absent, the :term:`ZBL` potential will not be enabled and the value of :math:`r_\mathrm{c}^\mathrm{ZBL-outer}` is irrelevant.
 
-ZBL is compatible with :ref:`spin_mode 2 <kw_spin_mode>` and produces a
-``nep4_spin2_zbl`` model. It is not supported with ``spin_mode 1``. Since ZBL
+ZBL is compatible with :ref:`spin_mode 3 <kw_spin_mode>` and produces a
+``nep4_spin3_zbl`` model. It is not supported with ``spin_mode 1``. Since ZBL
 is spin independent, it contributes to energy, force, and virial but not to
 magnetic force or torque.
 

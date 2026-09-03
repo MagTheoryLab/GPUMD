@@ -85,6 +85,7 @@ void Parameters::set_default_parameters()
   is_spin_order_set = false;
   is_spin_soc_set = false;
   is_spin_curriculum_set = false;
+  is_spin_mforce_mode_set = false;
   is_spin_basis_size_set = false;
   is_spin_l_max_set = false;
   is_spin_cutoff_set = false;
@@ -137,13 +138,13 @@ void Parameters::set_default_parameters()
   spin_order = 3;
   spin_soc = 1;
   spin_curriculum = 0;
+  spin_mforce_mode = 0;
   spin_basis_size[0] = 3;
   spin_basis_size[1] = 3;
   spin_l_max[0] = 4;
   spin_l_max[1] = 0;
   spin_l_max[2] = 0;
-  spin_cutoff[0] = 8.0f;
-  spin_cutoff[1] = 4.0f;
+  spin_cutoff = 8.0f;
 
   type_weight_cpu.resize(NUM_ELEMENTS);
   rc_radial.resize(NUM_ELEMENTS);
@@ -214,8 +215,8 @@ void Parameters::read_zbl_in()
 void Parameters::calculate_parameters()
 {
   if (!is_spin_cutoff_set) {
-    spin_cutoff[0] = rc_radial_max;
-    spin_cutoff[1] = rc_angular_max;
+    spin_cutoff = rc_radial_max;
+    spin_cutoff_by_type.assign(num_types, spin_cutoff);
   }
 
   if (charge_mode) {
@@ -228,9 +229,13 @@ void Parameters::calculate_parameters()
     if (version != 4 || train_mode != 0) {
       PRINT_INPUT_ERROR("Spin NEP only supports a NEP4 potential model.\n");
     }
+    if (!prediction && !is_spin_mforce_mode_set) {
+      PRINT_INPUT_ERROR(
+        "Spin3 training requires explicit spin_mforce_mode full or transverse.\n");
+    }
     if (charge_mode || has_multiple_cutoffs) {
       PRINT_INPUT_ERROR(
-        "Spin2 does not support charge or type-dependent cutoffs.\n");
+        "Spin3 does not support charge or type-dependent structural cutoffs.\n");
     }
     if (num_hidden_layers == 2) {
       PRINT_INPUT_ERROR("Spin NEP only supports one hidden layer.\n");
@@ -247,7 +252,7 @@ void Parameters::calculate_parameters()
       spin_l_max[1] != 0 || spin_l_max[2] != 0 ||
       spin_order < 1 || spin_order > 3 ||
       (spin_soc != 0 && spin_soc != 1) ||
-      spin_cutoff[0] <= 0.0f) {
+      spin_cutoff <= 0.0f) {
       PRINT_INPUT_ERROR("Unsupported unified Spin NEP O/C shape in nep.in.\n");
     }
     if (spin_curriculum && spin_order != 3) {
@@ -351,6 +356,8 @@ void Parameters::calculate_parameters()
       if (L >= 1) dim_spin += (spin_soc ? 3 : 1) * C;
       if (L >= 2) dim_spin += C;
       dim_spin += C + 2 * pairs;
+      if (L >= 1) dim_spin += pairs;
+      if (L >= 2) dim_spin += pairs;
       if (spin_soc && L >= 1) {
         dim_spin += (C >= 2 ? 2 : 1) * C;
       }
@@ -374,9 +381,9 @@ void Parameters::calculate_parameters()
     }
   }
   dim = dim_struct + dim_spin;
-  if (dim > MAX_DIM) {
+  if (dim > MAX_DIM_SPIN) {
     PRINT_INPUT_ERROR(
-      "Combined structural and spin descriptor dimension exceeds GPUMD MAX_DIM.\n");
+      "Combined structural and spin descriptor dimension exceeds GPUMD MAX_DIM_SPIN.\n");
   }
   if (train_mode == 3) {
     dim += 1; // concatenate temeprature with descriptors
@@ -397,11 +404,11 @@ void Parameters::calculate_parameters()
     num_types * num_types *
     (dim_radial * (basis_size_radial + 1) + (n_max_angular + 1) * (basis_size_angular + 1));
   number_of_variables_descriptor_spin =
-    spin_mode == 2
+    spin_mode == 3
       ? num_types * num_types * spin_compress * (spin_basis_size[0] + 1)
       : 0;
   number_of_variables_spin_projection =
-    spin_mode == 2 ? 4 * spin_compress * spin_compress : 0;
+    spin_mode == 3 ? 4 * spin_compress * spin_compress : 0;
   number_of_variables_descriptor +=
     number_of_variables_descriptor_spin + number_of_variables_spin_projection;
 
@@ -467,10 +474,14 @@ void Parameters::calculate_parameters()
 
     q_scaler_max[device_id].resize(dim);
     q_scaler_min[device_id].resize(dim);
+    q_scaler_square_sum[device_id].resize(dim);
+    q_scaler_count[device_id].resize(dim);
     std::vector<float> q_scaler_max_cpu(dim, -1.0e10f);
     std::vector<float> q_scaler_min_cpu(dim, 1.0e10f);
     q_scaler_max[device_id].copy_from_host(q_scaler_max_cpu.data());
     q_scaler_min[device_id].copy_from_host(q_scaler_min_cpu.data());
+    q_scaler_square_sum[device_id].fill(0.0f);
+    q_scaler_count[device_id].fill(0);
   }
 }
 
@@ -654,7 +665,7 @@ void Parameters::report_inputs()
   }
 
   if (spin_mode) {
-    printf("    (input)   use Spin2 O/C training.\n");
+    printf("    (input)   use Spin3 O/C training.\n");
     printf(
       "        spin_compress/basis_size/l_max/order/soc = %d/%d/%d/%d/%d.\n",
       spin_compress,
@@ -662,11 +673,18 @@ void Parameters::report_inputs()
       spin_l_max[0],
       spin_order,
       spin_soc);
-    printf("        spin cutoff = %g A.\n", spin_cutoff[0]);
+    printf("        spin cutoff(s) =");
+    for (const float cutoff : spin_cutoff_by_type) {
+      printf(" %g", cutoff);
+    }
+    printf(" A.\n");
     printf(
       "        spin curriculum/response loss = %d/%g.\n",
       spin_curriculum,
       lambda_spin_response);
+    printf(
+      "        spin_mforce_mode = %s.\n",
+      spin_mforce_mode == 0 ? "full" : "transverse");
     printf("        spin_dof_type =");
     for (int type = 0; type < num_types; ++type) {
       if (spin_dof_type_active[type]) {
@@ -917,6 +935,8 @@ void Parameters::parse_one_keyword(std::vector<std::string>& tokens)
     parse_spin_soc(param, num_param);
   } else if (strcmp(param[0], "spin_curriculum") == 0) {
     parse_spin_curriculum(param, num_param);
+  } else if (strcmp(param[0], "spin_mforce_mode") == 0) {
+    parse_spin_mforce_mode(param, num_param);
   } else if (strcmp(param[0], "spin_basis_size") == 0) {
     parse_spin_basis_size(param, num_param);
   } else if (strcmp(param[0], "spin_l_max") == 0) {
@@ -937,11 +957,6 @@ void Parameters::parse_one_keyword(std::vector<std::string>& tokens)
       "spin_env_type",
       spin_env_type_names,
       is_spin_env_type_set);
-  } else if (strcmp(param[0], "spin_type") == 0 ||
-             strcmp(param[0], "spin_descriptor") == 0) {
-    PRINT_INPUT_ERROR(
-      "Use spin_mode with spin_dof_type and optional spin_env_type; "
-      "legacy spin_type/spin_descriptor is not supported.\n");
   } else if (strcmp(param[0], "fine_tune") == 0) {
     parse_fine_tune(param, num_param);
   } else if (strcmp(param[0], "save_potential") == 0) {
@@ -1709,8 +1724,8 @@ void Parameters::parse_spin_mode(const char** param, int num_param)
   }
   is_spin_mode_set = true;
   if (num_param != 2 || !is_valid_int(param[1], &spin_mode) ||
-      (spin_mode != 0 && spin_mode != 2)) {
-    PRINT_INPUT_ERROR("spin_mode should be 0 or 2.\n");
+      (spin_mode != 0 && spin_mode != 3)) {
+    PRINT_INPUT_ERROR("spin_mode should be 0 or 3.\n");
   }
 }
 
@@ -1762,6 +1777,24 @@ void Parameters::parse_spin_curriculum(const char** param, int num_param)
   }
 }
 
+void Parameters::parse_spin_mforce_mode(const char** param, int num_param)
+{
+  if (is_spin_mforce_mode_set) {
+    PRINT_INPUT_ERROR("Duplicate spin_mforce_mode keyword.\n");
+  }
+  is_spin_mforce_mode_set = true;
+  if (num_param != 2) {
+    PRINT_INPUT_ERROR("spin_mforce_mode should be full or transverse.\n");
+  }
+  if (strcmp(param[1], "full") == 0) {
+    spin_mforce_mode = 0;
+  } else if (strcmp(param[1], "transverse") == 0) {
+    spin_mforce_mode = 1;
+  } else {
+    PRINT_INPUT_ERROR("spin_mforce_mode should be full or transverse.\n");
+  }
+}
+
 void Parameters::parse_spin_basis_size(const char** param, int num_param)
 {
   if (is_spin_basis_size_set) {
@@ -1796,16 +1829,21 @@ void Parameters::parse_spin_cutoff(const char** param, int num_param)
     PRINT_INPUT_ERROR("Duplicate spin_cutoff keyword.\n");
   }
   is_spin_cutoff_set = true;
-  double radial = 0.0;
-  double angular = 0.0;
-  if (num_param != 3 ||
-      !is_valid_real(param[1], &radial) ||
-      !is_valid_real(param[2], &angular) ||
-      radial <= 0.0 || angular <= 0.0) {
-    PRINT_INPUT_ERROR("spin_cutoff should have two positive numbers.\n");
+  if (num_types <= 0 || (num_param != 2 && num_param != num_types + 1)) {
+    PRINT_INPUT_ERROR(
+      "spin_cutoff should have one positive number or one per atom type.\n");
   }
-  spin_cutoff[0] = radial;
-  spin_cutoff[1] = angular;
+  spin_cutoff_by_type.resize(num_types);
+  for (int type = 0; type < num_types; ++type) {
+    double cutoff = 0.0;
+    const int value_index = num_param == 2 ? 1 : type + 1;
+    if (!is_valid_real(param[value_index], &cutoff) || cutoff <= 0.0) {
+      PRINT_INPUT_ERROR("spin_cutoff values must be positive numbers.\n");
+    }
+    spin_cutoff_by_type[type] = static_cast<float>(cutoff);
+  }
+  spin_cutoff = *std::max_element(
+    spin_cutoff_by_type.begin(), spin_cutoff_by_type.end());
 }
 
 void Parameters::parse_spin_active_types(

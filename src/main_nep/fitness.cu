@@ -52,8 +52,8 @@ void load_spin_checkpoint_metadata(Parameters& para)
   }
   auto tokens = get_tokens(input);
   const std::string expected_tag = para.enable_zbl
-    ? "nep4_spin2_zbl"
-    : "nep4_spin2";
+    ? "nep4_spin3_zbl"
+    : "nep4_spin3";
   if (tokens.size() != static_cast<std::size_t>(para.num_types + 2) ||
       tokens[0] != expected_tag ||
       get_int_from_token(tokens[1], __FILE__, __LINE__) != para.num_types) {
@@ -147,14 +147,19 @@ void load_spin_checkpoint_metadata(Parameters& para)
       }
       seen_compress = true;
     } else if (keyword == "spin_cutoff") {
-      if (seen_cutoff || tokens.size() != 2) {
+      if (seen_cutoff ||
+          (tokens.size() != 2 &&
+           tokens.size() != static_cast<std::size_t>(para.num_types + 1))) {
         PRINT_INPUT_ERROR("Invalid spin_cutoff in Spin NEP checkpoint.");
       }
-      const double value =
-        get_double_from_token(tokens[1], __FILE__, __LINE__);
-      if (std::abs(value - para.spin_cutoff[0]) >
-          1.0e-6 * std::max(1.0, std::abs(value))) {
-        PRINT_INPUT_ERROR("spin_cutoff in nep.txt does not match nep.in.");
+      for (int type = 0; type < para.num_types; ++type) {
+        const std::size_t value_index = tokens.size() == 2 ? 1 : type + 1;
+        const double value =
+          get_double_from_token(tokens[value_index], __FILE__, __LINE__);
+        if (std::abs(value - para.spin_cutoff_by_type[type]) >
+            1.0e-6 * std::max(1.0, std::abs(value))) {
+          PRINT_INPUT_ERROR("spin_cutoff in nep.txt does not match nep.in.");
+        }
       }
       seen_cutoff = true;
     } else if (keyword == "spin_order") {
@@ -217,7 +222,7 @@ void load_spin_checkpoint_metadata(Parameters& para)
     tokens = get_tokens(input);
     const std::size_t expected_size = para.use_typewise_cutoff_zbl ? 4 : 3;
     if (tokens.size() != expected_size || tokens[0] != "zbl") {
-      PRINT_INPUT_ERROR("Spin2 ZBL checkpoint has an invalid zbl line.");
+      PRINT_INPUT_ERROR("Spin3 ZBL checkpoint has an invalid zbl line.");
     }
     const double inner = get_double_from_token(tokens[1], __FILE__, __LINE__);
     const double outer = get_double_from_token(tokens[2], __FILE__, __LINE__);
@@ -226,7 +231,7 @@ void load_spin_checkpoint_metadata(Parameters& para)
         (para.use_typewise_cutoff_zbl &&
          std::abs(get_double_from_token(tokens[3], __FILE__, __LINE__) -
                   para.typewise_cutoff_zbl_factor) > 1.0e-6)) {
-      PRINT_INPUT_ERROR("Spin2 ZBL checkpoint does not match nep.in.");
+      PRINT_INPUT_ERROR("Spin3 ZBL checkpoint does not match nep.in.");
     }
   }
 }
@@ -674,13 +679,21 @@ void Fitness::initialize_q_scaler(
   std::vector<float> global_min(para.dim, 1.0e10f);
   std::vector<float> device_max(para.dim);
   std::vector<float> device_min(para.dim);
+  std::vector<double> global_square_sum(para.dim, 0.0);
+  std::vector<unsigned long long> global_count(para.dim, 0);
+  std::vector<float> device_square_sum(para.dim);
+  std::vector<unsigned long long> device_count(para.dim);
   for (int device_id = 0; device_id < deviceCount; ++device_id) {
     CHECK(gpuSetDevice(device_id));
     para.q_scaler_max[device_id].copy_to_host(device_max.data());
     para.q_scaler_min[device_id].copy_to_host(device_min.data());
+    para.q_scaler_square_sum[device_id].copy_to_host(device_square_sum.data());
+    para.q_scaler_count[device_id].copy_to_host(device_count.data());
     for (int d = 0; d < para.dim; ++d) {
       global_max[d] = std::max(global_max[d], device_max[d]);
       global_min[d] = std::min(global_min[d], device_min[d]);
+      global_square_sum[d] += device_square_sum[d];
+      global_count[d] += device_count[d];
     }
   }
 
@@ -696,9 +709,15 @@ void Fitness::initialize_q_scaler(
         "Cannot initialize Spin NEP q_scaler from a non-finite "
         "descriptor channel.\n");
     }
-    if (para.spin_mode == 2 && range <= resolution) {
-      para.q_scaler_cpu[d] = 1.0f;
-      ++unresolved_channels;
+    if (d >= para.dim_struct) {
+      const float rms = global_count[d] == 0
+        ? 0.0f
+        : static_cast<float>(std::sqrt(
+            global_square_sum[d] / static_cast<double>(global_count[d])));
+      para.q_scaler_cpu[d] = 1.0f / std::max(1.0f, std::max(range, rms));
+      if (range <= resolution && rms <= resolution) {
+        ++unresolved_channels;
+      }
     } else {
       if (range <= 1.0e-10f) {
         PRINT_INPUT_ERROR(
@@ -710,7 +729,7 @@ void Fitness::initialize_q_scaler(
   }
   if (unresolved_channels > 0) {
     printf(
-      "Spin2 q_scaler kept at 1 for %d numerically unresolved "
+      "Spin3 q_scaler kept at 1 for %d numerically unresolved "
       "descriptor channel(s).\n",
       unresolved_channels);
   }
@@ -962,9 +981,9 @@ void Fitness::write_nep_txt(FILE* fid_nep, Parameters& para, float* elite)
       if (para.version == 4) {
         if (para.spin_mode) {
           if (para.enable_zbl) {
-            fprintf(fid_nep, "nep4_spin2_zbl %d ", para.num_types);
+            fprintf(fid_nep, "nep4_spin3_zbl %d ", para.num_types);
           } else {
-            fprintf(fid_nep, "nep4_spin2 %d ", para.num_types);
+            fprintf(fid_nep, "nep4_spin3 %d ", para.num_types);
           }
         } else if (para.enable_zbl) {
           fprintf(fid_nep, "nep4_zbl %d ", para.num_types);
@@ -1015,10 +1034,18 @@ void Fitness::write_nep_txt(FILE* fid_nep, Parameters& para, float* elite)
     fprintf(fid_nep, "spin_basis_size %d\n", para.spin_basis_size[0]);
     fprintf(fid_nep, "spin_l_max %d\n", para.spin_l_max[0]);
     fprintf(fid_nep, "spin_compress %d\n", para.spin_compress);
-    fprintf(
-      fid_nep,
-      "spin_cutoff %.16e\n",
-      static_cast<double>(para.spin_cutoff[0]));
+    fprintf(fid_nep, "spin_cutoff");
+    const bool uniform_spin_cutoff = std::all_of(
+      para.spin_cutoff_by_type.begin() + 1,
+      para.spin_cutoff_by_type.end(),
+      [&](float value) {
+        return std::abs(value - para.spin_cutoff_by_type.front()) <= 1.0e-7f;
+      });
+    const int cutoff_count = uniform_spin_cutoff ? 1 : para.num_types;
+    for (int type = 0; type < cutoff_count; ++type) {
+      fprintf(fid_nep, " %.16e", static_cast<double>(para.spin_cutoff_by_type[type]));
+    }
+    fprintf(fid_nep, "\n");
     fprintf(fid_nep, "spin_order %d\n", para.spin_order);
     fprintf(fid_nep, "spin_soc %d\n", para.spin_soc);
     fprintf(

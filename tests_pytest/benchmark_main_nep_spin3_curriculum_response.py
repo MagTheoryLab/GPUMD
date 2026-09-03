@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small SNES A/B for the spin2 curriculum and grouped response loss."""
+"""Small SNES A/B for the spin3 curriculum and grouped response loss."""
 
 import argparse
 import json
@@ -146,10 +146,10 @@ def predict_response(binary, model, xyz, metadata, directory):
     shutil.copy(model, directory / "nep.txt")
     (directory / "train.xyz").write_text(xyz)
     (directory / "nep.in").write_text(
-        "type 1 Fe\nversion 4\nspin_mode 2\nspin_dof_type Fe\n"
+        "type 1 Fe\nversion 4\nspin_mode 3\nspin_mforce_mode full\nspin_dof_type Fe\n"
         "cutoff 6 5\nn_max 0 0\nbasis_size 0 0\nl_max 2 0 0\nneuron 4\n"
         "spin_compress 1\nspin_basis_size 8 0\nspin_l_max 2 0 0\n"
-        "spin_cutoff 6 6\nspin_order 3\nspin_soc 1\nprediction 1\n")
+        "spin_cutoff 6\nspin_order 3\nspin_soc 1\nprediction 1\n")
     run_nep(binary, directory)
     predicted = [
         tuple(float(value) for value in line.split()[:3])
@@ -174,7 +174,7 @@ def main():
         "curriculum_response": (1, 1.0),
     }
     raw = {name: [] for name in variants}
-    with tempfile.TemporaryDirectory(prefix="spin2-snes-ab-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="spin3-snes-ab-") as temporary:
         root = Path(temporary)
         for repeat in range(args.repeats):
             for name, (curriculum, response_weight) in variants.items():
@@ -182,10 +182,10 @@ def main():
                 case.mkdir()
                 (case / "train.xyz").write_text(train_xyz)
                 (case / "nep.in").write_text(
-                    "type 1 Fe\nversion 4\nspin_mode 2\nspin_dof_type Fe\n"
+                    "type 1 Fe\nversion 4\nspin_mode 3\nspin_mforce_mode full\nspin_dof_type Fe\n"
                     "cutoff 6 5\nn_max 0 0\nbasis_size 0 0\nl_max 2 0 0\nneuron 4\n"
                     "spin_compress 1\nspin_basis_size 8 0\nspin_l_max 2 0 0\n"
-                    "spin_cutoff 6 6\nspin_order 3\nspin_soc 1\n"
+                    "spin_cutoff 6\nspin_order 3\nspin_soc 1\n"
                     f"spin_curriculum {curriculum}\n"
                     f"lambda_spin_response {response_weight}\n"
                     "lambda_1 0.0001\nlambda_2 0.0001\n"

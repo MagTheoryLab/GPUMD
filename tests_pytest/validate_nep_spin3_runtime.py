@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Validate the GPUMD nep4_spin2 force path against the frozen FP64 oracle."""
+"""Validate the GPUMD nep4_spin3 force path against the frozen FP64 oracle."""
 
 import argparse
 import hashlib
-import json
 import os
 import re
 import subprocess
@@ -12,13 +11,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin2"
+FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin3"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", ROOT / "src" / "gpumd"))
 
 
 def selective_type_model():
-    """Return the Spin2 fixture with Fe spin DOFs and Fe/Ge environments."""
-    return (FIXTURE / "nep4_spin2_o3c2.nep").read_text()
+    """Return the production C=2 fixture with Fe DOFs and Fe/Ge environments."""
+    return (FIXTURE / "nep4_spin3_o3c2_uniform.nep").read_text()
 
 
 def write_xyz(path, case):
@@ -43,7 +42,7 @@ def reshape(values, width):
 
 def read_text_oracle(path, model):
     lines = path.read_text().splitlines()
-    if lines[0] != "spin2_oc_oracle_v1":
+    if lines[0] != "spin3_oc_oracle_v1":
         raise ValueError(f"{path}: unsupported oracle format")
     model_sha256 = lines[1].split()
     if model_sha256[:1] != ["model_sha256"]:
@@ -54,9 +53,9 @@ def read_text_oracle(path, model):
             f"{path}: model hash mismatch: {actual_hash} != {model_sha256[1]}")
     descriptor_dim = int(lines[2].split()[1])
     spin_descriptor_dim = int(lines[3].split()[1])
-    if descriptor_dim != 49 or spin_descriptor_dim != 19:
+    if descriptor_dim - spin_descriptor_dim != 30 or spin_descriptor_dim not in (55, 91):
         raise ValueError(
-            f"{path}: expected descriptor dimensions 49/19, got "
+            f"{path}: unexpected descriptor dimensions "
             f"{descriptor_dim}/{spin_descriptor_dim}")
 
     cases = {}
@@ -95,15 +94,16 @@ def read_text_oracle(path, model):
 
 
 def load_fixture(name):
-    if name == "c2":
-        model = (FIXTURE / "nep4_spin2_o3c2.nep").read_text()
-        oracle = json.loads((FIXTURE / "o3c2_oracle.json").read_text())
-    elif name == "c1":
-        model = (FIXTURE / "nep4_spin2_o3c1_l2_soc1.nep").read_text()
-        oracle = read_text_oracle(
-            FIXTURE / "spin2_o3c1_l2_soc1_oracle.txt", model)
-    else:
+    fixtures = {
+        "o3c2_uniform": ("nep4_spin3_o3c2_uniform.nep", "spin3_o3c2_uniform_oracle.txt"),
+        "o3c2_typewise": ("nep4_spin3_o3c2_typewise.nep", "spin3_o3c2_typewise_oracle.txt"),
+        "o3c3_uniform": ("nep4_spin3_o3c3_uniform.nep", "spin3_o3c3_uniform_oracle.txt"),
+    }
+    if name not in fixtures:
         raise ValueError(f"unknown fixture: {name}")
+    model_name, oracle_name = fixtures[name]
+    model = (FIXTURE / model_name).read_text()
+    oracle = read_text_oracle(FIXTURE / oracle_name, model)
     return model, oracle
 
 
@@ -116,6 +116,8 @@ def read_frame(path):
         re.search(r"\benergy=([-+0-9.eE]+)", lines[-atom_count - 1]).group(1))
     virial = []
     for row in values:
+        # dump_xyz already serializes the internal 9-plane tensor in row-major
+        # order (xx, xy, xz, yx, yy, yz, zx, zy, zz).
         virial.append(row[13:22])
     return {
         "energy": energy,
@@ -172,20 +174,20 @@ def run_case(root, name, case, model):
     return read_frame(directory / "result.xyz")
 
 
-def validate_removed_spin1(root):
-    model, oracle = load_fixture("c2")
+def validate_removed_spin2(root):
+    model, oracle = load_fixture("o3c2_uniform")
     case = next(iter(oracle["cases"].values()))
-    directory = root / "removed_spin1"
+    directory = root / "removed_spin2"
     directory.mkdir()
     write_xyz(directory / "model.xyz", case)
     (directory / "nep.txt").write_text(
-        model.replace("nep4_spin2", "nep4_spin1", 1))
+        model.replace("nep4_spin3", "nep4_spin2", 1))
     (directory / "run.in").write_text(
         "potential nep.txt\nensemble nve\ntime_step 0\nrun 1\n")
     result = subprocess.run(
         [str(GPUMD)], cwd=directory, capture_output=True, text=True, check=False)
     if result.returncode == 0:
-        raise AssertionError("removed nep4_spin1 model was accepted")
+        raise AssertionError("removed nep4_spin2 model was accepted")
 
 
 def main():
@@ -194,15 +196,17 @@ def main():
         "--cases", nargs="*", default=None,
         help="oracle cases to run; default runs every case")
     parser.add_argument(
-        "--fixtures", nargs="*", choices=("c1", "c2"), default=("c2", "c1"),
-        help="frozen fixtures to run; default runs both C=2 and C=1")
+        "--fixtures", nargs="*",
+        choices=("o3c2_uniform", "o3c2_typewise", "o3c3_uniform"),
+        default=("o3c2_uniform", "o3c2_typewise", "o3c3_uniform"),
+        help="frozen Spin3 fixtures to run")
     parser.add_argument("--tolerance", type=float, default=2.0e-4)
     args = parser.parse_args()
 
     errors = {}
-    with tempfile.TemporaryDirectory(prefix="gpumd-spin2-") as temp:
+    with tempfile.TemporaryDirectory(prefix="gpumd-spin3-") as temp:
         root = Path(temp)
-        validate_removed_spin1(root)
+        validate_removed_spin2(root)
         for fixture in args.fixtures:
             model, oracle = load_fixture(fixture)
             selected = args.cases or list(oracle["cases"])
@@ -250,8 +254,8 @@ def main():
 
     worst = max(error for case in errors.values() for error in case.values())
     print(
-        f"spin2 oracle validation passed: cases={len(errors)} "
-        f"max_error={worst:.3e}; nep4_spin1 rejected")
+        f"spin3 oracle validation passed: cases={len(errors)} "
+        f"max_error={worst:.3e}; nep4_spin2 rejected")
 
 
 if __name__ == "__main__":

@@ -24,8 +24,9 @@ private:
     GPU_Vector<int> spin_dof_type_active;
     GPU_Vector<int> spin_env_type_active;
     GPU_Vector<float> spin_baseline;
-    GPU_Vector<float> spin2_moments;
-    GPU_Vector<float> spin2_pulls;
+    GPU_Vector<float> spin_cutoff_pair;
+    GPU_Vector<float> spin3_moments;
+    GPU_Vector<float> spin3_pulls;
     GPU_Vector<double> force;
     GPU_Vector<double> mforce;
     GPU_Vector<double> virial;
@@ -52,6 +53,10 @@ public:
     int density_l0_dot_response = -1;
     int correlation_same_edge = -1;
     int correlation_distinct_neighbor = -1;
+    int correlation_distinct_l1 = -1;
+    int correlation_distinct_l2 = -1;
+    int angular_l1_moment_offset = -1;
+    int angular_l2_moment_offset = -1;
     int coupling_l11_axial = -1;
     int edge_l11_axial = -1;
     int coupling_l22_axial = -1;

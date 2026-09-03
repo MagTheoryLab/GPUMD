@@ -53,7 +53,7 @@ static void change_box(const Parameters& para, Structure& structure)
   float det = get_det(structure.box_original);
   structure.volume = abs(det);
   const float rc_max =
-    para.spin_mode ? std::max(para.rc_radial_max, para.spin_cutoff[0]) : para.rc_radial_max;
+    para.spin_mode ? std::max(para.rc_radial_max, para.spin_cutoff) : para.rc_radial_max;
   structure.num_cell[0] = int(ceil(2.0f * rc_max / (structure.volume / get_area(b, c))));
   structure.num_cell[1] = int(ceil(2.0f * rc_max / (structure.volume / get_area(c, a))));
   structure.num_cell[2] = int(ceil(2.0f * rc_max / (structure.volume / get_area(a, b))));
@@ -611,7 +611,7 @@ static void read_one_structure(
       }
       if (spin_position < 0 && para.spin_mode) {
         PRINT_INPUT_ERROR(
-          "spin_mode 1 requires spin/spins/moment/moments with property type R:3.\n");
+          "spin_mode 3 requires spin/spins/moment/moments with property type R:3.\n");
       }
       if (spin_tangent_position >= 0 &&
           (!structure.has_spin_response_metadata || mforce_position < 0)) {

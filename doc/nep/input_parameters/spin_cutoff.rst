@@ -5,20 +5,21 @@
 :attr:`spin_cutoff`
 ====================
 
-This keyword sets spin radial and angular cutoff distances in Å::
+This keyword sets the Spin3 cutoff distance in Å::
 
-  spin_cutoff <radial_cutoff> <angular_cutoff>
+  spin_cutoff <cutoff>
+  spin_cutoff <cutoff_type_1> ... <cutoff_type_N>
 
-Both values must be positive. If this keyword is absent, the ordinary radial
-and angular :ref:`cutoff <kw_cutoff>` values are reused. This is often a good
-starting point, but a shorter magnetic cutoff can reduce the size of the
-independent spin neighbor list and the associated training/inference cost.
+Use either one positive value, which is broadcast to all atom types, or exactly
+one positive value for every type in the order declared by :ref:`type
+<kw_type>`. If this keyword is absent, the largest ordinary radial
+:ref:`cutoff <kw_cutoff>` is broadcast. For an edge between types :math:`a`
+and :math:`b`, Spin3 uses the arithmetic mean
+:math:`(r_a^\mathrm{spin}+r_b^\mathrm{spin})/2`.
 
-The Spin2 descriptor kernel uses the radial value. The ``nep.in`` syntax still
-requires a positive angular value, but it does not define a second spin
-neighbor list and is not serialized in ``nep4_spin2``. For example::
+For example, with ``type 2 Fe Ge``::
 
-  spin_cutoff 6.0 4.0
+  spin_cutoff 5.0 7.0
 
-stores a 6 Å spin cutoff in a Spin2 model. This setting does not change the
-ordinary structural NEP cutoffs.
+uses 5, 6, and 7 Å for Fe--Fe, Fe--Ge, and Ge--Ge magnetic edges. This setting
+does not change the ordinary structural NEP cutoffs.

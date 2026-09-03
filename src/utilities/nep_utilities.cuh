@@ -156,6 +156,7 @@ __constant__ float COVALENT_RADIUS[94] = {
 const int SIZE_BOX_AND_INVERSE_BOX = 18; // (3 * 3) * 2
 const int MAX_NUM_N = 17;                // basis_size_radial+1 = 16+1
 const int MAX_DIM = 103;                 // 13 + 9 * 10
+const int MAX_DIM_SPIN = 199;            // max structural 103 + max Spin3 96
 const int MAX_DIM_ANGULAR = 90;          // 9 * 10
 
 template <typename Real>

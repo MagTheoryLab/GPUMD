@@ -10,11 +10,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from validate_nep_spin2_runtime import selective_type_model
+from validate_nep_spin3_runtime import load_fixture, selective_type_model
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin2"
+FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin3"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", ROOT / "src" / "gpumd"))
 K_B = 8.617343e-5
 PI = 3.14159265358979
@@ -51,7 +51,7 @@ def run_case(
             case / "model.xyz")
     else:
         if potential_text is None:
-            shutil.copy(FIXTURE / "nep4_spin2_o3c2.nep", case / "nep.txt")
+            shutil.copy(FIXTURE / "nep4_spin3_o3c2_uniform.nep", case / "nep.txt")
         else:
             (case / "nep.txt").write_text(potential_text)
         (case / "model.xyz").write_text(
@@ -580,9 +580,10 @@ def validate_element_mass_factors(root):
     return frozen_spin_error, frozen_velocity_max, mobile_spin_change
 
 
-def validate_spin2_npt(root):
-    fixture = Path(__file__).parent / "fixtures" / "nep_spin2"
-    case = json.loads((fixture / "o3c2_oracle.json").read_text())["cases"]["chiral_soc"]
+def validate_spin3_npt(root):
+    fixture = Path(__file__).parent / "fixtures" / "nep_spin3"
+    _, oracle = load_fixture("o3c2_uniform")
+    case = oracle["cases"]["chiral_soc"]
     lattice = " ".join(str(value) for value in case["cell"])
     lines = [
         str(len(case["types"])),
@@ -595,7 +596,7 @@ def validate_spin2_npt(root):
         lines.append(symbol + " " + " ".join(str(value) for value in values))
     directory, result = run_case(
         root,
-        "spin2_npt",
+        "spin3_npt",
         "potential nep.txt\n"
         "ensemble npt_tspin temp 300 300 iso 0 0 "
         "tperiod 100 pperiod 1000 seed 13579\n"
@@ -603,13 +604,13 @@ def validate_spin2_npt(root):
         "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n",
         "\n".join(lines) + "\n",
-        potential_text=(fixture / "nep4_spin2_o3c2.nep").read_text())
+        potential_text=(fixture / "nep4_spin3_o3c2_uniform.nep").read_text())
     if result.returncode != 0:
         raise RuntimeError(result.stdout + result.stderr)
     rows = (directory / "state.xyz").read_text().splitlines()[-len(case["types"]):]
     values = [float(value) for row in rows for value in row.split()[1:]]
     if not values or not all(math.isfinite(value) for value in values):
-        raise AssertionError("Spin2 NPT produced a non-finite state")
+        raise AssertionError("Spin3 NPT produced a non-finite state")
 
 
 def main():
@@ -629,7 +630,7 @@ def main():
             validate_lattice_switch(root))
         frozen_spin_error, frozen_velocity_max, mobile_spin_change = (
             validate_element_mass_factors(root))
-        validate_spin2_npt(root)
+        validate_spin3_npt(root)
         minimum_temperature, maximum_temperature, mean_temperature = (
             validate_short_dynamics(root))
     print(
@@ -638,7 +639,7 @@ def main():
         f"max spin_velocity error={velocity_error:.3e}, "
         f"NPT one-step spin/velocity error={npt_spin_error:.3e}/"
         f"{npt_velocity_error:.3e}, "
-        f"fail-closed cases={negative_count}, lifecycle/restart=passed, Spin2 NPT=passed, "
+        f"fail-closed cases={negative_count}, lifecycle/restart=passed, Spin3 NPT=passed, "
         f"fixed-spin nvt_nhc error={fixed_spin_error:.1e}, "
         f"potential-masked spin change/mforce={masked_spin_change:.1e}/"
         f"{masked_mforce_max:.1e}, "

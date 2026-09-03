@@ -10,10 +10,10 @@ descriptor::
 
   spin_l_max <l_3body> <l_4body> <l_5body>
 
-The default is ``4 0 0``. For ``spin_mode 2``, ``l_3body`` can range from 0
+The default is ``4 0 0``. For ``spin_mode 3``, ``l_3body`` can range from 0
 to 2 and the other two values must be zero.
 
-For Spin2, the first value has the following interpretation:
+For Spin3, the first value has the following interpretation:
 
 .. list-table::
    :header-rows: 1
@@ -29,9 +29,9 @@ For Spin2, the first value has the following interpretation:
      - additionally use symmetric-traceless rank-2 contractions
 
 This rank cutoff is distinct from :ref:`spin_order <kw_spin_order>` and from
-the ordinary structural :ref:`l_max <kw_l_max>`. A typical Spin2 setting is::
+the ordinary structural :ref:`l_max <kw_l_max>`. A typical Spin3 setting is::
 
   spin_l_max 2 0 0
 
-Because the global default ``4 0 0`` is outside the Spin2 range, this keyword
-must be set explicitly when ``spin_mode 2`` is used.
+Because the global default ``4 0 0`` is outside the Spin3 range, this keyword
+must be set explicitly when ``spin_mode 3`` is used.

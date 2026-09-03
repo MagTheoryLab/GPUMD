@@ -237,14 +237,23 @@ void NEP::update_potential(float* parameters, ANN& ann)
   ann.c = pointer;
 }
 
-static void __global__ find_max_min(const int N, const float* g_q, float* g_q_scaler, float* g_q_scaler_max, float* g_q_scaler_min)
+static void __global__ find_max_min(
+  const int N,
+  const float* g_q,
+  float* g_q_scaler,
+  float* g_q_scaler_max,
+  float* g_q_scaler_min,
+  float* g_q_square_sum,
+  unsigned long long* g_q_count)
 {
   const int tid = threadIdx.x;
   const int bid = blockIdx.x;
   __shared__ float s_max[1024];
   __shared__ float s_min[1024];
+  __shared__ float s_square_sum[1024];
   s_max[tid] = -1000000.0f; // a small number
   s_min[tid] = +1000000.0f; // a large number
+  s_square_sum[tid] = 0.0f;
   const int stride = 1024;
   const int number_of_rounds = (N - 1) / stride + 1;
   for (int round = 0; round < number_of_rounds; ++round) {
@@ -252,6 +261,7 @@ static void __global__ find_max_min(const int N, const float* g_q, float* g_q_sc
     if (n < N) {
       const int m = n + N * bid;
       float q = g_q[m];
+      s_square_sum[tid] += q * q;
       if (q > s_max[tid]) {
         s_max[tid] = q;
       }
@@ -269,16 +279,20 @@ static void __global__ find_max_min(const int N, const float* g_q, float* g_q_sc
       if (s_min[tid] > s_min[tid + offset]) {
         s_min[tid] = s_min[tid + offset];
       }
+      s_square_sum[tid] += s_square_sum[tid + offset];
     }
     __syncthreads();
   }
   if (tid == 0) {
     g_q_scaler_max[bid] = max(g_q_scaler_max[bid], s_max[0]);
     g_q_scaler_min[bid] = min(g_q_scaler_min[bid], s_min[0]);
+    g_q_square_sum[bid] += s_square_sum[0];
+    g_q_count[bid] += static_cast<unsigned long long>(N);
     g_q_scaler[bid] = 1.0f / (g_q_scaler_max[bid] - g_q_scaler_min[bid]);
   }
 }
 
+template <int max_dim>
 static __global__ void apply_ann(
   const int N,
   const NEP::ParaMB paramb,
@@ -293,12 +307,12 @@ static __global__ void apply_ann(
   int type = g_type[n1];
   if (n1 < N) {
     // get descriptors
-    float q[MAX_DIM] = {0.0f};
+    float q[max_dim] = {0.0f};
     for (int d = 0; d < annmb.dim; ++d) {
       q[d] = g_descriptors[n1 + d * N] * g_q_scaler[d];
     }
     // get energy and energy gradient
-    float F = 0.0f, Fp[MAX_DIM] = {0.0f};
+    float F = 0.0f, Fp[max_dim] = {0.0f};
 
     const int neu1 = annmb.num_neurons1;
     const int neu1_dim = neu1 * annmb.dim;
@@ -337,6 +351,7 @@ static __global__ void apply_ann(
   }
 }
 
+template <int max_dim>
 static __global__ void apply_ann_one_layer_warp(
   const int N,
   const NEP::ANN annmb,
@@ -347,7 +362,7 @@ static __global__ void apply_ann_one_layer_warp(
   float* g_Fp)
 {
   constexpr int warp_size = 32;
-  constexpr int values_per_lane = (MAX_DIM + warp_size - 1) / warp_size;
+  constexpr int values_per_lane = (max_dim + warp_size - 1) / warp_size;
   const int lane = threadIdx.x & (warp_size - 1);
   const int atom = (blockIdx.x * blockDim.x + threadIdx.x) / warp_size;
   if (atom >= N) return;
@@ -775,7 +790,7 @@ void NEP::find_force(
       std::vector<float> descriptor_cpu(nep_data[device_id].descriptors.size());
       nep_data[device_id].descriptors.copy_to_host(descriptor_cpu.data());
       for (int nc = 0; nc < dataset[device_id].Nc; ++nc) {
-        float q_structure[MAX_DIM] = {0.0f};
+        float q_structure[MAX_DIM_SPIN] = {0.0f};
         for (int na = 0; na < dataset[device_id].Na_cpu[nc]; ++na) {
           int n = dataset[device_id].Na_sum_cpu[nc] + na;
           for (int d = 0; d < annmb[device_id].dim; ++d) {
@@ -807,7 +822,9 @@ void NEP::find_force(
         nep_data[device_id].descriptors.data(),
         para.q_scaler_gpu[device_id].data(),
         para.q_scaler_max[device_id].data(),
-        para.q_scaler_min[device_id].data());
+        para.q_scaler_min[device_id].data(),
+        para.q_scaler_square_sum[device_id].data(),
+        para.q_scaler_count[device_id].data());
       GPU_CHECK_KERNEL
     }
 
@@ -839,24 +856,47 @@ void NEP::find_force(
         constexpr int warps_per_block = block_size / 32;
         const int ann_grid_size =
           (dataset[device_id].N + warps_per_block - 1) / warps_per_block;
-        apply_ann_one_layer_warp<<<ann_grid_size, block_size>>>(
-          dataset[device_id].N,
-          annmb[device_id],
-          dataset[device_id].type.data(),
-          nep_data[device_id].descriptors.data(),
-          para.q_scaler_gpu[device_id].data(),
-          dataset[device_id].energy.data(),
-          nep_data[device_id].Fp.data());
+        if (para.spin_mode) {
+          apply_ann_one_layer_warp<MAX_DIM_SPIN><<<ann_grid_size, block_size>>>(
+            dataset[device_id].N,
+            annmb[device_id],
+            dataset[device_id].type.data(),
+            nep_data[device_id].descriptors.data(),
+            para.q_scaler_gpu[device_id].data(),
+            dataset[device_id].energy.data(),
+            nep_data[device_id].Fp.data());
+        } else {
+          apply_ann_one_layer_warp<MAX_DIM><<<ann_grid_size, block_size>>>(
+            dataset[device_id].N,
+            annmb[device_id],
+            dataset[device_id].type.data(),
+            nep_data[device_id].descriptors.data(),
+            para.q_scaler_gpu[device_id].data(),
+            dataset[device_id].energy.data(),
+            nep_data[device_id].Fp.data());
+        }
       } else {
-        apply_ann<<<grid_size, block_size>>>(
-          dataset[device_id].N,
-          paramb,
-          annmb[device_id],
-          dataset[device_id].type.data(),
-          nep_data[device_id].descriptors.data(),
-          para.q_scaler_gpu[device_id].data(),
-          dataset[device_id].energy.data(),
-          nep_data[device_id].Fp.data());
+        if (para.spin_mode) {
+          apply_ann<MAX_DIM_SPIN><<<grid_size, block_size>>>(
+            dataset[device_id].N,
+            paramb,
+            annmb[device_id],
+            dataset[device_id].type.data(),
+            nep_data[device_id].descriptors.data(),
+            para.q_scaler_gpu[device_id].data(),
+            dataset[device_id].energy.data(),
+            nep_data[device_id].Fp.data());
+        } else {
+          apply_ann<MAX_DIM><<<grid_size, block_size>>>(
+            dataset[device_id].N,
+            paramb,
+            annmb[device_id],
+            dataset[device_id].type.data(),
+            nep_data[device_id].descriptors.data(),
+            para.q_scaler_gpu[device_id].data(),
+            dataset[device_id].energy.data(),
+            nep_data[device_id].Fp.data());
+        }
       }
       GPU_CHECK_KERNEL
     }

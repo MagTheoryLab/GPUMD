@@ -5,13 +5,13 @@
 :attr:`spin_order`
 ===================
 
-This Spin2 keyword selects the highest contraction level supplied to the
+This Spin3 keyword selects the highest contraction level supplied to the
 neural network::
 
   spin_order <order>
 
 The value can be 1, 2, or 3 and defaults to 3. It is used only with
-``spin_mode 2``.
+``spin_mode 3``.
 
 .. list-table::
    :header-rows: 1

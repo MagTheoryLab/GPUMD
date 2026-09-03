@@ -52,6 +52,7 @@ Below you can find a listing of keywords for the ``nep.in`` input file.
    spin_dof_type
    spin_env_type
    spin_curriculum
+   spin_mforce_mode
    lambda_m
    lambda_tau
    lambda_spin_response

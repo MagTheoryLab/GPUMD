@@ -49,7 +49,7 @@ Keywords
    * - :ref:`zbl <kw_zbl>`
      - outer cutoff for the universal :term:`ZBL` potential [Ziegler1985]_
    * - :ref:`spin_mode <kw_spin_mode>`
-     - enable the Spin2 descriptor
+     - enable the Spin3 descriptor
    * - :ref:`spin_cutoff <kw_spin_cutoff>`
      - radial and angular cutoffs used by the spin descriptor
    * - :ref:`spin_basis_size <kw_spin_basis_size>`
@@ -59,15 +59,17 @@ Keywords
    * - :ref:`spin_compress <kw_spin_compress>`
      - number of shared compressed radial channels
    * - :ref:`spin_order <kw_spin_order>`
-     - highest Spin2 contraction level supplied to the neural network
+     - highest Spin3 contraction level supplied to the neural network
    * - :ref:`spin_soc <kw_spin_soc>`
-     - enable joint spin--space rotation-invariant Spin2 channels
+     - enable joint spin--space rotation-invariant Spin3 channels
    * - :ref:`spin_dof_type <kw_spin_dof_type>`
      - atom types whose spins are active degrees of freedom
    * - :ref:`spin_env_type <kw_spin_env_type>`
      - atom types allowed to contribute to magnetic environments
    * - :ref:`spin_curriculum <kw_spin_curriculum>`
-     - progressively activate order-3 Spin2 neural-network connections
+     - progressively activate order-3 Spin3 neural-network connections
+   * - :ref:`spin_mforce_mode <kw_spin_mforce_mode>`
+     - select full or transverse magnetic-force training targets
    * - :ref:`cutoff <kw_cutoff>`
      - radial (:math:`r_\mathrm{c}^\mathrm{R}`) and angular (:math:`r_\mathrm{c}^\mathrm{A}`) cutoffs
    * - :ref:`n_max <kw_n_max>`
@@ -126,17 +128,18 @@ Here is an example :attr:`nep.in` file using all the default parameters::
 The `NEP tutorial <https://github.com/brucefan1983/GPUMD/tree/master/examples/11_NEP_potential_PbTe/tutorial.ipynb>`_ illustrates the construction of a :term:`NEP` model.
 More examples can be found in `this repository <https://gitlab.com/brucefan1983/nep-data>`_.
 
-Spin2 example
+Spin3 example
 -------------
 
-The following is a compact, valid Spin2 setup. The explicit shape keywords
+The following is a compact, valid Spin3 setup. The explicit shape keywords
 are important: the defaults of ``spin_basis_size`` and ``spin_l_max`` do not
-define a valid Spin2 descriptor, and the complete descriptor must fit within
-the Spin2 dimension limit described in :ref:`nep_spin_dimensions`::
+define a valid Spin3 descriptor, and the complete descriptor must fit within
+the Spin3 dimension limit described in :ref:`nep_spin_dimensions`::
 
   version          4
   type             2 Fe Ge
-  spin_mode        2
+  spin_mode        3
+  spin_mforce_mode full
   spin_basis_size  8 0
   spin_l_max       2 0 0
   spin_compress    2
@@ -150,4 +153,4 @@ the Spin2 dimension limit described in :ref:`nep_spin_dimensions`::
 Each frame in ``train.xyz`` and ``test.xyz`` must then contain a Cartesian
 ``spin:R:3`` property. Add ``mforce:R:3`` when training magnetic forces. See
 :ref:`train_test_xyz` for the complete data contract and :ref:`nep_spin` for
-the Spin2 formalism.
+the Spin3 formalism.

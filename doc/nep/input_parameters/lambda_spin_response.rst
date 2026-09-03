@@ -10,7 +10,7 @@ This keyword sets the weight of grouped magnetic-response loss::
   lambda_spin_response <weight>
 
 The weight must be non-negative and defaults to 0. A positive value requires
-``spin_mode 2`` and full-batch evaluation::
+``spin_mode 3`` and full-batch evaluation::
 
   batch <size> 1
 
