@@ -567,23 +567,22 @@ generator evaluated for frame :math:`n` is
       \frac{\partial\boldsymbol{s}_{ni}}{\partial\theta}
    =-\frac{\partial U_n}{\partial\theta}.
 
-The grouped response loss first centers :math:`G_n` within each group. A
-linear fit of the target response against ``response_coordinate`` defines a
-reliability score (with a floor of 0.05), which weights a Huber loss for the
-centered curve. Residuals are normalized by the global RMS magnitude of the
-centered targets. A second Huber term compares group means, normalized by the
-RMS magnitude of the target group means and multiplied by 0.25. Thus the loss
-retains both response shape and a constant response component while reducing
-the influence of groups whose target path is weakly resolved by its supplied
-coordinate.
+The grouped response loss first centers :math:`G_n` within each group. Each
+group contributes equally to the centered-curve Huber loss, independent of its
+number of scan points. A single group-balanced RMS of the uncentered target
+responses normalizes both this shape term and a second Huber term comparing
+group means; the mean term is multiplied by 0.25. This is the same
+``neutral-group-balanced-mean-plus-centered-mforce-generator-v3`` reduction
+used by TorchNEP. ``response_coordinate`` defines the path derivative but does
+not add a separate reliability weight.
 
-The tangent
-:math:`\partial\boldsymbol{s}/\partial\theta` and the group coordinate are
-explicit data because a Cartesian spin snapshot alone does not determine the
-chosen rotation axis, rotated atom subset, or path parameterization.
-For an atom type excluded by ``spin_dof_type``, the supplied tangent must be
-zero: grouped response accumulation visits every atom, whereas the predicted
-public magnetic force of an inactive type has already been masked to zero.
+The group coordinate is explicit because Cartesian spin snapshots alone do
+not determine their path ordering or parameterization. The trainer sorts each
+group and derives
+:math:`\partial\boldsymbol{s}/\partial\theta` from the final constrained-DFT
+spins with a second-order, three-point nonuniform finite difference. It retains
+longitudinal moment relaxation as well as transverse rotation. Atom types
+excluded by ``spin_dof_type`` are masked from the derived tangent.
 
 When :ref:`spin_curriculum <kw_spin_curriculum>` is enabled, ANN weights
 connected to order-3 magnetic coordinates are held fixed during the first

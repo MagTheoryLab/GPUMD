@@ -41,6 +41,7 @@ void Dataset::copy_structures(std::vector<Structure>& structures_input, int n1, 
     structures[n].has_spin_response_metadata =
       structures_input[n_input].has_spin_response_metadata;
     structures[n].has_spin_response = structures_input[n_input].has_spin_response;
+    structures[n].spin_response_probe = structures_input[n_input].spin_response_probe;
     structures[n].spin_response_group = structures_input[n_input].spin_response_group;
     structures[n].spin_response_coordinate =
       structures_input[n_input].spin_response_coordinate;

@@ -35,98 +35,90 @@ def make_scan(radii):
                 0.0,
             )
             mforce_2 = (-coupling, -dmi, 0.0)
-            tangent_1 = (0.0, 0.0, 0.0)
-            tangent_2 = (-sine, cosine, 0.0)
-            spectator_spin_1 = (0.35 + 0.08 * sine, -0.62, 0.48 + 0.03 * cosine)
-            spectator_spin_2 = (-0.41, 0.27 + 0.05 * cosine, 0.73 - 0.04 * sine)
+            spectator_spin_1 = (0.35, -0.62, 0.48)
+            spectator_spin_2 = (-0.41, 0.27, 0.73)
             zero = (0.0, 0.0, 0.0)
             header = (
                 'Lattice="20 0 0 0 20 0 0 0 20" '
                 'Properties=species:S:1:pos:R:3:force:R:3:spin:R:3:'
-                'mforce:R:3:spin_tangent:R:3 '
+                'mforce:R:3 '
                 f'energy={energy:.16e} response_probe=rotation '
                 f'response_group={group} response_coordinate={angle:.16e}'
             )
             atom_1 = "Fe 5 5 5 0 0 0 " + " ".join(
-                f"{value:.16e}" for value in spin_1 + mforce_1 + tangent_1)
+                f"{value:.16e}" for value in spin_1 + mforce_1)
             atom_2 = f"Fe {5 + radius:.16e} 5 5 0 0 0 " + " ".join(
-                f"{value:.16e}" for value in spin_2 + mforce_2 + tangent_2)
+                f"{value:.16e}" for value in spin_2 + mforce_2)
             atom_3 = (
-                f"Fe 5.8 {6.6 + 0.07 * sine:.16e} 5.4 0 0 0 " + " ".join(
-                    f"{value:.16e}" for value in spectator_spin_1 + zero + zero))
+                "Fe 5.8 6.6 5.4 0 0 0 " + " ".join(
+                    f"{value:.16e}" for value in spectator_spin_1 + zero))
             atom_4 = (
-                f"Fe 6.7 5.5 {6.3 + 0.06 * cosine:.16e} 0 0 0 " + " ".join(
-                    f"{value:.16e}" for value in spectator_spin_2 + zero + zero))
+                "Fe 6.7 5.5 6.3 0 0 0 " + " ".join(
+                    f"{value:.16e}" for value in spectator_spin_2 + zero))
             frames.extend(("4", header, atom_1, atom_2, atom_3, atom_4))
             metadata.append({
                 "group": group,
                 "coordinate": angle,
-                "tangents": (tangent_1, tangent_2, zero, zero),
+                "spins": (spin_1, spin_2, spectator_spin_1, spectator_spin_2),
                 "target_mforces": (mforce_1, mforce_2, zero, zero),
             })
     return "\n".join(frames) + "\n", metadata
 
 
 def grouped_response_loss(predicted, metadata):
-    groups = {}
+    grouped_metadata = {}
     for frame, item in enumerate(metadata):
-        generator_prediction = 0.0
-        generator_target = 0.0
-        for atom in range(4):
-            tangent = item["tangents"][atom]
-            generator_prediction += sum(
-                predicted[4 * frame + atom][component] * tangent[component]
-                for component in range(3))
-            generator_target += sum(
-                item["target_mforces"][atom][component] * tangent[component]
-                for component in range(3))
-        groups.setdefault(item["group"], []).append(
-            (item["coordinate"], generator_prediction, generator_target))
-
-    centered_prediction = []
-    centered_target = []
-    reliability = []
-    mean_prediction = []
-    mean_target = []
-    for group in sorted(groups):
-        members = groups[group]
-        mean_x = statistics.fmean(point[0] for point in members)
-        mean_p = statistics.fmean(point[1] for point in members)
-        mean_t = statistics.fmean(point[2] for point in members)
-        mean_prediction.append(mean_p)
-        mean_target.append(mean_t)
-        x = [point[0] - mean_x for point in members]
-        target = [point[2] - mean_t for point in members]
-        slope = sum(a * b for a, b in zip(x, target)) / max(
-            sum(value * value for value in x), 2.220446049250313e-16)
-        signal = [slope * value for value in x]
-        noise = [a - b for a, b in zip(target, signal)]
-        signal_power = statistics.fmean(value * value for value in signal)
-        noise_power = statistics.fmean(value * value for value in noise)
-        score = signal_power / (signal_power + noise_power + 1.1920929e-7)
-        centered_prediction.extend(point[1] - mean_p for point in members)
-        centered_target.extend(target)
-        reliability.extend(max(0.05, score) for _ in members)
+        grouped_metadata.setdefault(item["group"], []).append((frame, item))
+    groups = {}
+    for group, indexed in grouped_metadata.items():
+        indexed.sort(key=lambda pair: pair[1]["coordinate"])
+        coordinates = [item["coordinate"] for _, item in indexed]
+        for k, (frame, item) in enumerate(indexed):
+            first = 0 if k == 0 else (k - 2 if k + 1 == len(indexed) else k - 1)
+            nodes = (first, first + 1, first + 2)
+            x0, x1, x2 = (coordinates[index] for index in nodes)
+            x = coordinates[k]
+            weights = (
+                (2 * x - x1 - x2) / ((x0 - x1) * (x0 - x2)),
+                (2 * x - x0 - x2) / ((x1 - x0) * (x1 - x2)),
+                (2 * x - x0 - x1) / ((x2 - x0) * (x2 - x1)),
+            )
+            tangents = []
+            for atom in range(4):
+                tangents.append(tuple(
+                    sum(weights[n] * indexed[nodes[n]][1]["spins"][atom][component]
+                        for n in range(3))
+                    for component in range(3)))
+            generator_prediction = 0.0
+            generator_target = 0.0
+            for atom, tangent in enumerate(tangents):
+                generator_prediction += sum(
+                    predicted[4 * frame + atom][component] * tangent[component]
+                    for component in range(3))
+                generator_target += sum(
+                    item["target_mforces"][atom][component] * tangent[component]
+                    for component in range(3))
+            groups.setdefault(group, []).append(
+                (item["coordinate"], generator_prediction, generator_target))
 
     def huber(value):
         absolute = abs(value)
         return 0.5 * value * value if absolute <= 1.0 else absolute - 0.5
 
-    scale = max(
-        math.sqrt(statistics.fmean(value * value for value in centered_target)),
-        64.0 * 1.1920929e-7,
-    )
-    shape = sum(
-        weight * huber((prediction - target) / scale)
-        for prediction, target, weight in zip(
-            centered_prediction, centered_target, reliability)
-    ) / max(1.0, sum(reliability))
-    mean_scale = max(
-        math.sqrt(statistics.fmean(value * value for value in mean_target)),
-        64.0 * 1.1920929e-7,
-    )
-    mean = statistics.fmean(huber((prediction - target) / mean_scale)
-                            for prediction, target in zip(mean_prediction, mean_target))
+    scale = max(math.sqrt(statistics.fmean(
+        statistics.fmean(point[2] * point[2] for point in members)
+        for members in groups.values())), 1.0e-6)
+    shape_terms = []
+    mean_terms = []
+    for members in groups.values():
+        mean_prediction = statistics.fmean(point[1] for point in members)
+        mean_target = statistics.fmean(point[2] for point in members)
+        shape_terms.append(statistics.fmean(huber(
+            ((point[1] - mean_prediction) - (point[2] - mean_target)) / scale)
+            for point in members))
+        mean_terms.append(huber((mean_prediction - mean_target) / scale))
+    shape = statistics.fmean(shape_terms)
+    mean = statistics.fmean(mean_terms)
     return shape + 0.25 * mean
 
 

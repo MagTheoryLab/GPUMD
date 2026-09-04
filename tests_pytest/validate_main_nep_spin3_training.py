@@ -3,13 +3,13 @@
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 NEP = Path(os.environ.get("NEP_COMMAND", ROOT / "src" / "nep"))
@@ -81,19 +81,21 @@ def write_case(directory, nep_in=NEP_IN, train_xyz=TRAIN_XYZ):
 def response_xyz():
     lines = TRAIN_XYZ.splitlines()
     output = []
-    cursor = 0
-    for frame, coordinate in enumerate((-1.0, 0.0, 1.0)):
-        atom_count = int(lines[cursor])
-        output.append(lines[cursor])
-        header = lines[cursor + 1].replace(
-            "mforce:R:3", "mforce:R:3:spin_tangent:R:3")
+    atom_count = int(lines[0])
+    for coordinate in (-1.0, 0.0, 1.0):
+        output.append(lines[0])
         output.append(
-            f"{header} response_probe=rotation response_group=scan-a "
+            f"{lines[1]} response_probe=rotation response_group=scan-a "
             f"response_coordinate={coordinate}")
         for atom in range(atom_count):
-            tangent = "0 1 0" if atom < (2 if frame != 1 else 1) else "0 0 0"
-            output.append(f"{lines[cursor + 2 + atom]} {tangent}")
-        cursor += atom_count + 2
+            fields = lines[2 + atom].split()
+            if atom == 0:
+                fields[7:10] = [
+                    f"{math.cos(coordinate):.16e}",
+                    f"{math.sin(coordinate):.16e}",
+                    "0.0",
+                ]
+            output.append(" ".join(fields))
     return "\n".join(output) + "\n"
 
 
@@ -154,6 +156,17 @@ def validate_parser(root):
         results[name] = result.returncode
         if result.returncode == 0:
             raise AssertionError(f"{name} did not fail closed")
+    tangent_case = root / "spin_tangent_is_not_a_label"
+    tangent_input = NEP_IN.replace(
+        "lambda_tau 0.5", "lambda_tau 0.5\nlambda_spin_response 0.3",
+    ).replace("batch 3", "batch 3 1").replace("generation 1", "generation 0")
+    tangent_xyz = response_xyz().replace(
+        "mforce:R:3", "mforce:R:3:spin_tangent:R:3")
+    write_case(tangent_case, tangent_input, tangent_xyz)
+    result = run(NEP, tangent_case)
+    results["spin_tangent_is_not_a_label"] = result.returncode
+    if result.returncode == 0 or "not an input label" not in result.stdout + result.stderr:
+        raise AssertionError("spin_tangent input was not rejected explicitly")
     return results
 
 

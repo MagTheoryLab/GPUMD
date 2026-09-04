@@ -19,9 +19,9 @@ RMSE counts. They can nevertheless contribute to a magnetic environment when
 explicitly included by :ref:`spin_env_type <kw_spin_env_type>`; their spins
 then act as frozen model inputs.
 
-The grouped-response reduction visits every atom rather than applying the
-RMSE mask. When :ref:`lambda_spin_response <kw_lambda_spin_response>` is used,
-``spin_tangent`` must therefore be zero on inactive atoms.
+The grouped-response path derivative is computed from the converged DFT spins.
+When :ref:`lambda_spin_response <kw_lambda_spin_response>` is used, the trainer
+automatically sets that derived tangent to zero on inactive atom types.
 
 For a model in which only Fe spins are dynamical, use::
 

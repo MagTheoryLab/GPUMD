@@ -37,7 +37,6 @@ Get the fitness
 #include <limits>
 #include <map>
 #include <random>
-#include <set>
 #include <sstream>
 #include <vector>
 #include <cstring>
@@ -345,6 +344,127 @@ struct SpinResponsePoint {
   double target;
 };
 
+void derive_spin_response_tangents(
+  const Parameters& para,
+  std::vector<Structure>& structures)
+{
+  std::map<std::string, std::vector<Structure*>> groups;
+  for (auto& structure : structures) {
+    structure.has_spin_response = 0;
+    structure.spin_tangent_x.clear();
+    structure.spin_tangent_y.clear();
+    structure.spin_tangent_z.clear();
+    if (structure.has_spin_response_metadata &&
+        structure.spin_response_probe == "rotation") {
+      groups[structure.spin_response_group].push_back(&structure);
+    }
+  }
+  if (groups.empty()) {
+    PRINT_INPUT_ERROR(
+      "lambda_spin_response requires rotation response frames in train.xyz.\n");
+  }
+
+  const auto differs = [](const float left, const float right) {
+    return std::abs(static_cast<double>(left) - static_cast<double>(right)) > 1.0e-6;
+  };
+  for (auto& item : groups) {
+    auto& members = item.second;
+    std::sort(members.begin(), members.end(), [](const Structure* left, const Structure* right) {
+      return left->spin_response_coordinate < right->spin_response_coordinate;
+    });
+    if (members.size() < 3) {
+      PRINT_INPUT_ERROR(
+        "Each rotation response_group needs at least three distinct "
+        "response_coordinate values.\n");
+    }
+    const Structure& reference = *members.front();
+    for (std::size_t k = 0; k < members.size(); ++k) {
+      Structure& structure = *members[k];
+      if (!std::isfinite(structure.spin_response_coordinate)) {
+        PRINT_INPUT_ERROR("response_coordinate must be finite.\n");
+      }
+      if (k > 0 &&
+          structure.spin_response_coordinate == members[k - 1]->spin_response_coordinate) {
+        PRINT_INPUT_ERROR(
+          "Each rotation response_group needs distinct response_coordinate values.\n");
+      }
+      if (!structure.has_mforce) {
+        PRINT_INPUT_ERROR(
+          "Each rotation response frame requires mforce:R:3.\n");
+      }
+      if (structure.num_atom != reference.num_atom ||
+          structure.type != reference.type) {
+        PRINT_INPUT_ERROR(
+          "A rotation response_group cannot change atom count, type, or order.\n");
+      }
+      for (int d = 0; d < 9; ++d) {
+        if (differs(structure.box_original[d], reference.box_original[d])) {
+          PRINT_INPUT_ERROR(
+            "A rotation response_group cannot change its cell.\n");
+        }
+      }
+      for (int atom = 0; atom < structure.num_atom; ++atom) {
+        if (differs(structure.x[atom], reference.x[atom]) ||
+            differs(structure.y[atom], reference.y[atom]) ||
+            differs(structure.z[atom], reference.z[atom])) {
+          PRINT_INPUT_ERROR(
+            "A rotation response_group cannot change atomic positions.\n");
+        }
+        if (!std::isfinite(structure.sx[atom]) ||
+            !std::isfinite(structure.sy[atom]) ||
+            !std::isfinite(structure.sz[atom])) {
+          PRINT_INPUT_ERROR(
+            "Converged DFT spins in a rotation response_group must be finite.\n");
+        }
+      }
+      structure.spin_tangent_x.resize(structure.num_atom);
+      structure.spin_tangent_y.resize(structure.num_atom);
+      structure.spin_tangent_z.resize(structure.num_atom);
+    }
+
+    double tangent_power = 0.0;
+    for (std::size_t k = 0; k < members.size(); ++k) {
+      const std::size_t first = k == 0 ? 0 : (k + 1 == members.size() ? k - 2 : k - 1);
+      const std::size_t second = first + 1;
+      const std::size_t third = first + 2;
+      const double x0 = members[first]->spin_response_coordinate;
+      const double x1 = members[second]->spin_response_coordinate;
+      const double x2 = members[third]->spin_response_coordinate;
+      const double x = members[k]->spin_response_coordinate;
+      const double w0 = (2.0 * x - x1 - x2) / ((x0 - x1) * (x0 - x2));
+      const double w1 = (2.0 * x - x0 - x2) / ((x1 - x0) * (x1 - x2));
+      const double w2 = (2.0 * x - x0 - x1) / ((x2 - x0) * (x2 - x1));
+      Structure& output = *members[k];
+      for (int atom = 0; atom < output.num_atom; ++atom) {
+        const double tx =
+          w0 * members[first]->sx[atom] +
+          w1 * members[second]->sx[atom] +
+          w2 * members[third]->sx[atom];
+        const double ty =
+          w0 * members[first]->sy[atom] +
+          w1 * members[second]->sy[atom] +
+          w2 * members[third]->sy[atom];
+        const double tz =
+          w0 * members[first]->sz[atom] +
+          w1 * members[second]->sz[atom] +
+          w2 * members[third]->sz[atom];
+        const bool active = para.spin_dof_type_active[output.type[atom]] != 0;
+        output.spin_tangent_x[atom] = active ? static_cast<float>(tx) : 0.0f;
+        output.spin_tangent_y[atom] = active ? static_cast<float>(ty) : 0.0f;
+        output.spin_tangent_z[atom] = active ? static_cast<float>(tz) : 0.0f;
+        if (active) {
+          tangent_power += tx * tx + ty * ty + tz * tz;
+        }
+      }
+      output.has_spin_response = 1;
+    }
+    if (tangent_power == 0.0) {
+      PRINT_INPUT_ERROR(
+        "A rotation response_group must contain a changing converged DFT spin path.\n");
+    }
+  }
+}
+
 void append_spin_response_points(
   const int device_id,
   Dataset& dataset,
@@ -395,89 +515,41 @@ float spin_response_loss(const std::vector<SpinResponsePoint>& points)
     return 0.0f;
   }
 
-  std::vector<double> centered_prediction(points.size());
-  std::vector<double> centered_target(points.size());
-  std::vector<double> reliability(points.size());
-  std::vector<double> mean_prediction;
-  std::vector<double> mean_target;
-  std::size_t offset = 0;
+  double group_power_sum = 0.0;
   for (const auto& item : groups) {
     const auto& members = item.second;
-    double mean_x = 0.0;
-    double mean_p = 0.0;
-    double mean_t = 0.0;
+    double target_power = 0.0;
     for (const auto* point : members) {
-      mean_x += point->coordinate;
-      mean_p += point->prediction;
-      mean_t += point->target;
+      target_power += point->target * point->target;
     }
-    const double inverse_size = 1.0 / members.size();
-    mean_x *= inverse_size;
-    mean_p *= inverse_size;
-    mean_t *= inverse_size;
-    mean_prediction.push_back(mean_p);
-    mean_target.push_back(mean_t);
-
-    double xx = 0.0;
-    double xy = 0.0;
-    for (const auto* point : members) {
-      const double x = point->coordinate - mean_x;
-      const double y = point->target - mean_t;
-      xx += x * x;
-      xy += x * y;
-    }
-    const double slope = xy / std::max(xx, static_cast<double>(
-      std::numeric_limits<float>::epsilon()));
-    double signal_power = 0.0;
-    double noise_power = 0.0;
-    for (const auto* point : members) {
-      const double centered_x = point->coordinate - mean_x;
-      const double centered_y = point->target - mean_t;
-      const double signal = slope * centered_x;
-      const double noise = centered_y - signal;
-      signal_power += signal * signal;
-      noise_power += noise * noise;
-    }
-    signal_power *= inverse_size;
-    noise_power *= inverse_size;
-    const double score = signal_power /
-      (signal_power + noise_power + std::numeric_limits<float>::epsilon());
-    for (const auto* point : members) {
-      centered_prediction[offset] = point->prediction - mean_p;
-      centered_target[offset] = point->target - mean_t;
-      reliability[offset] = std::max(0.05, score);
-      ++offset;
-    }
-  }
-
-  double target_square = 0.0;
-  for (const double value : centered_target) {
-    target_square += value * value;
+    group_power_sum += target_power / members.size();
   }
   const double scale = std::max(
-    std::sqrt(target_square / centered_target.size()),
-    64.0 * std::numeric_limits<float>::epsilon());
-  double weighted_loss = 0.0;
-  double weight_sum = 0.0;
-  for (std::size_t n = 0; n < centered_target.size(); ++n) {
-    const double residual = (centered_prediction[n] - centered_target[n]) / scale;
-    weighted_loss += reliability[n] * huber_loss(residual);
-    weight_sum += reliability[n];
-  }
-  const double shape_loss = weighted_loss / std::max(1.0, weight_sum);
-
-  double mean_target_square = 0.0;
-  for (const double value : mean_target) {
-    mean_target_square += value * value;
-  }
-  const double mean_scale = std::max(
-    std::sqrt(mean_target_square / mean_target.size()),
-    64.0 * std::numeric_limits<float>::epsilon());
+    std::sqrt(group_power_sum / groups.size()), 1.0e-6);
+  double shape_loss = 0.0;
   double mean_loss = 0.0;
-  for (std::size_t n = 0; n < mean_target.size(); ++n) {
-    mean_loss += huber_loss((mean_prediction[n] - mean_target[n]) / mean_scale);
+  for (const auto& item : groups) {
+    const auto& members = item.second;
+    double mean_prediction = 0.0;
+    double mean_target = 0.0;
+    for (const auto* point : members) {
+      mean_prediction += point->prediction;
+      mean_target += point->target;
+    }
+    mean_prediction /= members.size();
+    mean_target /= members.size();
+    double group_shape_loss = 0.0;
+    for (const auto* point : members) {
+      const double residual =
+        ((point->prediction - mean_prediction) -
+         (point->target - mean_target)) / scale;
+      group_shape_loss += huber_loss(residual);
+    }
+    shape_loss += group_shape_loss / members.size();
+    mean_loss += huber_loss((mean_prediction - mean_target) / scale);
   }
-  mean_loss /= mean_target.size();
+  shape_loss /= groups.size();
+  mean_loss /= groups.size();
   return static_cast<float>(shape_loss + 0.25 * mean_loss);
 }
 
@@ -494,35 +566,7 @@ Fitness::Fitness(Parameters& para)
   std::vector<Structure> structures_train;
   read_structures(true, para, structures_train);
   if (para.lambda_spin_response > 0.0f) {
-    std::map<std::string, std::set<float>> response_groups;
-    std::map<std::string, std::pair<int, int>> response_group_counts;
-    for (const auto& structure : structures_train) {
-      if (structure.has_spin_response_metadata) {
-        ++response_group_counts[structure.spin_response_group].first;
-      }
-      if (structure.has_spin_response) {
-        ++response_group_counts[structure.spin_response_group].second;
-        response_groups[structure.spin_response_group].insert(
-          structure.spin_response_coordinate);
-      }
-    }
-    if (response_groups.empty()) {
-      PRINT_INPUT_ERROR(
-        "lambda_spin_response requires rotation response frames in train.xyz.\n");
-    }
-    for (const auto& item : response_group_counts) {
-      if (item.second.second > 0 && item.second.first != item.second.second) {
-        PRINT_INPUT_ERROR(
-          "spin_tangent must be present on every frame of a response_group.\n");
-      }
-    }
-    for (const auto& item : response_groups) {
-      if (item.second.size() < 3) {
-        PRINT_INPUT_ERROR(
-          "Each response_group needs at least three distinct "
-          "response_coordinate values.\n");
-      }
-    }
+    derive_spin_response_tangents(para, structures_train);
   }
   if (para.spin_mode && !para.prediction) {
     fit_spin_energy_baseline(structures_train, para);

@@ -39,7 +39,8 @@ struct Structure {
   float volume;
   float box[18];
   float temperature;
-  float spin_response_coordinate = 0.0f;
+  double spin_response_coordinate = 0.0;
+  std::string spin_response_probe;
   std::string spin_response_group;
   std::vector<int> type;
   std::vector<float> x;

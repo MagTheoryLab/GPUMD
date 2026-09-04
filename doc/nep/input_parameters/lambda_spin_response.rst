@@ -31,29 +31,29 @@ and, with a smaller weight, the group mean. This is useful when relative
 magnetic response along a controlled rotation path matters in addition to
 per-component magnetic-force RMSE.
 
-Every participating ``train.xyz`` frame must provide ``mforce:R:3`` and
-``spin_tangent:R:3`` together with::
+Every participating ``train.xyz`` frame must provide the converged DFT
+``spin:R:3`` and ``mforce:R:3`` together with::
 
   response_probe=rotation response_group=<name> response_coordinate=<value>
 
 Each group needs at least three distinct ``response_coordinate`` values, and
-all frames in a participating group must provide the tangent. The coordinate
-does not have to be globally comparable between groups. It parameterizes one
-path and is used to estimate a target-signal reliability weight; it does not
-sort the frames. It is explicit because a collection of Cartesian spin
-snapshots cannot in general reveal which atoms were rotated, the rotation
-axis, or a nonuniform path parameter.
+the trainer sorts each complete group by this coordinate and derives
+``d spin / d response_coordinate`` with the same second-order, three-point
+nonuniform finite difference used by TorchNEP. The coordinate does not have
+to be globally comparable between groups.
 
-For a rotation angle :math:`\theta`, a natural tangent is
-:math:`\boldsymbol{t}_{ai}=\partial\boldsymbol{s}_{ai}/\partial\theta` and a
-natural ``response_coordinate`` is :math:`\theta` in radians. The trainer does
-not construct this tangent from the group label. Set this tangent to zero for
-atoms excluded by :ref:`spin_dof_type <kw_spin_dof_type>`, because the grouped
-sum visits every atom while their predicted public magnetic force is masked to
-zero. See :ref:`train_test_xyz` for the complete extended-XYZ contract.
+For a rotation angle :math:`\theta`, ``response_coordinate`` should be
+:math:`\theta` in radians. ``spin`` must contain the moments from the final
+constrained-DFT state, not the initially requested constraint vectors. The
+derived path tangent retains both transverse and longitudinal relaxation.
+Atoms excluded by :ref:`spin_dof_type <kw_spin_dof_type>` are masked from the
+derived response automatically. ``spin_tangent:R:3`` is not accepted as an
+input label.
 
 With this tangent convention,
-:math:`R_a=-\partial U_a/\partial\theta`. The centered shape term uses a Huber
-loss normalized by the global centered-target RMS and weighted by a
-coordinate-derived reliability score with a 0.05 floor. The final loss adds
-0.25 times a separately normalized Huber loss of the group means.
+:math:`R_a=-\partial U_a/\partial\theta`. Matching TorchNEP's
+``neutral-group-balanced-mean-plus-centered-mforce-generator-v3`` contract,
+each group contributes equally. A single group-balanced target-response RMS
+normalizes both the centered-shape and group-mean Huber terms; the latter has
+weight 0.25. Coordinates define the path derivative but do not create an
+additional reliability weight.

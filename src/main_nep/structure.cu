@@ -91,7 +91,6 @@ static void read_force(
   const int force_offset,
   const int spin_offset,
   const int mforce_offset,
-  const int spin_tangent_offset,
   const int avirial_offset,
   const int bec_offset,
   std::ifstream& input,
@@ -115,11 +114,6 @@ static void read_force(
     structure.mfx.resize(structure.num_atom, 0.0f);
     structure.mfy.resize(structure.num_atom, 0.0f);
     structure.mfz.resize(structure.num_atom, 0.0f);
-    if (structure.has_spin_response) {
-      structure.spin_tangent_x.resize(structure.num_atom);
-      structure.spin_tangent_y.resize(structure.num_atom);
-      structure.spin_tangent_z.resize(structure.num_atom);
-    }
   }
   structure.bec.resize(structure.num_atom * 9);
   if (structure.has_atomic_virial) {
@@ -169,14 +163,6 @@ static void read_force(
           get_double_from_token(tokens[mforce_offset + 1], xyz_filename.c_str(), line_number);
         structure.mfz[na] =
           get_double_from_token(tokens[mforce_offset + 2], xyz_filename.c_str(), line_number);
-      }
-      if (structure.has_spin_response) {
-        structure.spin_tangent_x[na] = get_double_from_token(
-          tokens[spin_tangent_offset], xyz_filename.c_str(), line_number);
-        structure.spin_tangent_y[na] = get_double_from_token(
-          tokens[spin_tangent_offset + 1], xyz_filename.c_str(), line_number);
-        structure.spin_tangent_z[na] = get_double_from_token(
-          tokens[spin_tangent_offset + 2], xyz_filename.c_str(), line_number);
       }
     }
 
@@ -252,8 +238,10 @@ static void read_one_structure(
     const std::string coordinate = "response_coordinate=";
     if (token.substr(0, probe.length()) == probe) {
       has_response_probe = true;
-      if (token.substr(probe.length(), token.length()) != "rotation") {
-        PRINT_INPUT_ERROR("Only response_probe=rotation is supported.\n");
+      structure.spin_response_probe =
+        token.substr(probe.length(), token.length());
+      if (structure.spin_response_probe.empty()) {
+        PRINT_INPUT_ERROR("response_probe should not be empty.\n");
       }
     } else if (token.substr(0, group.length()) == group) {
       has_response_group = true;
@@ -496,7 +484,6 @@ static void read_one_structure(
   int force_offset = 0;
   int spin_offset = 0;
   int mforce_offset = 0;
-  int spin_tangent_offset = 0;
   int avirial_offset = 0;
   int bec_offset = 0;
   int num_columns = 0;
@@ -519,7 +506,6 @@ static void read_one_structure(
       int force_position = -1;
       int spin_position = -1;
       int mforce_position = -1;
-      int spin_tangent_position = -1;
       int avirial_position = -1;
       int bec_position = -1;
       for (int k = 0; k < sub_tokens.size() / 3; ++k) {
@@ -551,17 +537,9 @@ static void read_one_structure(
           }
         }
         if (sub_tokens[k * 3] == "spin_tangent") {
-          if (spin_tangent_position >= 0) {
-            PRINT_INPUT_ERROR("Only one spin_tangent property is allowed.\n");
-          }
-          spin_tangent_position = k;
-          if (sub_tokens[k * 3 + 1] != "r" ||
-              get_int_from_token(
-                sub_tokens[k * 3 + 2],
-                xyz_filename.c_str(),
-                line_number) != 3) {
-            PRINT_INPUT_ERROR("spin_tangent must have property type R:3.\n");
-          }
+          PRINT_INPUT_ERROR(
+            "spin_tangent is not an input label; it is derived from each "
+            "final DFT spin path.\n");
         }
         if (
           sub_tokens[k * 3] == "mforce" ||
@@ -613,12 +591,6 @@ static void read_one_structure(
         PRINT_INPUT_ERROR(
           "spin_mode 3 requires spin/spins/moment/moments with property type R:3.\n");
       }
-      if (spin_tangent_position >= 0 &&
-          (!structure.has_spin_response_metadata || mforce_position < 0)) {
-        PRINT_INPUT_ERROR(
-          "spin_tangent:R:3 requires rotation response metadata and mforce:R:3.\n");
-      }
-      structure.has_spin_response = spin_tangent_position >= 0;
       if (avirial_position < 0 && para.train_mode == 1 && para.atomic_v == 1) {
         PRINT_INPUT_ERROR("'adipole' or 'atomic_dipole' is missing in properties.");
       }
@@ -646,10 +618,6 @@ static void read_one_structure(
           mforce_offset +=
             get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
         }
-        if (k < spin_tangent_position) {
-          spin_tangent_offset +=
-            get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
-        }
         if (k < avirial_position) {
           avirial_offset +=
             get_int_from_token(sub_tokens[k * 3 + 2], xyz_filename.c_str(), line_number);
@@ -670,7 +638,6 @@ static void read_one_structure(
     force_offset,
     spin_offset,
     mforce_offset,
-    spin_tangent_offset,
     avirial_offset,
     bec_offset,
     input,
@@ -768,6 +735,7 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
     structures_copy[nc].has_spin_response_metadata =
       structures[nc].has_spin_response_metadata;
     structures_copy[nc].has_spin_response = structures[nc].has_spin_response;
+    structures_copy[nc].spin_response_probe = structures[nc].spin_response_probe;
     structures_copy[nc].spin_response_group = structures[nc].spin_response_group;
     structures_copy[nc].spin_response_coordinate =
       structures[nc].spin_response_coordinate;
@@ -842,6 +810,8 @@ static void reorder(const int num_batches, std::vector<Structure>& structures)
       structures_copy[configuration_id[nc]].has_spin_response_metadata;
     structures[nc].has_spin_response =
       structures_copy[configuration_id[nc]].has_spin_response;
+    structures[nc].spin_response_probe =
+      structures_copy[configuration_id[nc]].spin_response_probe;
     structures[nc].spin_response_group =
       structures_copy[configuration_id[nc]].spin_response_group;
     structures[nc].spin_response_coordinate =

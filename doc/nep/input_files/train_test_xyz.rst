@@ -55,9 +55,8 @@ Essentially any keyword is allowed, but we only read the following ones:
   * :attr:`mforce:R:3` target magnetic-force vector (optional). The aliases
     ``mforces``, ``force_mag``, ``forces_mag``, ``magnetic_force``, and
     ``magnetic_forces`` are also accepted.
-  * :attr:`spin_tangent:R:3` tangent of a user-defined rotation coordinate
-    (optional; used only by the grouped magnetic-response loss described
-    below)
+  ``spin_tangent`` is not an input property. The trainer derives it internally
+  from each complete final-DFT spin path.
 
 * If a dipole model is to be trained, energy, virial, stress, and force will be ignored and one should additionally provide :attr:`dipole="dx dy dz"`, which is the dipole vector of the structure. 
 
@@ -68,8 +67,8 @@ Magnetic-response groups
 
 The grouped response loss is optional and is enabled by
 :ref:`lambda_spin_response <kw_lambda_spin_response>`. Every participating
-frame must contain ``mforce:R:3``, ``spin_tangent:R:3``, and the following
-three line-2 metadata items:
+frame must contain the final constrained-DFT ``spin:R:3``, ``mforce:R:3``, and
+the following three line-2 metadata items:
 
 .. code::
 
@@ -77,20 +76,16 @@ three line-2 metadata items:
 
 ``response_group`` identifies frames belonging to one physical rotation path.
 ``response_coordinate`` parameterizes points on that path; using the rotation
-angle in radians is recommended. The trainer uses it to validate distinct
-points and estimate a target-signal reliability weight from the target
-response slope. It does not reorder the input frames. The coordinate only
-needs to be meaningful within its group. It is explicit because a generic
-Cartesian spin snapshot does not uniquely determine which atoms were rotated,
-the rotation axis, or a nonuniform path parameter.
+angle in radians is recommended. The trainer sorts the group by this value and
+derives the tangent from the converged DFT spins using a second-order,
+three-point nonuniform finite difference. The coordinate only needs to be
+meaningful within its group.
 
-Each response group needs at least three distinct coordinate values. If any
-frame in a group contains ``spin_tangent``, every frame in that group must
-contain it. Ordinary spin training does not require response metadata or
-``spin_tangent``.
-For atom types excluded by :ref:`spin_dof_type <kw_spin_dof_type>`, write a
-zero ``spin_tangent``. The grouped reduction visits every atom, while the
-predicted public magnetic force of an inactive type is masked to zero.
+Each response group needs at least three distinct coordinate values and must
+keep atom count, type/order, positions, and cell fixed. Ordinary spin training
+does not require response metadata. Non-``rotation`` probe metadata is accepted
+for analysis but does not participate in this loss. Atom types excluded by
+:ref:`spin_dof_type <kw_spin_dof_type>` are masked automatically.
 
 Starting from line 3
 ^^^^^^^^^^^^^^^^^^^^
