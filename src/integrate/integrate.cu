@@ -42,6 +42,7 @@ The driver class for the various integrators.
 #include "ensemble_wall_piston.cuh"
 #include "integrate.cuh"
 #include "model/atom.cuh"
+#include "spin_sib.cuh"
 #include "spin_tspin.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_macro.cuh"
@@ -56,6 +57,13 @@ bool is_tspin_option(const char* value)
 {
   return strcmp(value, "lattice") == 0 ||
     strcmp(value, "mass_factor") == 0 || strcmp(value, "seed") == 0;
+}
+
+bool is_sib_option(const char* value)
+{
+  return strcmp(value, "lattice") == 0 || strcmp(value, "alpha") == 0 ||
+    strcmp(value, "gamma") == 0 || strcmp(value, "stemp") == 0 ||
+    strcmp(value, "seed") == 0;
 }
 
 void print_spin_mass_factors(
@@ -106,14 +114,18 @@ void Integrate::initialize(
   // determine the integrator
   switch (type) {
     case 0: // NVE
-      ensemble.reset(new Ensemble_NVE(type));
+      if (use_spin_sib && !spin_lattice_enabled) {
+        ensemble.reset(new Ensemble_Fixed_Lattice(type));
+      } else {
+        ensemble.reset(new Ensemble_NVE(type));
+      }
       break;
     case 1: // NVT-Berendsen
       ensemble.reset(
         new Ensemble_BER(type, move_group, move_velocity, temperature, temperature_coupling));
       break;
     case 2: // NVT-NHC
-      if (use_spin_tspin && !spin_lattice_enabled) {
+      if ((use_spin_tspin || use_spin_sib) && !spin_lattice_enabled) {
         ensemble.reset(new Ensemble_Fixed_Lattice(type));
       } else {
         ensemble.reset(new Ensemble_NHC(
@@ -324,6 +336,14 @@ void Integrate::initialize(
       spin_seed,
       atom));
     spin_integrator->temperature = temperature;
+  } else if (use_spin_sib) {
+    spin_integrator.reset(new Spin_SIB(
+      spin_sib_alpha,
+      spin_sib_gamma,
+      spin_sib_temperature,
+      spin_sib_seed,
+      atom));
+    spin_integrator->temperature = temperature;
   }
 }
 
@@ -389,7 +409,7 @@ void Integrate::compute1(
   } else if (type > 0 && (type <= 20 || type == 33)) {
     target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
-  } else if (type == -3 && use_spin_tspin) {
+  } else if (type == -3 && (use_spin_tspin || use_spin_sib)) {
     target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
   }
@@ -444,7 +464,7 @@ void Integrate::compute2(
   } else if (type > 0 && (type <= 20 || type == 33)) {
     target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
-  } else if (type == -3 && use_spin_tspin) {
+  } else if (type == -3 && (use_spin_tspin || use_spin_sib)) {
     target_temperature =
       temperature1 + (temperature2 - temperature1) * step_over_number_of_steps;
   } else if (type == -11) {
@@ -481,9 +501,14 @@ void Integrate::parse_ensemble(
   qtb_f_max = 200.0;
   qtb_n_f = 100;
   use_spin_tspin = false;
+  use_spin_sib = false;
   spin_lattice_enabled = true;
   spin_mass_factor_by_type.assign(atom.cpu_type_size.size(), 1.0);
   spin_seed = 12345;
+  spin_sib_alpha = 0.0;
+  spin_sib_gamma = 2.0 * 1000.0 / (HBAR * TIME_UNIT_CONVERSION);
+  spin_sib_temperature = 0.0;
+  spin_sib_seed = 12345;
   int ensemble_num_param = num_param;
   int spin_option_start = num_param;
 
@@ -492,6 +517,19 @@ void Integrate::parse_ensemble(
     type = 0;
     if (num_param != 2) {
       PRINT_INPUT_ERROR("ensemble nve should have 0 parameter.");
+    }
+  } else if (strcmp(param[1], "nve_sib") == 0) {
+    type = 0;
+    use_spin_sib = true;
+    spin_lattice_enabled = false;
+    spin_sib_temperature = -1.0;
+    spin_option_start = 2;
+    temperature = 0.0;
+    temperature1 = 0.0;
+    temperature2 = 0.0;
+    if ((num_param - 2) % 2 != 0) {
+      PRINT_INPUT_ERROR(
+        "ensemble nve_sib accepts only optional SIB key-value pairs.");
     }
   } else if (strcmp(param[1], "nvt_ber") == 0) {
     type = 1;
@@ -510,6 +548,15 @@ void Integrate::parse_ensemble(
     if (num_param < 5) {
       PRINT_INPUT_ERROR(
         "ensemble nvt_tspin should have 3 required parameters plus "
+        "optional key-value pairs.");
+    }
+  } else if (strcmp(param[1], "nvt_sib") == 0) {
+    type = 2;
+    use_spin_sib = true;
+    spin_option_start = 5;
+    if (num_param < 5) {
+      PRINT_INPUT_ERROR(
+        "ensemble nvt_sib should have 3 required parameters plus "
         "optional key-value pairs.");
     }
   } else if (strcmp(param[1], "nvt_lan") == 0) {
@@ -557,6 +604,28 @@ void Integrate::parse_ensemble(
       PRINT_INPUT_ERROR(
         "ensemble npt_tspin should have npt_mttk parameters plus optional "
         "TSPIN options.");
+    }
+    std::vector<const char*> mttk_param(param, param + ensemble_num_param);
+    mttk_param[1] = "npt_mttk";
+    Ensemble_MTTK* ptr_temp = new Ensemble_MTTK(mttk_param.data(), ensemble_num_param);
+    ensemble.reset(ptr_temp);
+    temperature1 = ptr_temp->t_start;
+    temperature2 = ptr_temp->t_stop;
+    temperature_coupling = ptr_temp->get_temperature_period();
+  } else if (strcmp(param[1], "npt_sib") == 0) {
+    type = -3;
+    use_spin_sib = true;
+    for (int index = 2; index < num_param; ++index) {
+      if (is_sib_option(param[index])) {
+        ensemble_num_param = index;
+        break;
+      }
+    }
+    spin_option_start = ensemble_num_param;
+    if (ensemble_num_param < 8) {
+      PRINT_INPUT_ERROR(
+        "ensemble npt_sib should have npt_mttk parameters plus optional "
+        "SIB options.");
     }
     std::vector<const char*> mttk_param(param, param + ensemble_num_param);
     mttk_param[1] = "npt_mttk";
@@ -801,6 +870,80 @@ void Integrate::parse_ensemble(
       } else {
         PRINT_INPUT_ERROR("Unknown TSPIN optional keyword.");
       }
+    }
+  }
+
+  if (use_spin_sib) {
+    bool has_lattice = false;
+    bool has_alpha = false;
+    bool has_gamma = false;
+    bool has_spin_temperature = false;
+    bool has_seed = false;
+    int index = spin_option_start;
+    while (index < num_param) {
+      if (index + 1 >= num_param) {
+        PRINT_INPUT_ERROR("SIB optional keywords require a value.");
+      }
+      if (strcmp(param[index], "lattice") == 0) {
+        if (strcmp(param[1], "nvt_sib") != 0) {
+          PRINT_INPUT_ERROR("SIB lattice is only valid for nvt_sib.");
+        }
+        if (has_lattice) {
+          PRINT_INPUT_ERROR("SIB lattice cannot be repeated.");
+        }
+        has_lattice = true;
+        if (strcmp(param[index + 1], "on") == 0) {
+          spin_lattice_enabled = true;
+        } else if (strcmp(param[index + 1], "off") == 0) {
+          spin_lattice_enabled = false;
+        } else {
+          PRINT_INPUT_ERROR("SIB lattice should be on or off.");
+        }
+      } else if (strcmp(param[index], "alpha") == 0) {
+        if (has_alpha) {
+          PRINT_INPUT_ERROR("SIB alpha cannot be repeated.");
+        }
+        has_alpha = true;
+        if (!is_valid_real(param[index + 1], &spin_sib_alpha) ||
+            !std::isfinite(spin_sib_alpha) || spin_sib_alpha < 0.0) {
+          PRINT_INPUT_ERROR("SIB alpha should be finite and >= 0.");
+        }
+      } else if (strcmp(param[index], "gamma") == 0) {
+        if (has_gamma) {
+          PRINT_INPUT_ERROR("SIB gamma cannot be repeated.");
+        }
+        has_gamma = true;
+        if (!is_valid_real(param[index + 1], &spin_sib_gamma) ||
+            !std::isfinite(spin_sib_gamma) || spin_sib_gamma <= 0.0) {
+          PRINT_INPUT_ERROR("SIB gamma should be finite and > 0.");
+        }
+      } else if (strcmp(param[index], "stemp") == 0) {
+        if (has_spin_temperature) {
+          PRINT_INPUT_ERROR("SIB stemp cannot be repeated.");
+        }
+        has_spin_temperature = true;
+        if (!is_valid_real(param[index + 1], &spin_sib_temperature) ||
+            !std::isfinite(spin_sib_temperature) ||
+            (spin_sib_temperature < 0.0 && spin_sib_temperature != -1.0)) {
+          PRINT_INPUT_ERROR("SIB stemp should be -1, 0, or a positive temperature.");
+        }
+      } else if (strcmp(param[index], "seed") == 0) {
+        if (has_seed) {
+          PRINT_INPUT_ERROR("SIB seed cannot be repeated.");
+        }
+        has_seed = true;
+        if (!is_valid_int(param[index + 1], &spin_sib_seed) || spin_sib_seed <= 0) {
+          PRINT_INPUT_ERROR("SIB seed should be a positive integer.");
+        }
+      } else {
+        PRINT_INPUT_ERROR("Unknown SIB optional keyword.");
+      }
+      index += 2;
+    }
+    if (strcmp(param[1], "nve_sib") == 0 && spin_sib_temperature == 0.0) {
+      PRINT_INPUT_ERROR(
+        "SIB stemp 0 requires a temperature-controlled ensemble; use stemp -1 "
+        "or a positive temperature with nve_sib.");
     }
   }
 
@@ -1263,7 +1406,20 @@ void Integrate::parse_ensemble(
 
   switch (type) {
     case 0:
-      printf("Use NVE ensemble for this run.\n");
+      if (use_spin_sib) {
+        printf("Integrate spins with the semi-implicit B (SIB) method.\n");
+        printf("    keep lattice positions and velocities fixed.\n");
+        printf("    alpha is %g.\n", spin_sib_alpha);
+        printf("    gamma is %g (eV ps)^-1.\n", spin_sib_gamma);
+        if (spin_sib_temperature < 0.0) {
+          printf("    SIB thermal noise is disabled.\n");
+        } else {
+          printf("    SIB thermal noise temperature is %g K.\n", spin_sib_temperature);
+        }
+        printf("    SIB noise seed is %d.\n", spin_sib_seed);
+      } else {
+        printf("Use NVE ensemble for this run.\n");
+      }
       break;
     case 1:
       printf("Use NVT ensemble for this run.\n");
@@ -1283,6 +1439,23 @@ void Integrate::parse_ensemble(
         }
         print_spin_mass_factors(atom, spin_mass_factor_by_type);
         printf("    spin velocity seed is %d.\n", spin_seed);
+      } else if (use_spin_sib) {
+        printf("    integrate spins with the semi-implicit B (SIB) method.\n");
+        if (spin_lattice_enabled) {
+          printf("    integrate the lattice with a Nose-Hoover chain.\n");
+        } else {
+          printf("    keep lattice positions and velocities fixed.\n");
+        }
+        printf("    alpha is %g.\n", spin_sib_alpha);
+        printf("    gamma is %g (eV ps)^-1.\n", spin_sib_gamma);
+        if (spin_sib_temperature < 0.0) {
+          printf("    SIB thermal noise is disabled.\n");
+        } else if (spin_sib_temperature == 0.0) {
+          printf("    SIB thermal noise follows the ensemble temperature.\n");
+        } else {
+          printf("    SIB thermal noise temperature is %g K.\n", spin_sib_temperature);
+        }
+        printf("    SIB noise seed is %d.\n", spin_sib_seed);
       } else {
         printf("    choose the Nose-Hoover chain method.\n");
       }
@@ -1412,6 +1585,18 @@ void Integrate::parse_ensemble(
         printf("Integrate spins with TSPIN.\n");
         print_spin_mass_factors(atom, spin_mass_factor_by_type);
         printf("    spin velocity seed is %d.\n", spin_seed);
+      } else if (use_spin_sib) {
+        printf("Integrate spins with the semi-implicit B (SIB) method.\n");
+        printf("    alpha is %g.\n", spin_sib_alpha);
+        printf("    gamma is %g (eV ps)^-1.\n", spin_sib_gamma);
+        if (spin_sib_temperature < 0.0) {
+          printf("    SIB thermal noise is disabled.\n");
+        } else if (spin_sib_temperature == 0.0) {
+          printf("    SIB thermal noise follows the ensemble temperature.\n");
+        } else {
+          printf("    SIB thermal noise temperature is %g K.\n", spin_sib_temperature);
+        }
+        printf("    SIB noise seed is %d.\n", spin_sib_seed);
       }
       break;
     case -4:

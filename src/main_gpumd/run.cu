@@ -77,6 +77,28 @@ Run simulation according to the inputs in the run.in file.
 #include <chrono>
 #include <cstring>
 
+static __global__ void gpu_form_force_delta(
+  const int size,
+  const double* force_with_modifiers,
+  double* base_force)
+{
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index < size) {
+    base_force[index] = force_with_modifiers[index] - base_force[index];
+  }
+}
+
+static __global__ void gpu_add_force_delta(
+  const int size,
+  const double* force_delta,
+  double* force)
+{
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index < size) {
+    force[index] += force_delta[index];
+  }
+}
+
 static __global__ void gpu_find_largest_v2(
   int N, int number_of_rounds, double* g_vx, double* g_vy, double* g_vz, double* g_v2_max)
 {
@@ -214,14 +236,19 @@ void Run::execute_run_in()
 
 void Run::perform_a_run()
 {
-  if (integrate.use_spin_tspin && !force.has_spin_potential()) {
-    PRINT_INPUT_ERROR("A TSPIN ensemble requires one Spin potential.");
+  if ((integrate.use_spin_tspin || integrate.use_spin_sib) &&
+      !force.has_spin_potential()) {
+    PRINT_INPUT_ERROR("A spin integration ensemble requires one Spin potential.");
   }
-  if (integrate.use_spin_tspin && !atom.has_spin) {
-    PRINT_INPUT_ERROR("A TSPIN ensemble requires spin:R:3 in model.xyz.");
+  if ((integrate.use_spin_tspin || integrate.use_spin_sib) && !atom.has_spin) {
+    PRINT_INPUT_ERROR("A spin integration ensemble requires spin:R:3 in model.xyz.");
   }
   integrate.initialize(
     time_step, atom, box, group, thermo, number_of_steps);
+  GPU_Vector<double> sib_midpoint_base_force;
+  if (integrate.use_spin_sib) {
+    sib_midpoint_base_force.resize(3 * atom.number_of_atoms);
+  }
   mc.initialize();
   measure.initialize(number_of_steps, time_step, integrate, group, atom, box, force);
 
@@ -326,6 +353,10 @@ void Run::perform_a_run()
       }
     }
 
+    if (integrate.use_spin_sib) {
+      sib_midpoint_base_force.copy_from_device(atom.force_per_atom.data());
+    }
+
     electron_stop.compute(time_step, atom);
     add_force.compute(step, group, atom);
     add_spring.compute(step, group, atom);
@@ -333,6 +364,46 @@ void Run::perform_a_run()
     add_efield.compute(step, group, atom, force);
 
     integrate.compute2(time_step, double(step) / number_of_steps, group, box, atom, thermo, force);
+
+    // SIB's force above is evaluated at its unnormalized chord midpoint.  The
+    // endpoint field is the starting field of the next predictor and the
+    // state consumed by measurements, so refresh the complete endpoint state.
+    // Preserve the already-sampled external-force increment instead of
+    // invoking stateful modifiers (random force/electron stopping) twice.
+    if (integrate.use_spin_sib) {
+      const int force_size = 3 * atom.number_of_atoms;
+      gpu_form_force_delta<<<(force_size - 1) / 128 + 1, 128>>>(
+        force_size,
+        atom.force_per_atom.data(),
+        sib_midpoint_base_force.data());
+      GPU_CHECK_KERNEL
+      force.compute(
+        box,
+        atom.position_per_atom,
+        atom.type,
+        group,
+        atom.potential_per_atom,
+        atom.force_per_atom,
+        atom.virial_per_atom,
+        atom.velocity_per_atom,
+        atom.mass,
+        atom.spin_per_atom,
+        atom.mforce_per_atom);
+      gpu_add_force_delta<<<(force_size - 1) / 128 + 1, 128>>>(
+        force_size,
+        sib_midpoint_base_force.data(),
+        atom.force_per_atom.data());
+      GPU_CHECK_KERNEL
+      integrate.ensemble->find_thermo(
+        false,
+        box.get_volume(),
+        group,
+        atom.mass,
+        atom.potential_per_atom,
+        atom.velocity_per_atom,
+        atom.virial_per_atom,
+        thermo);
+    }
 
     mc.compute(step, number_of_steps, atom, box, group);
 
@@ -432,8 +503,10 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     parse_velocity(param, num_param);
   } else if (strcmp(param[0], "ensemble") == 0) {
     if (num_param < 2 ||
-        (strcmp(param[1], "nve") != 0 && strcmp(param[1], "nvt_nhc") != 0 &&
-         strcmp(param[1], "nvt_tspin") != 0 && strcmp(param[1], "npt_tspin") != 0)) {
+        (strcmp(param[1], "nve") != 0 && strcmp(param[1], "nve_sib") != 0 &&
+         strcmp(param[1], "nvt_nhc") != 0 &&
+         strcmp(param[1], "nvt_tspin") != 0 && strcmp(param[1], "npt_tspin") != 0 &&
+         strcmp(param[1], "nvt_sib") != 0 && strcmp(param[1], "npt_sib") != 0)) {
       mark_spin_unsupported(param[0]);
     }
     integrate.parse_ensemble(param, num_param, time_step, atom, box, group, thermo);

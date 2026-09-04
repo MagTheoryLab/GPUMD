@@ -89,9 +89,14 @@ public:
   int num_target_pressure_components;
   double temperature_coupling;
   bool use_spin_tspin = false;
+  bool use_spin_sib = false;
   bool spin_lattice_enabled = true;
   std::vector<double> spin_mass_factor_by_type;
   int spin_seed = 12345;
+  double spin_sib_alpha = 0.0;
+  double spin_sib_gamma = 0.0;
+  double spin_sib_temperature = 0.0;
+  int spin_sib_seed = 12345;
   double qtb_f_max = 200.0; // in ps^-1
   int qtb_n_f = 100;
   double tau_p;
