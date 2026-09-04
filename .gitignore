@@ -30,3 +30,4 @@ __pycache__/
 .hypothesis/
 README.gnep.md
 push-to-both.sh
+/tmp/qscaler-ab/

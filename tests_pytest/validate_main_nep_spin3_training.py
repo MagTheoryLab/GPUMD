@@ -191,7 +191,7 @@ def validate_response_training(root):
 
 def validate_training_and_runtime(
         root, enable_zbl=False, spin_compress=2, typewise_spin_cutoff=False,
-        mforce_mode="full"):
+        mforce_mode="full", all_spin_types=False):
     root.mkdir()
     training = root / "training"
     nep_in = NEP_IN.replace("version 4", "version 4\nzbl 2.5") \
@@ -199,6 +199,8 @@ def validate_training_and_runtime(
     nep_in = nep_in.replace(
         "spin_compress 2", f"spin_compress {spin_compress}")
     nep_in = nep_in.replace("spin_mforce_mode full", f"spin_mforce_mode {mforce_mode}")
+    if all_spin_types:
+        nep_in = nep_in.replace("spin_dof_type Fe\n", "spin_dof_type Fe Ge\n")
     if typewise_spin_cutoff:
         nep_in = nep_in.replace("spin_cutoff 6.0", "spin_cutoff 5.0 7.0")
     write_case(training, nep_in)
@@ -220,7 +222,7 @@ def validate_training_and_runtime(
         "spin_order 3\n",
         "spin_soc 1\n",
         "spin_scaler 1\n",
-        "spin_dof_type Fe\n",
+        "spin_dof_type Fe Ge\n" if all_spin_types else "spin_dof_type Fe\n",
         "spin_env_type Fe Ge\n",
     )
     for line in required:
@@ -251,9 +253,13 @@ def validate_training_and_runtime(
     descriptor_dim = 3 + spin_descriptor_dims[spin_compress]
     q_scaler = [
         float(value) for value in checkpoint.splitlines()[-descriptor_dim:]]
-    if max(q_scaler) >= 1.0e4:
+    # The production magnetic scaler downscales but never amplifies channels.
+    spin_scaler = q_scaler[3:]
+    if any(not math.isfinite(value) or value <= 0 for value in q_scaler):
+        raise AssertionError("spin3 q_scaler must be positive and finite")
+    if max(spin_scaler) > 1.0:
         raise AssertionError(
-            f"spin3 q_scaler is ill-conditioned: max={max(q_scaler)}")
+            f"spin3 magnetic q_scaler must not amplify channels: max={max(spin_scaler)}")
 
     prediction = root / "prediction"
     prediction.mkdir()
@@ -311,8 +317,9 @@ def validate_training_and_runtime(
         "force": maximum_error(main_force, runtime_force),
         "mforce": maximum_error(main_mforce, runtime_mforce),
         "virial_per_atom": maximum_error(main_virial, runtime_virial),
-        "inactive_mforce": max(
+        "ge_mforce_max": max(
             abs(value) for row in runtime_mforce[2:] for value in row),
+        "all_spin_types": all_spin_types,
         "training_loss": loss,
         "q_scaler_max": max(q_scaler),
         "zbl": enable_zbl,
@@ -333,8 +340,10 @@ def validate_training_and_runtime(
         if report[name] > tolerance:
             raise AssertionError(
                 f"{name} parity failed: {report[name]} > {tolerance}")
-    if report["inactive_mforce"] > 1.0e-12:
+    if not all_spin_types and report["ge_mforce_max"] > 1.0e-12:
         raise AssertionError("inactive spin DOF received a public mforce")
+    if all_spin_types and report["ge_mforce_max"] <= 1.0e-12:
+        raise AssertionError("active Ge spin DOF was incorrectly masked")
     return report
 
 
@@ -354,6 +363,10 @@ def main():
             "training_runtime": validate_training_and_runtime(root / "correctness"),
             "o3c3_training_runtime": validate_training_and_runtime(
                 root / "o3c3", spin_compress=3),
+            "all_types_training_runtime": validate_training_and_runtime(
+                root / "all-types", all_spin_types=True),
+            "all_types_o3c3_training_runtime": validate_training_and_runtime(
+                root / "all-types-o3c3", spin_compress=3, all_spin_types=True),
             "rank_one_training_runtime": validate_training_and_runtime(
                 root / "rank-one", spin_compress=1,
                 typewise_spin_cutoff=True, mforce_mode="transverse"),

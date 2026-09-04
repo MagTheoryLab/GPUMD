@@ -758,6 +758,9 @@ void Fitness::initialize_q_scaler(
         ? 0.0f
         : static_cast<float>(std::sqrt(
             global_square_sum[d] / static_cast<double>(global_count[d])));
+      if (!std::isfinite(rms)) {
+        PRINT_INPUT_ERROR("Cannot initialize Spin3 q_scaler from non-finite RMS.\n");
+      }
       para.q_scaler_cpu[d] = 1.0f / std::max(1.0f, std::max(range, rms));
       if (range <= resolution && rms <= resolution) {
         ++unresolved_channels;
