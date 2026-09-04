@@ -191,34 +191,6 @@ __device__ __forceinline__ void spin3_oc_reverse_l22_scalar_from_canonical(
 }
 
 
-__global__ void clear_spin3_oc_pulls(
-    int value_count,
-    float* __restrict__ pulls) {
-  const int index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index < value_count) pulls[index] = 0.0f;
-}
-
-__global__ void accumulate_spin3_oc_onsite_mforces(
-    SpinPolynomialLayout layout,
-    int atom_count,
-    int atom_stride,
-    int struct_dim,
-    const int* __restrict__ types,
-    const int* __restrict__ spin_dof_type_active,
-    const double* __restrict__ spins_soa3,
-    const float* __restrict__ fp,
-    double* __restrict__ mforce_soa3) {
-  const int atom = blockIdx.x * blockDim.x + threadIdx.x;
-  if (atom >= atom_count || spin_dof_type_active[types[atom]] == 0) return;
-  const double scale = 2.0 * static_cast<double>(
-      fp[atom + atom_stride * (struct_dim + layout.local_s2)]);
-  for (int d = 0; d < 3; ++d) {
-    mforce_soa3[d * atom_stride + atom] -=
-        scale * spins_soa3[d * atom_stride + atom];
-  }
-}
-
-
 template <int C, bool AtomicPull = true>
 __device__ __noinline__ void build_spin3_oc_center_pull_row(
     SpinPolynomialLayout layout,
@@ -573,49 +545,21 @@ __device__ __noinline__ void build_spin3_oc_center_pull_row(
 #undef NEP_SPIN3_OC_FP_DYNAMIC
 }
 
+// Keep runtime and training on the same edge/pull tiling policy. Only the
+// output ownership (e.g. per-atom training virial) differs between callers.
 template <int C>
-__global__ void build_spin3_oc_center_pulls(
-    SpinPolynomialLayout layout,
-    int atom_count,
-    int atom_stride,
-    int struct_dim,
-    const int* __restrict__ types,
-    const int* __restrict__ spin_dof_type_active,
-    const double* __restrict__ spins_soa3,
-    const float* __restrict__ fp,
-    const float* __restrict__ projection,
-    const float* __restrict__ moments,
-    float* __restrict__ pulls,
-    double* __restrict__ mforce_soa3) {
-  const int work = blockIdx.x * blockDim.x + threadIdx.x;
-  const int atom = work / C;
-  const int row = work - atom * C;
-  const bool active =
-      atom < atom_count && spin_dof_type_active[types[atom]] != 0;
-  const unsigned active_mask = __ballot_sync(0xffffffffu, active);
-  if (!active) return;
-  build_spin3_oc_center_pull_row<C>(
-      layout,
-      atom,
-      row,
-      active_mask,
-      atom_stride,
-      struct_dim,
-      spins_soa3,
-      fp,
-      projection,
-      moments,
-      pulls + atom * layout.moment_count,
-      mforce_soa3);
-}
-
+struct Spin3ForceTile {
+  static constexpr int block_size = 128;
+  static constexpr int edge_lanes = C <= 4 ? 8 : (C <= 8 ? 16 : 32);
+  static constexpr int atoms_per_warp = 32 / edge_lanes;
+  static constexpr int centers_per_block = block_size / 32 * atoms_per_warp;
+};
 
 template <
     int C,
     SpinVirialMode VirialMode,
     bool AccumulateSpinTransfer,
-    int AtomsPerWarp = 32,
-    bool BuildPullsInline = false>
+    int AtomsPerWarp>
 __global__ void accumulate_spin3_oc_native_forces(
     SpinPolynomialLayout layout,
     int atom_count,
@@ -639,7 +583,6 @@ __global__ void accumulate_spin3_oc_native_forces(
     const float* __restrict__ descriptor_coefficients,
     const float* __restrict__ projection,
     const float* __restrict__ moments,
-    const float* __restrict__ pulls,
     int spin_coefficient_offset,
     double* __restrict__ force_soa3,
     double* __restrict__ mforce_soa3,
@@ -651,7 +594,7 @@ __global__ void accumulate_spin3_oc_native_forces(
       VirialMode == SpinVirialMode::center_and_neighbor_float_sink;
   static_assert(32 % AtomsPerWarp == 0, "one warp must contain complete center tiles");
   constexpr int EdgeLanes = 32 / AtomsPerWarp;
-  static_assert(!BuildPullsInline || EdgeLanes >= C,
+  static_assert(EdgeLanes >= C,
       "inline pull construction requires at least one lane per compression row");
   constexpr int WarpsPerBlock = 4;
   constexpr int CentersPerBlock = WarpsPerBlock * AtomsPerWarp;
@@ -674,8 +617,8 @@ __global__ void accumulate_spin3_oc_native_forces(
   extern __shared__ float inline_pull_state[];
   float* inline_pull =
       inline_pull_state + static_cast<std::size_t>(center_local) * layout.moment_count;
-  const float* pull = pulls + atom * layout.moment_count;
-  if constexpr (BuildPullsInline) {
+  const float* pull = inline_pull;
+  {
     for (int k = edge_lane; k < layout.moment_count; k += EdgeLanes) {
       inline_pull[k] = 0.0f;
     }
@@ -702,13 +645,13 @@ __global__ void accumulate_spin3_oc_native_forces(
           mforce_soa3);
     }
     __syncwarp(center_mask);
-    pull = inline_pull;
     if (edge_lane == 0) {
       const double scale = 2.0 * static_cast<double>(
           fp[atom + atom_stride * (struct_dim + layout.local_s2)]);
       for (int d = 0; d < 3; ++d) {
-        mforce_soa3[d * atom_stride + atom] -=
-            scale * spins_soa3[d * atom_stride + atom];
+        // Other center tiles can already scatter to this atom in this kernel.
+        atomicAdd(mforce_soa3 + d * atom_stride + atom,
+            -scale * spins_soa3[d * atom_stride + atom]);
       }
     }
   }

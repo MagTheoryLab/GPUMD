@@ -400,45 +400,19 @@ void launch_spin3_force(
   int spin_coefficient_offset,
   const float* projection,
   const float* moments,
-  float* pulls,
   double* force,
   double* mforce,
   double* virial)
 {
-  constexpr int block_size = 128;
-  const int pull_values = atom_count * layout.moment_count;
-  clear_spin3_oc_pulls<<<
-    (pull_values + block_size - 1) / block_size, block_size>>>(pull_values, pulls);
-  accumulate_spin3_oc_onsite_mforces<<<
-    (atom_count + block_size - 1) / block_size, block_size>>>(
-      layout,
-      atom_count,
-      atom_count,
-      struct_dim,
-      type,
-      spin_dof_type_active,
-      spin,
-      Fp,
-      mforce);
-  const int pull_work = C * atom_count;
-  build_spin3_oc_center_pulls<C><<<
-    (pull_work + block_size - 1) / block_size, block_size>>>(
-      layout,
-      atom_count,
-      atom_count,
-      struct_dim,
-      type,
-      spin_dof_type_active,
-      spin,
-      Fp,
-      projection,
-      moments,
-      pulls,
-      mforce);
+  using Tile = Spin3ForceTile<C>;
+  const int grid_size =
+    (atom_count + Tile::centers_per_block - 1) / Tile::centers_per_block;
+  const std::size_t shared_size =
+    static_cast<std::size_t>(Tile::centers_per_block) * layout.moment_count * sizeof(float);
   Box box{};
   accumulate_spin3_oc_native_forces<
-    C, SpinVirialMode::neighbor_owned, false><<<
-      (atom_count + block_size - 1) / block_size, block_size>>>(
+    C, SpinVirialMode::neighbor_owned, false, Tile::atoms_per_warp><<<
+      grid_size, Tile::block_size, shared_size>>>(
         layout,
         atom_count,
         atom_count,
@@ -461,7 +435,6 @@ void launch_spin3_force(
         descriptor_coefficients,
         projection,
         moments,
-        pulls,
         spin_coefficient_offset,
         force,
         mforce,
@@ -543,7 +516,6 @@ NEP_Spin_Trainer::NEP_Spin_Trainer(
     data.spin_cutoff_pair.resize(spin_cutoff_pair.size());
     data.spin_cutoff_pair.copy_from_host(spin_cutoff_pair.data(), spin_cutoff_pair.size());
     data.spin3_moments.resize(N * polynomial_layout_.moment_count);
-    data.spin3_pulls.resize(N * polynomial_layout_.moment_count);
     data.force.resize(3 * N);
     data.mforce.resize(3 * N);
     data.virial.resize(9 * N);
@@ -604,7 +576,7 @@ void NEP_Spin_Trainer::find_additional_force(
       dataset.NN_spin.data(), dataset.NL_spin.data(), dataset.r12_spin.data(), \
       plane_size, nep_data[device_id].Fp.data(), annmb[device_id].c, \
       spin_coefficient_offset_, projection, data.spin3_moments.data(), \
-      data.spin3_pulls.data(), data.force.data(), data.mforce.data(), \
+      data.force.data(), data.mforce.data(), \
       data.virial.data())
   switch (spin_compress_) {
     case 1: LAUNCH_SPIN3_FORCE(1); break;

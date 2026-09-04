@@ -243,9 +243,10 @@ NEP::NEP(
     nep_data[device_id].sum_fxyz.resize(N * (paramb.n_max_angular + 1) * ((paramb.L_max + 1) * (paramb.L_max + 1) - 1));
     nep_data[device_id].parameters.resize(annmb[device_id].num_para);
   }
-  // Upstream runtime-specialized kernels describe ordinary NEP only; Spin3
-  // supplies additional descriptors and pullbacks through the native hooks.
-  if (para.nep_compile && para.prediction == 0 && !para.spin_mode) {
+  // The upstream specialization uses the full ANN dimension and the structural
+  // descriptor dimensions independently. Spin3 appends its shared magnetic
+  // descriptors before ANN evaluation and its pullback after structural forces.
+  if (para.nep_compile && para.prediction == 0) {
     CHECK(gpuSetDevice(0));
     compiled_kernel_.reset(new NEP_Compile(
       make_nep_compile_config(para, NEP_Compile_Mode::NEP)));

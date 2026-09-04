@@ -26,7 +26,6 @@ private:
     GPU_Vector<float> spin_baseline;
     GPU_Vector<float> spin_cutoff_pair;
     GPU_Vector<float> spin3_moments;
-    GPU_Vector<float> spin3_pulls;
     GPU_Vector<double> force;
     GPU_Vector<double> mforce;
     GPU_Vector<double> virial;

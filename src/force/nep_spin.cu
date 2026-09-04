@@ -1128,17 +1128,17 @@ void launch_spin3_forces_typed(
   const double* slot_r12 = nullptr,
   int r12_plane_size = 0)
 {
-  constexpr int block_size = 128;
+  using Tile = Spin3ForceTile<C>;
+  constexpr int block_size = Tile::block_size;
   const int N = type.size();
-  constexpr int edge_lanes = C <= 4 ? 8 : (C <= 8 ? 16 : 32);
-  constexpr int atoms_per_warp = 32 / edge_lanes;
-  constexpr int centers_per_block = block_size / 32 * atoms_per_warp;
+  constexpr int atoms_per_warp = Tile::atoms_per_warp;
+  constexpr int centers_per_block = Tile::centers_per_block;
   const int grid_size = (N - 1) / centers_per_block + 1;
   const std::size_t shared_size =
     static_cast<std::size_t>(centers_per_block) *
     model.spin_polynomial_layout.moment_count * sizeof(float);
   accumulate_spin3_oc_native_forces<
-    C, SpinVirialMode::center_owned, false, atoms_per_warp, true>
+    C, SpinVirialMode::center_owned, false, atoms_per_warp>
     <<<grid_size, block_size, shared_size>>>(
       model.spin_polynomial_layout,
       N,
@@ -1162,7 +1162,6 @@ void launch_spin3_forces_typed(
       data.descriptor_parameters_type_pair.data(),
       data.spin_projection_parameters.data(),
       data.spin3_moments.data(),
-      data.spin3_pulls.data(),
       static_cast<int>(model.radial_parameter_count + model.angular_parameter_count),
       force.data(),
       mforce.data(),
@@ -1394,7 +1393,6 @@ NEP_Spin::NEP_Spin(const char* file_potential, const int num_atoms) : num_atoms_
   const std::size_t spin3_state_size =
     N * static_cast<std::size_t>(model_.spin_polynomial_layout.moment_count);
   data_.spin3_moments.resize(spin3_state_size);
-  data_.spin3_pulls.resize(spin3_state_size);
   std::vector<float> spin_cutoff_pair(
     static_cast<std::size_t>(model_.num_types) * model_.num_types);
   for (int type_i = 0; type_i < model_.num_types; ++type_i) {

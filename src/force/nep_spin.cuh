@@ -30,7 +30,6 @@ struct NEP_Spin_Data {
   GPU_Vector<float> spin_cutoff_pair;
   GPU_Vector<float> spin_projection_parameters;
   GPU_Vector<float> spin3_moments;
-  GPU_Vector<float> spin3_pulls;
   GPU_Vector<int> NN_radial;
   GPU_Vector<int> NL_radial;
   GPU_Vector<int> NN_angular;

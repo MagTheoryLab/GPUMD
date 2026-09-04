@@ -395,11 +395,75 @@ def validate_training_and_runtime(
     return report
 
 
+def validate_native_compiled_checkpoint(root):
+    """Compare full outputs at fixed parameters, including cross-block scatter."""
+    root.mkdir()
+    # 36 centers span multiple fused-force tiles; Fe and Ge both carry spin.
+    atoms = TRAIN_XYZ.splitlines()[2:6]
+    expanded = ["36", TRAIN_XYZ.splitlines()[1]]
+    for tile in range(9):
+        for atom in atoms:
+            fields = atom.split()
+            fields[1] = str(float(fields[1]) + 4.0 * (tile % 3))
+            fields[2] = str(float(fields[2]) + 4.0 * (tile // 3))
+            expanded.append(" ".join(fields))
+    xyz = "\n".join(expanded) + "\n"
+    report = {}
+    for channels, order in ((1, 3), (2, 3), (3, 3), (9, 1)):
+        config = NEP_IN.replace("spin_compress 2", f"spin_compress {channels}")
+        config = config.replace("spin_order 3", f"spin_order {order}")
+        config = config.replace("spin_dof_type Fe\n", "spin_dof_type Fe Ge\n")
+        config = config.replace("n_max 0 0", "n_max 4 4").replace(
+            "basis_size 0 0", "basis_size 2 2")
+        if channels == 3:
+            config = config.replace("spin_cutoff 6.0", "spin_cutoff 5.0 7.0")
+        initial = root / f"c{channels}-initial"
+        write_case(initial, config + "nep_compile 0\n", xyz)
+        result = run(NEP, initial)
+        if result.returncode:
+            raise RuntimeError(result.stdout + result.stderr)
+        checkpoint = (initial / "nep.txt").read_text()
+        frozen = "".join(
+            f"{line.split()[0]} 0\n"
+            for line in (initial / "nep.restart").read_text().splitlines())
+        cases = []
+        for compiled in (0, 1):
+            case = root / f"c{channels}-compiled-{compiled}"
+            # Upstream writes atom-resolved training output every 1000 steps;
+            # output_interval controls loss.out only. Freeze all search draws.
+            output_config = config.replace("generation 1\n", "generation 1000\n")
+            output_config = output_config.replace("output_interval 1\n", "output_interval 1000\n")
+            output_config = output_config.replace("save_potential 1 0 0", "save_potential 1000 0 0")
+            write_case(case, output_config + f"nep_compile {compiled}\n", xyz)
+            (case / "nep.txt").write_text(checkpoint)
+            (case / "nep.restart").write_text(frozen)
+            result = run(NEP, case)
+            if result.returncode:
+                raise RuntimeError(result.stdout + result.stderr)
+            if compiled and (
+                    "Compile specialized NEP training kernels" not in result.stdout or
+                    "specialization disabled" in (result.stdout + result.stderr).lower()):
+                raise AssertionError("Spin3 JIT did not compile successfully")
+            cases.append(case)
+        errors = {}
+        for name, width in (("energy", 1), ("force", 3), ("virial", 6), ("mforce", 3)):
+            values = [columns(case / f"{name}_train.out", width) for case in cases]
+            error = maximum_error(*values)
+            tolerance = parity_tolerance(*values)
+            if not math.isfinite(error) or error > tolerance:
+                raise AssertionError(f"C{channels} JIT {name}: {error} > {tolerance}")
+            errors[name] = {"max_abs": error, "tolerance": tolerance}
+        report[f"o{order}c{channels}"] = errors
+    return report
+
+
 def main():
     global NEP, GPUMD
     parser = argparse.ArgumentParser()
     parser.add_argument("--nep", type=Path, default=NEP)
     parser.add_argument("--gpumd", type=Path, default=GPUMD)
+    parser.add_argument("--check-jit", action="store_true",
+                        help="Require the CUDA compiler and validate specialized Spin3 training")
     args = parser.parse_args()
     NEP = args.nep.resolve()
     GPUMD = args.gpumd.resolve()
@@ -424,6 +488,8 @@ def main():
                 root / "restart", spin_compress=3,
                 all_spin_types=True, check_restart=True),
         }
+        if args.check_jit:
+            report["native_compiled_checkpoint"] = validate_native_compiled_checkpoint(root / "jit")
     print(json.dumps(report, indent=2, sort_keys=True))
 
 
