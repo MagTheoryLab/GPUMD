@@ -22,10 +22,12 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 
 #include "neighbor.cuh"
 #include "nep.cuh"
+#include "nep_kernels.cuh"
 #include "nep_small_box.cuh"
 #include "utilities/common.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
+#include "utilities/nep_parameters.cuh"
 #include "utilities/nep_utilities.cuh"
 #include <cstring>
 #include <fstream>
@@ -72,31 +74,6 @@ void NEP::initialize_dftd3()
   input_run.close();
 }
 
-static std::vector<float> get_descriptor_parameters_type_pair(
-  const std::vector<float>& parameters,
-  const int num_para_descriptor,
-  const NEP::ParaMB& paramb,
-  const NEP::ANN& annmb)
-{
-  std::vector<float> descriptor_parameters(num_para_descriptor);
-
-  int num_radial_basis = (paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1);
-  int num_angular_basis = (paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1);
-  for (int type_pair = 0; type_pair < paramb.num_types_sq; ++type_pair) {
-    for (int basis = 0; basis < num_radial_basis; ++basis) {
-      descriptor_parameters[type_pair * num_radial_basis + basis] =
-        parameters[annmb.num_para_ann + basis * paramb.num_types_sq + type_pair];
-    }
-    for (int basis = 0; basis < num_angular_basis; ++basis) {
-      descriptor_parameters[paramb.num_c_radial + type_pair * num_angular_basis + basis] =
-        parameters
-          [annmb.num_para_ann + paramb.num_c_radial + basis * paramb.num_types_sq + type_pair];
-    }
-  }
-
-  return descriptor_parameters;
-}
-
 NEP::NEP(const char* file_potential, const int num_atoms)
 {
   std::ifstream input(file_potential);
@@ -111,30 +88,14 @@ NEP::NEP(const char* file_potential, const int num_atoms)
     exit(1);
   }
   if (tokens[0] == "nep4") {
-    paramb.version = 4;
     zbl.enabled = false;
   } else if (tokens[0] == "nep4_zbl") {
-    paramb.version = 4;
     zbl.enabled = true;
-  } else if (tokens[0] == "nep5") {
-    paramb.version = 5;
-    zbl.enabled = false;
-  } else if (tokens[0] == "nep5_zbl") {
-    paramb.version = 5;
-    zbl.enabled = true;
-  }  else if (tokens[0] == "nep4_temperature") {
-    paramb.version = 4;
+  } else if (tokens[0] == "nep4_temperature") {
     paramb.model_type = 3;
   } else if (tokens[0] == "nep4_zbl_temperature") {
-    paramb.version = 4;
     paramb.model_type = 3;
     zbl.enabled = true;
-  } else if (tokens[0] == "nep4_dipole") {
-    paramb.version = 4;
-    paramb.model_type = 1;
-  } else if (tokens[0] == "nep4_polarizability") {
-    paramb.version = 4;
-    paramb.model_type = 2;
   } else {
     std::cout << tokens[0]
               << " is an unsupported NEP model. We only support NEP4 models now."
@@ -149,9 +110,9 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   }
 
   if (paramb.num_types == 1) {
-    printf("Use the NEP%d potential with %d atom type.\n", paramb.version, paramb.num_types);
+    printf("Use the NEP4 potential with %d atom type.\n", paramb.num_types);
   } else {
-    printf("Use the NEP%d potential with %d atom types.\n", paramb.version, paramb.num_types);
+    printf("Use the NEP4 potential with %d atom types.\n", paramb.num_types);
   }
 
   for (int n = 0; n < paramb.num_types; ++n) {
@@ -329,15 +290,7 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   rc = paramb.rc_radial_max; // largest cutoff
   paramb.num_types_sq = paramb.num_types * paramb.num_types;
 
-  if (paramb.version == 4) {
-    annmb.num_para_ann = (annmb.dim + 2) * annmb.num_neurons1 * paramb.num_types + 1;
-  } else if (paramb.version == 5) {
-    annmb.num_para_ann = ((annmb.dim + 2) * annmb.num_neurons1 + 1) * paramb.num_types + 1;
-  }
-  if (paramb.model_type == 2) {
-    // Polarizability models have twice as many parameters
-    annmb.num_para_ann *= 2;
-  }
+  annmb.num_para_ann = (annmb.dim + 2) * annmb.num_neurons1 * paramb.num_types + 1;
   printf("    number of neural network parameters = %d.\n", annmb.num_para_ann);
   int num_para_descriptor =
     paramb.num_types_sq * ((paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1) +
@@ -356,8 +309,14 @@ NEP::NEP(const char* file_potential, const int num_atoms)
     parameters[n] = get_double_from_token(tokens[0], __FILE__, __LINE__);
   }
   // refactor descriptor parameters memory
-  std::vector<float> descriptor_parameters = 
-    get_descriptor_parameters_type_pair(parameters, num_para_descriptor, paramb, annmb);
+  std::vector<float> descriptor_parameters = get_descriptor_parameters_type_pair(
+    parameters,
+    annmb.num_para_ann,
+    paramb.num_types,
+    paramb.n_max_radial,
+    paramb.n_max_angular,
+    paramb.basis_size_radial,
+    paramb.basis_size_angular);
   nep_data.parameters.resize(annmb.num_para + annmb.dim);
   nep_data.parameters.copy_from_host(parameters.data());
   nep_data.descriptor_parameters_type_pair.resize(num_para_descriptor);
@@ -391,7 +350,6 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   nep_data.cpu_NN_angular.resize(num_atoms);
 
   initialize_dftd3();
-  B_projection_size = annmb.num_neurons1 * (annmb.dim + 2);
 }
 
 NEP::~NEP(void)
@@ -409,26 +367,9 @@ void NEP::update_potential(float* parameters, ANN& ann)
     pointer += ann.num_neurons1;
     ann.w1[t] = pointer;
     pointer += ann.num_neurons1;
-    if (paramb.version == 5) {
-      pointer += 1; // one extra bias for NEP5 stored in ann.w1[t]
-    }
   }
   ann.b1 = pointer;
   pointer += 1;
-
-  // Possibly read polarizability parameters, which are placed after the regular nep parameters.
-  if (paramb.model_type == 2) {
-    for (int t = 0; t < paramb.num_types; ++t) {
-      ann.w0_pol[t] = pointer;
-      pointer += ann.num_neurons1 * ann.dim;
-      ann.b0_pol[t] = pointer;
-      pointer += ann.num_neurons1;
-      ann.w1_pol[t] = pointer;
-      pointer += ann.num_neurons1;
-    }
-    ann.b1_pol = pointer;
-    pointer += 1;
-  }
 
   ann.c = pointer;
 }
@@ -500,14 +441,10 @@ static __global__ void find_descriptor(
   const double* __restrict__ g_x,
   const double* __restrict__ g_y,
   const double* __restrict__ g_z,
-  const bool is_polarizability,
   double* g_pe,
   float* g_Fp,
   double* g_virial,
-  float* g_sum_fxyz,
-  bool need_B_projection,
-  double* B_projection,
-  int B_projection_size)
+  float* g_sum_fxyz)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
   if (n1 < N2) {
@@ -536,9 +473,8 @@ static __global__ void find_descriptor(
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (t1 * paramb.num_types + t2) *
-                        ((paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1));
-          c_index += n * (paramb.basis_size_radial + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         q[n] += gn12;
@@ -564,10 +500,13 @@ static __global__ void find_descriptor(
         find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = paramb.num_c_radial;
-          c_index += (t1 * paramb.num_types + t2) *
-                     ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
-          c_index += n * (paramb.basis_size_angular + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
@@ -588,68 +527,16 @@ static __global__ void find_descriptor(
     // get energy and energy gradient
     float F = 0.0f, Fp[MAX_DIM] = {0.0f};
 
-    if (is_polarizability) {
-      apply_ann_one_layer(
-        annmb.dim,
-        annmb.num_neurons1,
-        annmb.w0_pol[t1],
-        annmb.b0_pol[t1],
-        annmb.w1_pol[t1],
-        annmb.b1_pol,
-        q,
-        F,
-        Fp);
-      // Add the potential F for this atom to the diagonal of the virial
-      g_virial[n1] = F;
-      g_virial[n1 + N * 1] = F;
-      g_virial[n1 + N * 2] = F;
-
-      // Reset the potential and forces such that they
-      // are zero for the next call to the model. The next call
-      // is not used in the case of is_pol = True, but it doesn't
-      // hurt to clean up.
-      F = 0.0f;
-      for (int d = 0; d < annmb.dim; ++d) {
-        Fp[d] = 0.0f;
-      }
-    }
-
-    if (paramb.version == 5) {
-      apply_ann_one_layer_nep5(
-        annmb.dim,
-        annmb.num_neurons1,
-        annmb.w0[t1],
-        annmb.b0[t1],
-        annmb.w1[t1],
-        annmb.b1,
-        q,
-        F,
-        Fp);
-    } else {
-      if (!need_B_projection)
-        apply_ann_one_layer(
-          annmb.dim,
-          annmb.num_neurons1,
-          annmb.w0[t1],
-          annmb.b0[t1],
-          annmb.w1[t1],
-          annmb.b1,
-          q,
-          F,
-          Fp);
-      else
-        apply_ann_one_layer(
-          annmb.dim,
-          annmb.num_neurons1,
-          annmb.w0[t1],
-          annmb.b0[t1],
-          annmb.w1[t1],
-          annmb.b1,
-          q,
-          F,
-          Fp,
-          B_projection + n1 * B_projection_size);
-    }
+    apply_ann_one_layer(
+      annmb.dim,
+      annmb.num_neurons1,
+      annmb.w0[t1],
+      annmb.b0[t1],
+      annmb.w1[t1],
+      annmb.b1,
+      q,
+      F,
+      Fp);
     g_pe[n1] += F;
 
     for (int d = 0; d < annmb.dim; ++d) {
@@ -672,7 +559,6 @@ __global__ void find_force_radial(
   const double* __restrict__ g_y,
   const double* __restrict__ g_z,
   const float* __restrict__ g_Fp,
-  const bool is_dipole,
   double* g_fx,
   double* g_fy,
   double* g_fz,
@@ -719,10 +605,12 @@ __global__ void find_force_radial(
         float gnp12 = 0.0f;
         float gnp21 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int basis_count = (paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1);
-          int basis = n * (paramb.basis_size_radial + 1) + k;
-          gnp12 += fnp12[k] * annmb.c_type_pair[(t1 * paramb.num_types + t2) * basis_count + basis];
-          gnp21 += fnp12[k] * annmb.c_type_pair[(t2 * paramb.num_types + t1) * basis_count + basis];
+          int c_index_12 = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
+          int c_index_21 = get_c_index(
+            t2 * paramb.num_types + t1, n, k, paramb.n_max_radial, paramb.basis_size_radial);
+          gnp12 += fnp12[k] * annmb.c_type_pair[c_index_12];
+          gnp21 += fnp12[k] * annmb.c_type_pair[c_index_21];
         }
         float tmp12 = g_Fp[static_cast<size_t>(N) * n + n1] * gnp12 * d12inv;
         float tmp21 = g_Fp[static_cast<size_t>(N) * n + n2] * gnp21 * d12inv;
@@ -734,17 +622,9 @@ __global__ void find_force_radial(
       s_fx += f12[0] - f21[0];
       s_fy += f12[1] - f21[1];
       s_fz += f12[2] - f21[2];
-      if (is_dipole) {
-        // The dipole is proportional to minus the sum of the virials times r12
-        float r12_square = r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2];
-        s_sxx -= r12_square * f21[0];
-        s_syy -= r12_square * f21[1];
-        s_szz -= r12_square * f21[2];
-      } else {
-        s_sxx += r12[0] * f21[0];
-        s_syy += r12[1] * f21[1];
-        s_szz += r12[2] * f21[2];
-      }
+      s_sxx += r12[0] * f21[0];
+      s_syy += r12[1] * f21[1];
+      s_szz += r12[2] * f21[2];
       s_sxy += r12[0] * f21[1];
       s_sxz += r12[0] * f21[2];
       s_syx += r12[1] * f21[0];
@@ -832,10 +712,13 @@ __global__ void find_partial_force_angular(
         float gn12 = 0.0f;
         float gnp12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = paramb.num_c_radial;
-          c_index += (t1 * paramb.num_types + t2) *
-                     ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
-          c_index += n * (paramb.basis_size_angular + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
           gnp12 += fnp12[k] * annmb.c_type_pair[c_index];
         }
@@ -1033,7 +916,6 @@ void NEP::compute_large_box(
     output_file.close();
   }
 
-  bool is_polarizability = paramb.model_type == 2;
   find_descriptor<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     annmb,
@@ -1049,17 +931,12 @@ void NEP::compute_large_box(
     position_per_atom.data(),
     position_per_atom.data() + N,
     position_per_atom.data() + N * 2,
-    is_polarizability,
     potential_per_atom.data(),
     nep_data.Fp.data(),
     virial_per_atom.data(),
-    nep_data.sum_fxyz.data(),
-    need_B_projection,
-    B_projection,
-    B_projection_size);
+    nep_data.sum_fxyz.data());
   GPU_CHECK_KERNEL
 
-  bool is_dipole = paramb.model_type == 1;
   find_force_radial<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     annmb,
@@ -1074,7 +951,6 @@ void NEP::compute_large_box(
     position_per_atom.data() + N,
     position_per_atom.data() + N * 2,
     nep_data.Fp.data(),
-    is_dipole,
     force_per_atom.data(),
     force_per_atom.data() + N,
     force_per_atom.data() + N * 2,
@@ -1108,7 +984,6 @@ void NEP::compute_large_box(
     nep_data.f12x.data(),
     nep_data.f12y.data(),
     nep_data.f12z.data(),
-    is_dipole,
     position_per_atom,
     force_per_atom,
     virial_per_atom);
@@ -1200,7 +1075,6 @@ void NEP::compute_small_box(
     output_file.close();
   }
 
-  const bool is_polarizability = paramb.model_type == 2;
   find_descriptor_small_box<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     annmb,
@@ -1218,17 +1092,12 @@ void NEP::compute_small_box(
     small_box_data.r12.data() + size_x12 * 3,
     small_box_data.r12.data() + size_x12 * 4,
     small_box_data.r12.data() + size_x12 * 5,
-    is_polarizability,
     potential_per_atom.data(),
     nep_data.Fp.data(),
     virial_per_atom.data(),
-    nep_data.sum_fxyz.data(),
-    need_B_projection,
-    B_projection,
-    B_projection_size);
+    nep_data.sum_fxyz.data());
   GPU_CHECK_KERNEL
 
-  bool is_dipole = paramb.model_type == 1;
   find_force_radial_small_box<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     annmb,
@@ -1242,7 +1111,6 @@ void NEP::compute_small_box(
     small_box_data.r12.data() + size_x12,
     small_box_data.r12.data() + size_x12 * 2,
     nep_data.Fp.data(),
-    is_dipole,
     force_per_atom.data(),
     force_per_atom.data() + N,
     force_per_atom.data() + N * 2,
@@ -1263,7 +1131,6 @@ void NEP::compute_small_box(
     small_box_data.r12.data() + size_x12 * 5,
     nep_data.Fp.data(),
     nep_data.sum_fxyz.data(),
-    is_dipole,
     force_per_atom.data(),
     force_per_atom.data() + N,
     force_per_atom.data() + N * 2,
@@ -1435,9 +1302,8 @@ static __global__ void find_descriptor(
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (t1 * paramb.num_types + t2) *
-                        ((paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1));
-          c_index += n * (paramb.basis_size_radial + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         q[n] += gn12;
@@ -1463,10 +1329,13 @@ static __global__ void find_descriptor(
         find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = paramb.num_c_radial;
-          c_index += (t1 * paramb.num_types + t2) *
-                     ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
-          c_index += n * (paramb.basis_size_angular + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
@@ -1579,7 +1448,6 @@ void NEP::compute_large_box(
     nep_data.sum_fxyz.data());
   GPU_CHECK_KERNEL
 
-  bool is_dipole = paramb.model_type == 1;
   find_force_radial<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     annmb,
@@ -1594,7 +1462,6 @@ void NEP::compute_large_box(
     position_per_atom.data() + N,
     position_per_atom.data() + N * 2,
     nep_data.Fp.data(),
-    is_dipole,
     force_per_atom.data(),
     force_per_atom.data() + N,
     force_per_atom.data() + N * 2,
@@ -1628,7 +1495,6 @@ void NEP::compute_large_box(
     nep_data.f12x.data(),
     nep_data.f12y.data(),
     nep_data.f12z.data(),
-    is_dipole,
     position_per_atom,
     force_per_atom,
     virial_per_atom);
@@ -1745,7 +1611,6 @@ void NEP::compute_small_box(
     nep_data.sum_fxyz.data());
   GPU_CHECK_KERNEL
 
-  bool is_dipole = paramb.model_type == 1;
   find_force_radial_small_box<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     annmb,
@@ -1759,7 +1624,6 @@ void NEP::compute_small_box(
     small_box_data.r12.data() + size_x12,
     small_box_data.r12.data() + size_x12 * 2,
     nep_data.Fp.data(),
-    is_dipole,
     force_per_atom.data(),
     force_per_atom.data() + N,
     force_per_atom.data() + N * 2,
@@ -1780,7 +1644,6 @@ void NEP::compute_small_box(
     small_box_data.r12.data() + size_x12 * 5,
     nep_data.Fp.data(),
     nep_data.sum_fxyz.data(),
-    is_dipole,
     force_per_atom.data(),
     force_per_atom.data() + N,
     force_per_atom.data() + N * 2,

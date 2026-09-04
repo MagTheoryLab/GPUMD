@@ -15,8 +15,10 @@
 
 #pragma once
 #include "potential.cuh"
+#include "nep_compile.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_vector.cuh"
+#include <memory>
 class Parameters;
 class Dataset;
 
@@ -51,7 +53,7 @@ public:
     int num_types = 0;
     int num_types_sq = 0;
     int num_c_radial = 0;
-    int version = 4; // 3 for NEP3 and 4 for NEP4
+    int version = 4;
   };
 
   struct ANN {
@@ -64,6 +66,7 @@ public:
     const float* wb[NUM_ELEMENTS];  // weigths and biases for the hidden layer
     const float* b;                 // bias for the output layer
     const float* c;                 // for elements in descriptor
+    const float* rc;
   };
 
   struct ZBL {
@@ -93,7 +96,8 @@ protected:
   ANN annmb[16];
   NEP_Data nep_data[16];
   ZBL zbl;
-  void update_potential(float* parameters, ANN& ann);
+  std::unique_ptr<NEP_Compile> compiled_kernel_;
+  void update_potential(Parameters& para, float* parameters, ANN& ann);
   virtual void find_additional_descriptors(
     Parameters&,
     Dataset&,

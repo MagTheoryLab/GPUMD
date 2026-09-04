@@ -202,7 +202,7 @@ __global__ void gpu_find_msd(
   }
 } //namespace
 
-void MSD::preprocess(
+void MSD::pre_run(
   const int number_of_steps,
   const double time_step,
   Integrate& integrate,
@@ -266,7 +266,7 @@ void MSD::preprocess(
   num_time_origins_ = 0;
 }
 
-void MSD::process(
+void MSD::end_of_step(
   const int number_of_steps,
   int step,
   const int fixed_group,
@@ -450,7 +450,7 @@ void MSD::write(const char* filename)
 
 
 
-void MSD::postprocess(
+void MSD::post_run(
   Atom& atom,
   Box& box,
   Integrate& integrate,
@@ -468,14 +468,8 @@ void MSD::postprocess(
 MSD::MSD(const char** param, const int num_param, const std::vector<Group>& groups, Atom& atom)
 {
   parse(param, num_param, groups);
-  if (atom.unwrapped_position.size() < atom.number_of_atoms * 3) {
-    atom.unwrapped_position.resize(atom.number_of_atoms * 3);
-    atom.unwrapped_position.copy_from_device(atom.position_per_atom.data());
-  }
-  if (atom.position_temp.size() < atom.number_of_atoms * 3) {
-    atom.position_temp.resize(atom.number_of_atoms * 3);
-  }
-  property_name = "compute_msd";
+  atom.enable_unwrapped_position();
+  action_name = "compute_msd";
 }
 
 void MSD::parse(const char** param, const int num_param, const std::vector<Group>& groups)

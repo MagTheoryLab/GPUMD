@@ -1804,7 +1804,6 @@ void NEP_Spin::read_model(const char* file_potential)
   data_.spin_env_type_active.resize(model_.spin_env_type_active.size());
   data_.spin_env_type_active.copy_from_host(model_.spin_env_type_active.data());
 
-  paramb_.version = 4;
   paramb_.num_types = model_.num_types;
   paramb_.num_types_sq = model_.num_types * model_.num_types;
   paramb_.n_max_radial = model_.n_max_radial;
@@ -2080,7 +2079,6 @@ void NEP_Spin::compute(
       data_.r12_radial.data() + plane_size,
       data_.r12_radial.data() + 2 * plane_size,
       data_.Fp.data(),
-      false,
       force.data(),
       force.data() + N,
       force.data() + 2 * N,
@@ -2100,7 +2098,6 @@ void NEP_Spin::compute(
       data_.r12_angular.data() + 2 * plane_size,
       data_.Fp.data(),
       data_.sum_fxyz.data(),
-      false,
       force.data(),
       force.data() + N,
       force.data() + 2 * N,
@@ -2240,7 +2237,6 @@ void NEP_Spin::compute(
     position.data() + N,
     position.data() + 2 * N,
     data_.Fp.data(),
-    false,
     force.data(),
     force.data() + N,
     force.data() + 2 * N,
@@ -2324,7 +2320,6 @@ void NEP_Spin::compute(
       data_.f12x.data(),
       data_.f12y.data(),
       data_.f12z.data(),
-      false,
       position,
       force,
       virial);

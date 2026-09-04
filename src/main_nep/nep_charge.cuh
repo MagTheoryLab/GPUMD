@@ -15,8 +15,10 @@
 
 #pragma once
 #include "potential.cuh"
+#include "nep_compile.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_vector.cuh"
+#include <memory>
 class Parameters;
 class Dataset;
 
@@ -45,7 +47,7 @@ public:
     int num_types = 0;
     int num_types_sq = 0;
     int num_c_radial = 0;
-    int version = 4; // 3 for NEP3 and 4 for NEP4
+    int version = 4;
   };
 
   struct ANN {
@@ -115,5 +117,6 @@ private:
   NEP_Charge_Data nep_data[16];
   ZBL zbl;
   Charge_Para charge_para;
+  std::unique_ptr<NEP_Compile> compiled_kernel_;
   void update_potential(float* parameters, ANN& ann);
 };

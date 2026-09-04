@@ -157,7 +157,7 @@ Output and checks
 
 Write the propagated state and magnetic force with::
 
-    dump_xyz -1 0 100 spin.xyz spin mforce spin_velocity
+    dump_xyz 100 spin.xyz spin mforce spin_velocity
 
 The extended-XYZ fields are ``spin:R:3``, ``mforce:R:3``, and
 ``spin_vel:R:3``. Check that the spin temperature remains stable for the

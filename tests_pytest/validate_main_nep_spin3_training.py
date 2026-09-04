@@ -145,7 +145,7 @@ def validate_parser(root):
         "removed_spin_chiral": NEP_IN.replace("spin_soc 1", "spin_soc 1\nspin_chiral 1"),
         "curriculum_requires_o3": NEP_IN.replace("spin_order 3", "spin_order 2").replace(
             "lambda_tau 0.5", "lambda_tau 0.5\nspin_curriculum 1"),
-        "response_requires_full_batch": NEP_IN.replace(
+        "response_requires_metadata": NEP_IN.replace(
             "lambda_tau 0.5", "lambda_tau 0.5\nlambda_spin_response 0.3"),
     }
     results = {}
@@ -159,7 +159,7 @@ def validate_parser(root):
     tangent_case = root / "spin_tangent_is_not_a_label"
     tangent_input = NEP_IN.replace(
         "lambda_tau 0.5", "lambda_tau 0.5\nlambda_spin_response 0.3",
-    ).replace("batch 3", "batch 3 1").replace("generation 1", "generation 0")
+    ).replace("generation 1", "generation 0")
     tangent_xyz = response_xyz().replace(
         "mforce:R:3", "mforce:R:3:spin_tangent:R:3")
     write_case(tangent_case, tangent_input, tangent_xyz)
@@ -167,6 +167,12 @@ def validate_parser(root):
     results["spin_tangent_is_not_a_label"] = result.returncode
     if result.returncode == 0 or "not an input label" not in result.stdout + result.stderr:
         raise AssertionError("spin_tangent input was not rejected explicitly")
+    split_case = root / "response_requires_single_batch"
+    write_case(split_case, tangent_input.replace("batch 3", "batch 2"), response_xyz())
+    result = run(NEP, split_case)
+    if result.returncode == 0 or "requires batch >=" not in result.stdout + result.stderr:
+        raise AssertionError("split response groups were not rejected")
+    results["response_requires_single_batch"] = result.returncode
     return results
 
 
@@ -174,7 +180,7 @@ def validate_response_training(root):
     nep_in = NEP_IN.replace(
         "lambda_tau 0.5",
         "lambda_tau 0.5\nspin_curriculum 1\nlambda_spin_response 0.3",
-    ).replace("batch 3", "batch 3 1").replace("generation 1", "generation 3")
+    ).replace("generation 1", "generation 3")
     write_case(root, nep_in, response_xyz())
     result = run(NEP, root)
     if result.returncode:
@@ -191,7 +197,7 @@ def validate_response_training(root):
 
 def validate_training_and_runtime(
         root, enable_zbl=False, spin_compress=2, typewise_spin_cutoff=False,
-        mforce_mode="full", all_spin_types=False):
+        mforce_mode="full", all_spin_types=False, check_restart=False):
     root.mkdir()
     training = root / "training"
     nep_in = NEP_IN.replace("version 4", "version 4\nzbl 2.5") \
@@ -203,6 +209,10 @@ def validate_training_and_runtime(
         nep_in = nep_in.replace("spin_dof_type Fe\n", "spin_dof_type Fe Ge\n")
     if typewise_spin_cutoff:
         nep_in = nep_in.replace("spin_cutoff 6.0", "spin_cutoff 5.0 7.0")
+    if check_restart:
+        # Nontrivial channel/basis axes expose incorrect parameter transposes.
+        nep_in = nep_in.replace("n_max 0 0", "n_max 4 4").replace(
+            "basis_size 0 0", "basis_size 2 2")
     write_case(training, nep_in)
     result = run(NEP, training)
     if result.returncode:
@@ -250,11 +260,12 @@ def validate_training_and_runtime(
             "generation-one total loss does not contain the training fitness")
 
     spin_descriptor_dims = {1: 21, 2: 55, 3: 91}
-    descriptor_dim = 3 + spin_descriptor_dims[spin_compress]
+    structural_dim = 15 if check_restart else 3
+    descriptor_dim = structural_dim + spin_descriptor_dims[spin_compress]
     q_scaler = [
         float(value) for value in checkpoint.splitlines()[-descriptor_dim:]]
     # The production magnetic scaler downscales but never amplifies channels.
-    spin_scaler = q_scaler[3:]
+    spin_scaler = q_scaler[structural_dim:]
     if any(not math.isfinite(value) or value <= 0 for value in q_scaler):
         raise AssertionError("spin3 q_scaler must be positive and finite")
     if max(spin_scaler) > 1.0:
@@ -278,20 +289,31 @@ def validate_training_and_runtime(
     runtime = root / "runtime"
     runtime.mkdir()
     shutil.copy(training / "nep.txt", runtime / "nep.txt")
-    (runtime / "model.xyz").write_text(
-        "\n".join(TRAIN_XYZ.splitlines()[:6]) + "\n")
+    model_lines = TRAIN_XYZ.splitlines()[:6]
+    model_lines[1] = model_lines[1].replace("mforce:R:3", "mforce:R:3:group:I:1")
+    for i in range(2, 6):
+        model_lines[i] += " 0" if i < 4 else " 1"
+    (runtime / "model.xyz").write_text("\n".join(model_lines) + "\n")
     (runtime / "run.in").write_text(
         "potential nep.txt\n"
         "velocity 1\n"
         "ensemble nve\n"
         "time_step 0\n"
-        "dump_xyz -1 0 1 result.xyz force potential spin mforce virial\n"
+        "dump_xyz 1 result.xyz force potential spin mforce virial precision double\n"
+        "dump_xyz 1 ge.xyz force potential spin mforce virial group_labels group 0 1 precision double\n"
         "run 1\n")
     result = run(GPUMD, runtime)
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
 
     lines = (runtime / "result.xyz").read_text().splitlines()
+    grouped = (runtime / "ge.xyz").read_text().splitlines()
+    if int(grouped[0]) != 2 or ":group:I:1" not in grouped[1]:
+        raise AssertionError("dump_xyz group selection or group_labels header is incorrect")
+    for selected, full in zip(grouped[2:], lines[4:6]):
+        fields = selected.split()
+        if fields[:-1] != full.split() or fields[-1] != "1":
+            raise AssertionError("grouped spin/mforce dump differs from the all-atom dump")
     atom_count = int(lines[-6])
     header = lines[-5]
     rows = [
@@ -327,6 +349,7 @@ def validate_training_and_runtime(
         "typewise_spin_cutoff": typewise_spin_cutoff,
         "mforce_mode": mforce_mode,
         "descriptor_dim": descriptor_dim,
+        "grouped_dump": "passed",
     }
     for name in ("energy_per_atom", "force", "mforce", "virial_per_atom"):
         reference = {
@@ -344,6 +367,31 @@ def validate_training_and_runtime(
         raise AssertionError("inactive spin DOF received a public mforce")
     if all_spin_types and report["ge_mforce_max"] <= 1.0e-12:
         raise AssertionError("active Ge spin DOF was incorrectly masked")
+    if check_restart:
+        # Zero search variance freezes the saved parameter vector. A restart must
+        # round-trip structural and magnetic coefficients without reordering them
+        # or refitting the checkpoint's elemental energy baseline.
+        checkpoint_lines = checkpoint.splitlines()
+        first_parameter = next(
+            i + 1 for i, line in enumerate(checkpoint_lines) if line.startswith("ANN "))
+        parameters = checkpoint_lines[first_parameter:-descriptor_dim]
+        resumed = root / "resumed"
+        write_case(resumed, nep_in, TRAIN_XYZ.replace("energy=-4.0", "energy=40.0"))
+        (resumed / "nep.txt").write_text(checkpoint)
+        (resumed / "nep.restart").write_text(
+            "".join(f"{value} 0.0\n" for value in parameters))
+        result = run(NEP, resumed)
+        if result.returncode:
+            raise RuntimeError(result.stdout + result.stderr)
+        resumed_lines = (resumed / "nep.txt").read_text().splitlines()
+        if resumed_lines[:first_parameter] != checkpoint_lines[:first_parameter]:
+            raise AssertionError("restart changed the Spin3 header or energy baseline")
+        error = maximum_error(
+            [float(value) for value in parameters],
+            [row[0] for row in columns(resumed / "nep.restart", 2)])
+        if error > 1.0e-7:
+            raise AssertionError(f"zero-variance restart changed parameters: {error}")
+        report["restart_parameter_error"] = error
     return report
 
 
@@ -372,6 +420,9 @@ def main():
                 typewise_spin_cutoff=True, mforce_mode="transverse"),
             "zbl_training_runtime": validate_training_and_runtime(
                 root / "zbl", enable_zbl=True),
+            "channel_layout_restart": validate_training_and_runtime(
+                root / "restart", spin_compress=3,
+                all_spin_types=True, check_restart=True),
         }
     print(json.dumps(report, indent=2, sort_keys=True))
 

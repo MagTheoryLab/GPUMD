@@ -183,7 +183,7 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
         "potential nep.txt\n"
         "ensemble nve\n"
         "time_step 0\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n",
         "\n".join(lines) + "\n")
     assert static_result.returncode == 0, static_result.stdout + static_result.stderr
@@ -206,7 +206,7 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
         "potential nep.txt\n"
         + ensemble
         + f"time_step {time_step_fs}\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     assert result.returncode == 0, result.stdout + result.stderr
     actual = _read_spin_frame(tmp_path / "tspin" / "state.xyz")
@@ -308,7 +308,7 @@ def test_npt_tspin_composes_mttk_pressure_and_spin_integrators(tmp_path):
         "ensemble npt_tspin temp 300 300 iso 0 0 tperiod 100 pperiod 1000 "
         "mass_factor 1.5 seed 2468\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Integrate spins with TSPIN" in result.stdout
@@ -344,7 +344,7 @@ def test_nvt_tspin_lattice_off_only_integrates_spins(tmp_path):
         "ensemble nvt_tspin 300 300 100 lattice off "
         "mass_factor 0.001 seed 2468\n"
         "time_step 0.01\n"
-        "dump_xyz -1 0 5 state.xyz velocity spin spin_velocity\n"
+        "dump_xyz 5 state.xyz velocity spin spin_velocity\n"
         "run 5\n",
         "\n".join(lines) + "\n")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -374,7 +374,7 @@ def test_tspin_integrates_coordinates_excluded_by_potential_response_mask(tmp_pa
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     result = subprocess.run(
         [str(GPUMD)], cwd=directory, env=_environment(),
@@ -402,7 +402,7 @@ def test_element_mass_factor_zero_freezes_only_selected_spins(tmp_path):
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 Ge 1.5 seed 97531\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     result = subprocess.run(
         [str(GPUMD)], cwd=directory, env=_environment(),
@@ -440,7 +440,7 @@ def test_npt_tspin_runs_with_spin3_force_path(tmp_path):
         "ensemble npt_tspin temp 300 300 iso 0 0 "
         "tperiod 100 pperiod 1000 seed 13579\n"
         "time_step 0.01\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     result = subprocess.run(
         [str(GPUMD)], cwd=directory, env=_environment(),

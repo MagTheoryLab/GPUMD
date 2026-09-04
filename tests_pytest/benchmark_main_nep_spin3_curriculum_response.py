@@ -182,7 +182,7 @@ def main():
                     f"lambda_spin_response {response_weight}\n"
                     "lambda_1 0.0001\nlambda_2 0.0001\n"
                     "lambda_e 1\nlambda_f 0\nlambda_v 0\nlambda_m 5\nlambda_tau 0\n"
-                    "population 30\nbatch 14 1\n"
+                    "population 30\nbatch 14\n"
                     f"generation {args.generations}\noutput_interval {args.generations}\n"
                     f"save_potential {args.generations} 0 0\n")
                 run_nep(binary, case)

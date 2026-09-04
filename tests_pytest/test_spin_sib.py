@@ -67,7 +67,7 @@ def _evaluate(case_dir, model_text):
         "potential nep.txt\n"
         "ensemble nve\n"
         "time_step 0\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
         "run 1\n",
         model_text)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -118,7 +118,7 @@ def test_sib_one_step_matches_two_field_cayley_oracle(tmp_path):
         "ensemble nve_sib "
         f"alpha {alpha} gamma {gamma} stemp -1 seed 2468\n"
         f"time_step {time_step_fs}\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
         "run 1\n",
         model)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -141,7 +141,7 @@ def test_sib_noise_is_seeded_and_preserves_spin_magnitude(tmp_path):
         "potential nep.txt\n"
         "ensemble nvt_sib 300 300 100 lattice off alpha 0.1 seed {seed}\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 5 state.xyz mass spin mforce\n"
+        "dump_xyz 5 state.xyz mass spin mforce\n"
         "run 5\n")
     model = _base_model()
     initial_spin = np.array([
@@ -200,7 +200,7 @@ def test_npt_sib_composes_mttk_and_sib(tmp_path):
         "ensemble npt_sib temp 300 300 iso 0 0 "
         "tperiod 100 pperiod 1000 alpha 0.1 stemp -1 seed 123\n"
         "time_step 0.01\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
         "run 1\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Integrate spins with the semi-implicit B (SIB) method" in result.stdout

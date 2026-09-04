@@ -163,7 +163,9 @@ void Integrate::initialize(
         deform_x,
         deform_y,
         deform_z,
-        deform_rate));
+        deform_xy,
+        deform_xz,
+        deform_yz));
       break;
     case 12: // NPT-SCR
       ensemble.reset(new Ensemble_NPT_SCR(
@@ -176,7 +178,9 @@ void Integrate::initialize(
         deform_x,
         deform_y,
         deform_z,
-        deform_rate));
+        deform_xy,
+        deform_xz,
+        deform_yz));
       break;
     case -1: // msst
       break;
@@ -227,19 +231,32 @@ void Integrate::initialize(
         time_step));
       break;
     case 22: // heat-Langevin
-      ensemble.reset(new Ensemble_LAN(
-        type,
-        move_group,
-        move_velocity,
-        source,
-        sink,
-        group[0].cpu_size[source],
-        group[0].cpu_size[sink],
-        group[0].cpu_size_sum[source],
-        group[0].cpu_size_sum[sink],
-        temperature,
-        temperature_coupling,
-        delta_temperature));
+      if (use_heat_lan_region) {
+        ensemble.reset(new Ensemble_LAN(
+          type,
+          move_group,
+          move_velocity,
+          number_of_atoms,
+          heat_source_region,
+          heat_sink_region,
+          temperature,
+          temperature_coupling,
+          delta_temperature));
+      } else {
+        ensemble.reset(new Ensemble_LAN(
+          type,
+          move_group,
+          move_velocity,
+          source,
+          sink,
+          group[0].cpu_size[source],
+          group[0].cpu_size[sink],
+          group[0].cpu_size_sum[source],
+          group[0].cpu_size_sum[sink],
+          temperature,
+          temperature_coupling,
+          delta_temperature));
+      }
       break;
     case 23: // heat-BDP
       ensemble.reset(
@@ -298,8 +315,13 @@ void Integrate::initialize(
       break;
     case 33: // PIMD
       if (num_target_pressure_components == 0) {
-        ensemble.reset(
-          new Ensemble_PIMD(number_of_atoms, number_of_beads, temperature_coupling, atom));
+        ensemble.reset(new Ensemble_PIMD(
+          number_of_atoms,
+          number_of_beads,
+          temperature_coupling,
+          atom,
+          use_eco_pimd,
+          eco_omega_max_cm1));
       } else {
         ensemble.reset(new Ensemble_PIMD(
           number_of_atoms,
@@ -308,7 +330,10 @@ void Integrate::initialize(
           num_target_pressure_components,
           target_pressure,
           pressure_coupling,
-          atom));
+          atom,
+          use_eco_pimd,
+          eco_omega_max_cm1,
+          use_scr_barostat));
       }
       break;
     default:
@@ -356,43 +381,9 @@ void Integrate::finalize()
   deform_x = 0;
   deform_y = 0;
   deform_z = 0;
-}
-
-static __global__ void gpu_copy_position(
-  const int number_of_particles,
-  const double* g_xi,
-  const double* g_yi,
-  const double* g_zi,
-  double* g_xo,
-  double* g_yo,
-  double* g_zo)
-{
-  const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < number_of_particles) {
-    g_xo[i] = g_xi[i];
-    g_yo[i] = g_yi[i];
-    g_zo[i] = g_zi[i];
-  }
-}
-
-static __global__ void gpu_update_unwrapped_position(
-  const int number_of_particles,
-  const double* g_xnew,
-  const double* g_ynew,
-  const double* g_znew,
-  const double* g_xold,
-  const double* g_yold,
-  const double* g_zold,
-  double* g_xo,
-  double* g_yo,
-  double* g_zo)
-{
-  const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < number_of_particles) {
-    g_xo[i] += g_xnew[i] - g_xold[i];
-    g_yo[i] += g_ynew[i] - g_yold[i];
-    g_zo[i] += g_znew[i] - g_zold[i];
-  }
+  deform_xy = 0;
+  deform_xz = 0;
+  deform_yz = 0;
 }
 
 void Integrate::compute1(
@@ -419,34 +410,7 @@ void Integrate::compute1(
     spin_integrator->compute1(time_step, atom);
   }
 
-  if (atom.unwrapped_position.size() > 0) {
-    gpu_copy_position<<<(atom.number_of_atoms - 1) / 128 + 1, 128>>>(
-      atom.number_of_atoms,
-      atom.position_per_atom.data(),
-      atom.position_per_atom.data() + atom.number_of_atoms,
-      atom.position_per_atom.data() + atom.number_of_atoms * 2,
-      atom.position_temp.data(),
-      atom.position_temp.data() + atom.number_of_atoms,
-      atom.position_temp.data() + atom.number_of_atoms * 2);
-    GPU_CHECK_KERNEL
-  }
-
   ensemble->compute1(time_step, group, box, atom, thermo);
-
-  if (atom.unwrapped_position.size() > 0) {
-    gpu_update_unwrapped_position<<<(atom.number_of_atoms - 1) / 128 + 1, 128>>>(
-      atom.number_of_atoms,
-      atom.position_per_atom.data(),
-      atom.position_per_atom.data() + atom.number_of_atoms,
-      atom.position_per_atom.data() + atom.number_of_atoms * 2,
-      atom.position_temp.data(),
-      atom.position_temp.data() + atom.number_of_atoms,
-      atom.position_temp.data() + atom.number_of_atoms * 2,
-      atom.unwrapped_position.data(),
-      atom.unwrapped_position.data() + atom.number_of_atoms,
-      atom.unwrapped_position.data() + atom.number_of_atoms * 2);
-    GPU_CHECK_KERNEL
-  }
 }
 
 void Integrate::compute2(
@@ -511,6 +475,11 @@ void Integrate::parse_ensemble(
   spin_sib_seed = 12345;
   int ensemble_num_param = num_param;
   int spin_option_start = num_param;
+  use_eco_pimd = false;
+  use_scr_barostat = false;
+  eco_omega_max_cm1 = 0.0;
+  use_heat_lan_region = false;
+  int pimd_num_param = num_param;
 
   // 1. Determine the integration method
   if (strcmp(param[1], "nve") == 0) {
@@ -655,9 +624,10 @@ void Integrate::parse_ensemble(
     }
   } else if (strcmp(param[1], "heat_lan") == 0) {
     type = 22;
-    if (num_param != 7) {
-      PRINT_INPUT_ERROR("ensemble heat_lan should have 5 parameters.");
+    if (num_param != 7 && num_param != 17) {
+      PRINT_INPUT_ERROR("ensemble heat_lan should have 5 or 15 parameters.");
     }
+    use_heat_lan_region = num_param == 17;
   } else if (strcmp(param[1], "heat_bdp") == 0) {
     type = 23;
     if (num_param != 7) {
@@ -701,9 +671,9 @@ void Integrate::parse_ensemble(
     }
   } else if (strcmp(param[1], "pimd") == 0) {
     type = 33;
-    if (num_param != 6 && num_param != 9 && num_param != 13 && num_param != 19) {
-      PRINT_INPUT_ERROR("ensemble pimd should have 4 or 7 or 11 or 17 parameters.");
-    }
+  } else if (strcmp(param[1], "pimd_scr") == 0) {
+    type = 33;
+    use_scr_barostat = true;
   } else if (strcmp(param[1], "msst") == 0) {
     type = -1;
     ensemble.reset(new Ensemble_MSST(param, num_param));
@@ -1085,30 +1055,67 @@ void Integrate::parse_ensemble(
       PRINT_INPUT_ERROR("|Temperature difference| is too large.");
     }
 
-    // group labels of heat source and sink
-    if (!is_valid_int(param[5], &source)) {
-      PRINT_INPUT_ERROR("Group ID for heat source should be an integer.");
-    }
-    if (!is_valid_int(param[6], &sink)) {
-      PRINT_INPUT_ERROR("Group ID for heat sink should be an integer.");
-    }
-    if (group.size() < 1) {
-      PRINT_INPUT_ERROR("Cannot heat/cold without grouping method.");
-    }
-    if (source == sink) {
-      PRINT_INPUT_ERROR("Source and sink cannot be the same group.");
-    }
-    if (source < 0) {
-      PRINT_INPUT_ERROR("Group ID for heat source should >= 0.");
-    }
-    if (source >= group[0].number) {
-      PRINT_INPUT_ERROR("Group ID for heat source should < #groups.");
-    }
-    if (sink < 0) {
-      PRINT_INPUT_ERROR("Group ID for heat sink should >= 0.");
-    }
-    if (sink >= group[0].number) {
-      PRINT_INPUT_ERROR("Group ID for heat sink should < #groups.");
+    if (type == 22 && use_heat_lan_region) {
+      for (int i = 0; i < 6; ++i) {
+        if (!is_valid_real(param[5 + i], &heat_source_region[i])) {
+          PRINT_INPUT_ERROR("Heat source region bounds should be numbers.");
+        }
+        if (!is_valid_real(param[11 + i], &heat_sink_region[i])) {
+          PRINT_INPUT_ERROR("Heat sink region bounds should be numbers.");
+        }
+      }
+      for (int d = 0; d < 3; ++d) {
+        int i = 2 * d;
+        if (!(heat_source_region[i] >= 0.0 && heat_source_region[i] <= 1.0 &&
+              heat_source_region[i + 1] >= 0.0 && heat_source_region[i + 1] <= 1.0)) {
+          PRINT_INPUT_ERROR("Heat source region bounds should be in [0, 1].");
+        }
+        if (!(heat_sink_region[i] >= 0.0 && heat_sink_region[i] <= 1.0 &&
+              heat_sink_region[i + 1] >= 0.0 && heat_sink_region[i + 1] <= 1.0)) {
+          PRINT_INPUT_ERROR("Heat sink region bounds should be in [0, 1].");
+        }
+        if (heat_source_region[i] >= heat_source_region[i + 1]) {
+          PRINT_INPUT_ERROR("Heat source region minimum should be smaller than maximum.");
+        }
+        if (heat_sink_region[i] >= heat_sink_region[i + 1]) {
+          PRINT_INPUT_ERROR("Heat sink region minimum should be smaller than maximum.");
+        }
+      }
+      if (
+        heat_source_region[0] < heat_sink_region[1] &&
+        heat_sink_region[0] < heat_source_region[1] &&
+        heat_source_region[2] < heat_sink_region[3] &&
+        heat_sink_region[2] < heat_source_region[3] &&
+        heat_source_region[4] < heat_sink_region[5] &&
+        heat_sink_region[4] < heat_source_region[5]) {
+        PRINT_INPUT_ERROR("Heat source and sink regions cannot overlap.");
+      }
+    } else {
+      // group labels of heat source and sink
+      if (!is_valid_int(param[5], &source)) {
+        PRINT_INPUT_ERROR("Group ID for heat source should be an integer.");
+      }
+      if (!is_valid_int(param[6], &sink)) {
+        PRINT_INPUT_ERROR("Group ID for heat sink should be an integer.");
+      }
+      if (group.size() < 1) {
+        PRINT_INPUT_ERROR("Cannot heat/cold without grouping method.");
+      }
+      if (source == sink) {
+        PRINT_INPUT_ERROR("Source and sink cannot be the same group.");
+      }
+      if (source < 0) {
+        PRINT_INPUT_ERROR("Group ID for heat source should >= 0.");
+      }
+      if (source >= group[0].number) {
+        PRINT_INPUT_ERROR("Group ID for heat source should < #groups.");
+      }
+      if (sink < 0) {
+        PRINT_INPUT_ERROR("Group ID for heat sink should >= 0.");
+      }
+      if (sink >= group[0].number) {
+        PRINT_INPUT_ERROR("Group ID for heat sink should < #groups.");
+      }
     }
   }
 
@@ -1280,6 +1287,36 @@ void Integrate::parse_ensemble(
   // 5. PIMD related
   if (type >= 31 && type <= 40) {
 
+    // Optional Eco frequencies are selected by appending
+    // "eco omega_max_cm1" to an existing PIMD command.
+    if (type == 33) {
+      if (num_param >= 8 && strcmp(param[num_param - 2], "eco") == 0) {
+        use_eco_pimd = true;
+        pimd_num_param = num_param - 2;
+        if (!is_valid_real(param[num_param - 1], &eco_omega_max_cm1)) {
+          PRINT_INPUT_ERROR("Eco-PIMD omega_max should be a number in cm^-1.");
+        }
+      }
+      if (use_scr_barostat) {
+        if (pimd_num_param != 9 && pimd_num_param != 13 && pimd_num_param != 19) {
+          PRINT_INPUT_ERROR(
+            "ensemble pimd_scr should have 7, 11, or 17 parameters, optionally followed by "
+            "eco omega_max_cm1.");
+        }
+      } else {
+        if (
+          pimd_num_param != 6 && pimd_num_param != 9 && pimd_num_param != 13 &&
+          pimd_num_param != 19) {
+          PRINT_INPUT_ERROR(
+            "ensemble pimd should have 4, 7, 11, or 17 parameters, optionally followed by "
+            "eco omega_max_cm1.");
+        }
+      }
+      if (use_eco_pimd && eco_omega_max_cm1 <= 0.0) {
+        PRINT_INPUT_ERROR("Eco-PIMD omega_max should > 0.");
+      }
+    }
+
     // number of beads for RPMD, TRPMD, or PIMD
     if (!is_valid_int(param[2], &number_of_beads)) {
       PRINT_INPUT_ERROR("number of beads should be an integer.");
@@ -1324,8 +1361,8 @@ void Integrate::parse_ensemble(
       num_target_pressure_components = 0;
 
       // pressures:
-      if (num_param >= 9) {
-        if (num_param == 13) {
+      if (pimd_num_param >= 9) {
+        if (pimd_num_param == 13) {
           for (int i = 0; i < 3; i++) {
             if (!is_valid_real(param[6 + i], &target_pressure[i])) {
               PRINT_INPUT_ERROR("Pressure should be a number.");
@@ -1345,7 +1382,7 @@ void Integrate::parse_ensemble(
             box.cpu_h[6] != 0 || box.cpu_h[7] != 0) {
             PRINT_INPUT_ERROR("Cannot use triclinic box with only 3 target pressure components.");
           }
-        } else if (num_param == 9) { // isotropic
+        } else if (pimd_num_param == 9) { // isotropic
           if (!is_valid_real(param[6], &target_pressure[0])) {
             PRINT_INPUT_ERROR("Pressure should be a number.");
           }
@@ -1648,8 +1685,27 @@ void Integrate::parse_ensemble(
       printf("    delta_T is %g K.\n", delta_temperature);
       printf("    T_hot is %g K.\n", temperature + delta_temperature);
       printf("    T_cold is %g K.\n", temperature - delta_temperature);
-      printf("    heat source is group %d in grouping method 0.\n", source);
-      printf("    heat sink is group %d in grouping method 0.\n", sink);
+      if (use_heat_lan_region) {
+        printf(
+          "    heat source fractional region is [%g, %g) [%g, %g) [%g, %g).\n",
+          heat_source_region[0],
+          heat_source_region[1],
+          heat_source_region[2],
+          heat_source_region[3],
+          heat_source_region[4],
+          heat_source_region[5]);
+        printf(
+          "    heat sink fractional region is [%g, %g) [%g, %g) [%g, %g).\n",
+          heat_sink_region[0],
+          heat_sink_region[1],
+          heat_sink_region[2],
+          heat_sink_region[3],
+          heat_sink_region[4],
+          heat_sink_region[5]);
+      } else {
+        printf("    heat source is group %d in grouping method 0.\n", source);
+        printf("    heat sink is group %d in grouping method 0.\n", sink);
+      }
       break;
     case 23:
       printf("Integrate with heating and cooling for this run.\n");
@@ -1713,8 +1769,12 @@ void Integrate::parse_ensemble(
       printf("    number of beads is %d.\n", number_of_beads);
       break;
     case 33:
-      if (num_param >= 9) {
-        printf("Use NPT-PIMD for this run.\n");
+      if (pimd_num_param >= 9) {
+        if (use_scr_barostat) {
+          printf("Use NPT-PIMD with stochastic cell rescaling for this run.\n");
+        } else {
+          printf("Use NPT-PIMD for this run.\n");
+        }
       } else {
         printf("Use NVT-PIMD for this run.\n");
       }
@@ -1722,7 +1782,7 @@ void Integrate::parse_ensemble(
       printf("    initial temperature is %g K.\n", temperature1);
       printf("    final temperature is %g K.\n", temperature2);
       printf("    tau_T is %g time_step.\n", temperature_coupling);
-      if (num_param >= 9) {
+      if (pimd_num_param >= 9) {
         if (num_target_pressure_components == 1) {
           printf("    isotropic pressure is %g GPa.\n", target_pressure[0]);
           printf("    bulk modulus is %g GPa.\n", elastic_modulus[0]);
@@ -1759,6 +1819,11 @@ void Integrate::parse_ensemble(
     default:
       PRINT_INPUT_ERROR("Invalid ensemble type.");
       break;
+  }
+
+  if (type == 33 && use_eco_pimd) {
+    printf("    use Eco-PIMD internal-mode frequencies.\n");
+    printf("    Eco-PIMD omega_max is %g cm^-1.\n", eco_omega_max_cm1);
   }
 }
 
@@ -1868,60 +1933,5 @@ void Integrate::parse_move(const char** param, int num_param, std::vector<Group>
 
   for (int d = 0; d < 3; ++d) {
     move_velocity[d] *= TIME_UNIT_CONVERSION; // natural to A/fs
-  }
-}
-
-void Integrate::parse_deform(const char** param, int num_param)
-{
-  printf("Deform the box.\n");
-
-  if (num_param != 5 && num_param != 7) {
-    PRINT_INPUT_ERROR("Keyword 'deform' should have 4 or 6 parameters.");
-  }
-
-  // strain rate
-  if (!is_valid_real(param[1], &deform_rate[0])) {
-    PRINT_INPUT_ERROR("Defrom rate should be a number.");
-  }
-
-  int offset = 0;
-  if (num_param == 5) {
-    deform_rate[1] = deform_rate[0];
-    deform_rate[2] = deform_rate[0];
-    printf("    strain rate is %g A / step.\n", deform_rate[0]);
-  } else {
-    offset = 2;
-    if (!is_valid_real(param[2], &deform_rate[1])) {
-      PRINT_INPUT_ERROR("Defrom rate should be a number.");
-    }
-    if (!is_valid_real(param[3], &deform_rate[2])) {
-      PRINT_INPUT_ERROR("Defrom rate should be a number.");
-    }
-    printf(
-      "    strain rates are (%g, %g, %g) A / step.\n",
-      deform_rate[0],
-      deform_rate[1],
-      deform_rate[2]);
-  }
-
-  // direction
-  if (!is_valid_int(param[2 + offset], &deform_x)) {
-    PRINT_INPUT_ERROR("deform_x should be integer.\n");
-  }
-  if (!is_valid_int(param[3 + offset], &deform_y)) {
-    PRINT_INPUT_ERROR("deform_y should be integer.\n");
-  }
-  if (!is_valid_int(param[4 + offset], &deform_z)) {
-    PRINT_INPUT_ERROR("deform_z should be integer.\n");
-  }
-
-  if (deform_x) {
-    printf("    apply strain in x direction.\n");
-  }
-  if (deform_y) {
-    printf("    apply strain in y direction.\n");
-  }
-  if (deform_z) {
-    printf("    apply strain in z direction.\n");
   }
 }

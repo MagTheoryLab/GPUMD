@@ -66,7 +66,7 @@ def evaluate(root, name, model_text):
         "potential nep.txt\n"
         "ensemble nve\n"
         "time_step 0\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
         "run 1\n",
         model_text)
     if result.returncode != 0:
@@ -150,7 +150,7 @@ def one_step_oracle(root):
         "ensemble nve_sib "
         f"alpha {alpha} gamma {gamma} stemp -1 seed 2468\n"
         f"time_step {time_step_fs}\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
         "run 1\n",
         model)
     if result.returncode != 0:
@@ -174,7 +174,7 @@ def noise_and_parser_checks(root):
         "potential nep.txt\n"
         "ensemble nvt_sib 300 300 100 lattice off alpha 0.1 seed {seed}\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 5 state.xyz mass spin mforce\n"
+        "dump_xyz 5 state.xyz mass spin mforce\n"
         "run 5\n")
     frames = []
     for name, seed in (("same_a", 314159), ("same_b", 314159), ("different", 271828)):
@@ -223,7 +223,7 @@ def npt_smoke(root):
         "ensemble npt_sib temp 300 300 iso 0 0 "
         "tperiod 100 pperiod 1000 alpha 0.1 stemp -1 seed 123\n"
         "time_step 0.01\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
         "run 1\n")
     if result.returncode != 0:
         raise AssertionError(result.stdout + result.stderr)

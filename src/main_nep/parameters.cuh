@@ -18,27 +18,65 @@
 #include <string>
 #include <vector>
 
+// the model hyperparameters as recorded in the header of a nep.txt file
+struct NepTxtHeader {
+  int spin_mode = 0;
+  std::string model_token;
+  int version;
+  int train_mode;
+  int charge_mode;
+  int vdw;
+  int charge_vdw;
+  bool enable_zbl;
+  bool flexible_zbl;
+  bool use_typewise_cutoff_zbl;
+  float zbl_rc_inner;
+  float zbl_rc_outer;
+  float typewise_cutoff_zbl_factor;
+  int num_types;
+  std::vector<std::string> elements;
+  bool has_multiple_cutoffs;
+  std::vector<float> rc_radial;
+  std::vector<float> rc_angular;
+  int n_max_radial;
+  int n_max_angular;
+  int basis_size_radial;
+  int basis_size_angular;
+  int L_max;
+  int has_q_222; // as written to nep.txt, that is 2 or 0
+  int has_q_1111;
+  int has_q_112;
+  int has_q_123;
+  int has_q_233;
+  int has_q_134;
+  int num_neurons1;
+  int num_neurons2;
+  int number_of_header_lines; // 6 without a zbl line, 7 with one
+};
+
+// parse the header of a nep.txt file; returns false and sets error if it cannot be parsed
+bool read_nep_txt_header(const std::string& filename, NepTxtHeader& header, std::string& error);
+
 class Parameters
 {
 public:
   Parameters();
 
   // parameters to be read in
-  int version;            // nep version, can be 3 or 4 or 5
+  int version;            // NEP version; only NEP4 is supported
   int batch_size;         // number of configurations in one batch
-  int use_full_batch;     // 1 for effective full-batch even though batch_size is not full-batch
   int num_types;          // number of atom types
   int population_size;    // population size for SNES
   int maximum_generation; // maximum number of generations for SNES;
   int save_potential;     // number of generations between writing a checkpoint nep.txt file.
   int save_potential_format;   // format of checkpoint nep.txt file name
   int save_potential_restart;  // if restart files should be written or not. 0=no, 1=yes
-  int output_interval;    // number of generations between writing a line to loss.out and related output
+  int output_interval;    // number of generations between writing loss.out, nep.txt, nep.restart and related output
   int num_neurons1;       // number of nuerons in the 1st hidden layer (only one hidden layer)
   int num_neurons2;       // number of nuerons in the 2nd hidden layer (only two hidden layers)
   int num_hidden_layers;  // number of hidden layers
-  int basis_size_radial;  // for nep3
-  int basis_size_angular; // for nep3
+  int basis_size_radial;
+  int basis_size_angular;
   int n_max_radial;       // maximum order of the radial Chebyshev polynomials
   int n_max_angular;      // maximum order of the angular Chebyshev polynomials
   int L_max;              // maximum order of the 3body spherical harmonics
@@ -82,6 +120,8 @@ public:
   int spin_basis_size[2];
   int spin_l_max[3];
   float spin_cutoff;
+  int vdw;         // add environment-dependent vdW to ordinary NEP
+  int charge_vdw;  // combined charge-vdW model
   bool has_bec = false; // check if there are target BEC values
   int flip_charge = 0; // 1 for flipping charges upon restarting
   int fine_tune = 0; // fine_tune option; 0=no, 1=yes
@@ -89,6 +129,7 @@ public:
   std::string fine_tune_nep_txt = "";
   std::string fine_tune_nep_restart = "";
   bool import_q_scaler = false; // read q_scaler from the local nep.txt instead of recomputing it
+  bool nep_compile = true; // runtime-specialize NEP-family training kernels
 
   // check if a parameter has been set:
   bool is_train_mode_set;
@@ -131,6 +172,8 @@ public:
   bool is_spin_cutoff_set;
   bool is_spin_dof_type_set;
   bool is_spin_env_type_set;
+  bool is_vdw_set;
+  bool is_charge_vdw_set;
 
   // other parameters
   int dim;                            // dimension of the descriptor vector
@@ -145,6 +188,7 @@ public:
   int number_of_variables_descriptor_spin;
   int number_of_variables_spin_projection;
   int spin_order3_descriptor_start;
+  int number_of_nep_txt_header_lines = 0; // header length of the nep.txt file that has been checked
 
   // some arrays
 
@@ -177,7 +221,10 @@ private:
   void read_zbl_in();
   void calculate_parameters();
   void report_inputs();
-  void check_foundation_model(const std::string& filename);
+  void check_existing_model();
+  void check_nep_txt(const std::string& filename, const bool fatal, const char* remedy);
+  void check_nep_restart();
+  void compare_with_nep_txt(const std::string& filename, std::vector<std::string>& mismatches);
 
   void parse_one_keyword(std::vector<std::string>& tokens);
 
@@ -228,8 +275,11 @@ private:
     const char* keyword,
     std::vector<std::string>& names,
     bool& is_set);
+  void parse_vdw(const char** param, int num_param);
+  void parse_charge_vdw(const char** param, int num_param);
   void parse_fine_tune(const char** param, int num_param);
   void parse_save_potential(const char** param, int num_param);
   void parse_output_interval(const char** param, int num_param);
   void parse_import_q_scaler(const char** param, int num_param);
+  void parse_nep_compile(const char** param, int num_param);
 };

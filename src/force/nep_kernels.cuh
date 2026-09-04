@@ -16,7 +16,6 @@ __global__ void find_force_radial(
   const double* y,
   const double* z,
   const float* Fp,
-  bool is_dipole,
   double* fx,
   double* fy,
   double* fz,

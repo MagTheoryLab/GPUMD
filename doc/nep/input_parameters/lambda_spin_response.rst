@@ -10,15 +10,16 @@ This keyword sets the weight of grouped magnetic-response loss::
   lambda_spin_response <weight>
 
 The weight must be non-negative and defaults to 0. A positive value requires
-``spin_mode 3`` and full-batch evaluation::
+``spin_mode 3`` and a single batch containing all training frames::
 
-  batch <size> 1
+  batch <number_of_training_frames>
 
-The second value ``1`` asks the trainer to evaluate all batches before the
-grouped loss is formed; ``size`` still controls how many structures reside in
-one batch.
+The batch size must be at least the number of training frames. Splitting the
+training set into multiple batches is rejected when this loss is enabled, so
+complete response groups enter each SNES fitness evaluation. The upstream
+``batch`` keyword takes only one value.
 
-For a response frame :math:`a`, the supplied tangent
+For a response frame :math:`a`, the derived tangent
 :math:`\boldsymbol{t}_{ai}` defines a scalar generalized response
 
 .. math::

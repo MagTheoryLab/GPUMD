@@ -371,7 +371,7 @@ void find_neighbor(
     PRINT_INPUT_ERROR(
       "Neighbor capacity is insufficient; no descriptor or force kernel was launched.");
   }
-  gpu_sort_neighbor_list<<<N, MN, MN * sizeof(int)>>>(N, NN.data(), NL.data());
+  gpu_sort_neighbor_list<<<N, min(1024, MN), MN * sizeof(int)>>>(N, NN.data(), NL.data());
   GPU_CHECK_KERNEL
 }
 
@@ -524,11 +524,12 @@ void find_neighbor_ilp(
   GPU_CHECK_KERNEL
 
   const int MN = NL.size() / NN.size();
-  gpu_sort_neighbor_list_ilp<<<N, min(1024, MN), MN * sizeof(int)>>>(N, NN.data(), NL.data());
+  gpu_sort_neighbor_list<<<N, min(1024, MN), MN * sizeof(int)>>>(N, NN.data(), NL.data());
   GPU_CHECK_KERNEL
 
   const int big_ilp_MN = big_ilp_NL.size() / big_ilp_NN.size();
-  gpu_sort_neighbor_list<<<N, big_ilp_MN, big_ilp_MN * sizeof(int)>>>(N, big_ilp_NN.data(), big_ilp_NL.data());
+  gpu_sort_neighbor_list<<<N, min(1024, big_ilp_MN), big_ilp_MN * sizeof(int)>>>(
+    N, big_ilp_NN.data(), big_ilp_NL.data());
   GPU_CHECK_KERNEL
 }
 
@@ -664,7 +665,7 @@ void find_neighbor_SW(
   GPU_CHECK_KERNEL
 
   const int MN = NL.size() / NN.size();
-  gpu_sort_neighbor_list<<<N, MN, MN * sizeof(int)>>>(N, NN.data(), NL.data());
+  gpu_sort_neighbor_list<<<N, min(1024, MN), MN * sizeof(int)>>>(N, NN.data(), NL.data());
   GPU_CHECK_KERNEL
 }
 

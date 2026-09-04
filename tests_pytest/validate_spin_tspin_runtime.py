@@ -217,7 +217,7 @@ def validate_one_step(root, pressure_control=False):
         "potential nep.txt\n"
         "ensemble nve\n"
         "time_step 0\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n",
         "\n".join(lines) + "\n")
     if static_result.returncode != 0:
@@ -242,7 +242,7 @@ def validate_one_step(root, pressure_control=False):
         "potential nep.txt\n"
         + ensemble
         + f"time_step {time_step_fs}\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n")
     if result.returncode != 0:
         raise RuntimeError(result.stdout + result.stderr)
@@ -397,7 +397,7 @@ def validate_short_dynamics(root):
         "potential nep.txt\n"
         f"ensemble nvt_tspin 300 300 100 mass_factor {mass_factor} seed 314159\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 10 trajectory.xyz mass spin spin_velocity\n"
+        "dump_xyz 10 trajectory.xyz mass spin spin_velocity\n"
         "run 500\n",
         model_with_zero_lattice_velocity())
     if result.returncode != 0:
@@ -425,7 +425,7 @@ def validate_fixed_spin_nhc(root):
         "potential nep.txt\n"
         "ensemble nvt_nhc 300 300 100\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 10 state.xyz mass spin mforce\n"
+        "dump_xyz 10 state.xyz mass spin mforce\n"
         "run 10\n",
         model_text)
     if result.returncode != 0:
@@ -455,7 +455,7 @@ def validate_integrator_ignores_potential_mask(root):
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 1 state.xyz spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz spin mforce spin_velocity\n"
         "run 1\n",
         model_text,
         potential_text=selective_type_model())
@@ -516,7 +516,7 @@ def validate_lattice_switch(root):
         "ensemble nvt_tspin 300 300 100 lattice off "
         "mass_factor 0.001 seed 2468\n"
         "time_step 0.01\n"
-        "dump_xyz -1 0 5 state.xyz velocity spin spin_velocity\n"
+        "dump_xyz 5 state.xyz velocity spin spin_velocity\n"
         "run 5\n",
         "\n".join(source_lines) + "\n")
     if result.returncode != 0:
@@ -554,7 +554,7 @@ def validate_element_mass_factors(root):
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor Fe 0 Ge 1.5 seed 97531\n"
         "time_step 0.1\n"
-        "dump_xyz -1 0 1 state.xyz spin spin_velocity\n"
+        "dump_xyz 1 state.xyz spin spin_velocity\n"
         "run 1\n",
         model_text,
         potential_text=selective_type_model())
@@ -601,7 +601,7 @@ def validate_spin3_npt(root):
         "ensemble npt_tspin temp 300 300 iso 0 0 "
         "tperiod 100 pperiod 1000 seed 13579\n"
         "time_step 0.01\n"
-        "dump_xyz -1 0 1 state.xyz mass spin mforce spin_velocity\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n",
         "\n".join(lines) + "\n",
         potential_text=(fixture / "nep4_spin3_o3c2_uniform.nep").read_text())

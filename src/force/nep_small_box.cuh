@@ -148,14 +148,10 @@ static __global__ void find_descriptor_small_box(
   const float* __restrict__ g_x12_angular,
   const float* __restrict__ g_y12_angular,
   const float* __restrict__ g_z12_angular,
-  const bool is_polarizability,
   double* g_pe,
   float* g_Fp,
   double* g_virial,
-  float* g_sum_fxyz,
-  bool need_B_projection,
-  double* B_projection,
-  int B_projection_size)
+  float* g_sum_fxyz)
 {
   int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
   if (n1 < N2) {
@@ -178,8 +174,12 @@ static __global__ void find_descriptor_small_box(
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (t1 * paramb.num_types + t2) * ((paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1));
-          c_index += n * (paramb.basis_size_radial + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_radial,
+            paramb.basis_size_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         q[n] += gn12;
@@ -203,9 +203,13 @@ static __global__ void find_descriptor_small_box(
         find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = paramb.num_c_radial;
-          c_index += (t1 * paramb.num_types + t2) * ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
-          c_index += n * (paramb.basis_size_angular + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         accumulate_s(paramb.L_max, d12, r12[0], r12[1], r12[2], gn12, s);
@@ -226,64 +230,16 @@ static __global__ void find_descriptor_small_box(
     // get energy and energy gradient
     float F = 0.0f, Fp[MAX_DIM] = {0.0f};
 
-    if (is_polarizability) {
-      apply_ann_one_layer(
-        annmb.dim,
-        annmb.num_neurons1,
-        annmb.w0_pol[t1],
-        annmb.b0_pol[t1],
-        annmb.w1_pol[t1],
-        annmb.b1_pol,
-        q,
-        F,
-        Fp);
-      // Add the potential values to the diagonal of the virial
-      g_virial[n1] = F;
-      g_virial[n1 + N * 1] = F;
-      g_virial[n1 + N * 2] = F;
-
-      F = 0.0f;
-      for (int d = 0; d < annmb.dim; ++d) {
-        Fp[d] = 0.0f;
-      }
-    }
-
-    if (paramb.version == 5) {
-      apply_ann_one_layer_nep5(
-        annmb.dim,
-        annmb.num_neurons1,
-        annmb.w0[t1],
-        annmb.b0[t1],
-        annmb.w1[t1],
-        annmb.b1,
-        q,
-        F,
-        Fp);
-    } else {
-      if (!need_B_projection)
-        apply_ann_one_layer(
-          annmb.dim,
-          annmb.num_neurons1,
-          annmb.w0[t1],
-          annmb.b0[t1],
-          annmb.w1[t1],
-          annmb.b1,
-          q,
-          F,
-          Fp);
-      else
-        apply_ann_one_layer(
-          annmb.dim,
-          annmb.num_neurons1,
-          annmb.w0[t1],
-          annmb.b0[t1],
-          annmb.w1[t1],
-          annmb.b1,
-          q,
-          F,
-          Fp,
-          B_projection + n1 * B_projection_size);
-    }
+    apply_ann_one_layer(
+      annmb.dim,
+      annmb.num_neurons1,
+      annmb.w0[t1],
+      annmb.b0[t1],
+      annmb.w1[t1],
+      annmb.b1,
+      q,
+      F,
+      Fp);
     g_pe[n1] += F;
 
     for (int d = 0; d < annmb.dim; ++d) {
@@ -336,8 +292,8 @@ static __global__ void find_descriptor_small_box(
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (t1 * paramb.num_types + t2) * ((paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1));
-          c_index += n * (paramb.basis_size_radial + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         q[n] += gn12;
@@ -361,9 +317,13 @@ static __global__ void find_descriptor_small_box(
         find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = paramb.num_c_radial;
-          c_index += (t1 * paramb.num_types + t2) * ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
-          c_index += n * (paramb.basis_size_angular + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
         }
         accumulate_s(paramb.L_max, d12, r12[0], r12[1], r12[2], gn12, s);
@@ -579,7 +539,6 @@ static __global__ void find_force_radial_small_box(
   const R12* __restrict__ g_y12,
   const R12* __restrict__ g_z12,
   const float* __restrict__ g_Fp,
-  const bool is_dipole,
   double* g_fx,
   double* g_fy,
   double* g_fz,
@@ -629,8 +588,8 @@ static __global__ void find_force_radial_small_box(
         float gnp12 = 0.0f;
         double gnp12_double = 0.0;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (t1 * paramb.num_types + t2) * ((paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1));
-          c_index += n * (paramb.basis_size_radial + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
           gnp12 += fnp12[k] * annmb.c_type_pair[c_index];
           if (AccumulateInDouble) {
             gnp12_double +=
@@ -664,19 +623,9 @@ static __global__ void find_force_radial_small_box(
       double s_szy = 0.0;
       double s_szz = 0.0;
       const double* virial_r12 = AccumulateInDouble ? r12_double : nullptr;
-      if (is_dipole) {
-        double r12_square = AccumulateInDouble
-          ? virial_r12[0] * virial_r12[0] + virial_r12[1] * virial_r12[1] +
-              virial_r12[2] * virial_r12[2]
-          : r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2];
-        s_sxx -= r12_square * f12_double[0];
-        s_syy -= r12_square * f12_double[1];
-        s_szz -= r12_square * f12_double[2];
-      } else {
-        s_sxx -= (AccumulateInDouble ? virial_r12[0] : r12[0]) * f12_double[0];
-        s_syy -= (AccumulateInDouble ? virial_r12[1] : r12[1]) * f12_double[1];
-        s_szz -= (AccumulateInDouble ? virial_r12[2] : r12[2]) * f12_double[2];
-      }
+      s_sxx -= (AccumulateInDouble ? virial_r12[0] : r12[0]) * f12_double[0];
+      s_syy -= (AccumulateInDouble ? virial_r12[1] : r12[1]) * f12_double[1];
+      s_szz -= (AccumulateInDouble ? virial_r12[2] : r12[2]) * f12_double[2];
       const double vx = AccumulateInDouble ? virial_r12[0] : r12[0];
       const double vy = AccumulateInDouble ? virial_r12[1] : r12[1];
       const double vz = AccumulateInDouble ? virial_r12[2] : r12[2];
@@ -725,7 +674,6 @@ static __global__ void find_force_angular_small_box(
   const R12* __restrict__ g_z12,
   const float* __restrict__ g_Fp,
   const float* __restrict__ g_sum_fxyz,
-  const bool is_dipole,
   double* g_fx,
   double* g_fy,
   double* g_fz,
@@ -790,9 +738,13 @@ static __global__ void find_force_angular_small_box(
         double gn12_double = 0.0;
         double gnp12_double = 0.0;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = paramb.num_c_radial;
-          c_index += (t1 * paramb.num_types + t2) * ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
-          c_index += n * (paramb.basis_size_angular + 1) + k;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c_type_pair[c_index];
           gnp12 += fnp12[k] * annmb.c_type_pair[c_index];
           if (AccumulateInDouble) {
@@ -861,19 +813,9 @@ static __global__ void find_force_angular_small_box(
       double s_szy = 0.0;
       double s_szz = 0.0;
       const double* virial_r12 = AccumulateInDouble ? r12_double : nullptr;
-      if (is_dipole) {
-        double r12_square = AccumulateInDouble
-          ? virial_r12[0] * virial_r12[0] + virial_r12[1] * virial_r12[1] +
-              virial_r12[2] * virial_r12[2]
-          : r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2];
-        s_sxx -= r12_square * f12_double[0];
-        s_syy -= r12_square * f12_double[1];
-        s_szz -= r12_square * f12_double[2];
-      } else {
-        s_sxx -= (AccumulateInDouble ? virial_r12[0] : r12[0]) * f12_double[0];
-        s_syy -= (AccumulateInDouble ? virial_r12[1] : r12[1]) * f12_double[1];
-        s_szz -= (AccumulateInDouble ? virial_r12[2] : r12[2]) * f12_double[2];
-      }
+      s_sxx -= (AccumulateInDouble ? virial_r12[0] : r12[0]) * f12_double[0];
+      s_syy -= (AccumulateInDouble ? virial_r12[1] : r12[1]) * f12_double[1];
+      s_szz -= (AccumulateInDouble ? virial_r12[2] : r12[2]) * f12_double[2];
       const double vx = AccumulateInDouble ? virial_r12[0] : r12[0];
       const double vy = AccumulateInDouble ? virial_r12[1] : r12[1];
       const double vz = AccumulateInDouble ? virial_r12[2] : r12[2];

@@ -163,7 +163,7 @@ def run_case(root, name, case, model):
         "velocity 1\n"
         "ensemble nve\n"
         "time_step 0\n"
-        "dump_xyz -1 0 1 result.xyz force potential spin mforce virial\n"
+        "dump_xyz 1 result.xyz force potential spin mforce virial\n"
         "run 1\n")
     result = subprocess.run(
         [str(GPUMD)], cwd=directory, capture_output=True, text=True, check=False)
