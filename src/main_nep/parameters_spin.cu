@@ -39,8 +39,6 @@ bool Parameters::parse_spin_keyword(const char** param, int num_param)
     parse_spin_soc(param, num_param);
   } else if (strcmp(param[0], "spin_curriculum") == 0) {
     parse_spin_curriculum(param, num_param);
-  } else if (strcmp(param[0], "spin_mforce_mode") == 0) {
-    parse_spin_mforce_mode(param, num_param);
   } else if (strcmp(param[0], "spin_basis_size") == 0) {
     parse_spin_basis_size(param, num_param);
   } else if (strcmp(param[0], "spin_l_max") == 0) {
@@ -72,10 +70,6 @@ void Parameters::validate_spin_parameters()
   if (spin_mode) {
     if (version != 4 || train_mode != 0) {
       PRINT_INPUT_ERROR("Spin NEP only supports a NEP4 potential model.\n");
-    }
-    if (!prediction && !is_spin_mforce_mode_set) {
-      PRINT_INPUT_ERROR(
-        "Spin3 training requires explicit spin_mforce_mode full or transverse.\n");
     }
     if (charge_mode || charge_vdw || vdw || has_multiple_cutoffs) {
       PRINT_INPUT_ERROR(
@@ -297,24 +291,6 @@ void Parameters::parse_spin_curriculum(const char** param, int num_param)
   if (num_param != 2 || !is_valid_int(param[1], &spin_curriculum) ||
       (spin_curriculum != 0 && spin_curriculum != 1)) {
     PRINT_INPUT_ERROR("spin_curriculum should be 0 or 1.\n");
-  }
-}
-
-void Parameters::parse_spin_mforce_mode(const char** param, int num_param)
-{
-  if (is_spin_mforce_mode_set) {
-    PRINT_INPUT_ERROR("Duplicate spin_mforce_mode keyword.\n");
-  }
-  is_spin_mforce_mode_set = true;
-  if (num_param != 2) {
-    PRINT_INPUT_ERROR("spin_mforce_mode should be full or transverse.\n");
-  }
-  if (strcmp(param[1], "full") == 0) {
-    spin_mforce_mode = 0;
-  } else if (strcmp(param[1], "transverse") == 0) {
-    spin_mforce_mode = 1;
-  } else {
-    PRINT_INPUT_ERROR("spin_mforce_mode should be full or transverse.\n");
   }
 }
 

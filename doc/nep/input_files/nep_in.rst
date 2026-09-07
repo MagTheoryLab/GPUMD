@@ -68,8 +68,6 @@ Keywords
      - atom types allowed to contribute to magnetic environments
    * - :ref:`spin_curriculum <kw_spin_curriculum>`
      - progressively activate order-3 Spin3 neural-network connections
-   * - :ref:`spin_mforce_mode <kw_spin_mforce_mode>`
-     - select full or transverse magnetic-force training targets
    * - :ref:`cutoff <kw_cutoff>`
      - radial (:math:`r_\mathrm{c}^\mathrm{R}`) and angular (:math:`r_\mathrm{c}^\mathrm{A}`) cutoffs
    * - :ref:`n_max <kw_n_max>`
@@ -163,7 +161,6 @@ the Spin3 dimension limit described in :ref:`nep_spin_dimensions`::
   version          4
   type             2 Fe Ge
   spin_mode        3
-  spin_mforce_mode full
   spin_basis_size  8 0
   spin_l_max       2 0 0
   spin_compress    2

@@ -86,7 +86,6 @@ void Parameters::set_default_parameters()
   is_spin_order_set = false;
   is_spin_soc_set = false;
   is_spin_curriculum_set = false;
-  is_spin_mforce_mode_set = false;
   is_spin_basis_size_set = false;
   is_spin_l_max_set = false;
   is_spin_cutoff_set = false;
@@ -143,7 +142,6 @@ void Parameters::set_default_parameters()
   spin_order = 3;
   spin_soc = 1;
   spin_curriculum = 0;
-  spin_mforce_mode = 0;
   spin_basis_size[0] = 3;
   spin_basis_size[1] = 3;
   spin_l_max[0] = 4;
@@ -1164,9 +1162,6 @@ void Parameters::report_inputs()
       "        spin curriculum/response loss = %d/%g.\n",
       spin_curriculum,
       lambda_spin_response);
-    printf(
-      "        spin_mforce_mode = %s.\n",
-      spin_mforce_mode == 0 ? "full" : "transverse");
     printf("        spin_dof_type =");
     for (int type = 0; type < num_types; ++type) {
       if (spin_dof_type_active[type]) {

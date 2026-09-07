@@ -30,7 +30,6 @@ Spin3 requires ``spin_basis_size 8 0`` and an explicit supported
 ``spin_l_max``. A complete, commonly used shape is::
 
   spin_mode        3
-  spin_mforce_mode full
   spin_basis_size  8 0
   spin_l_max       2 0 0
   spin_compress    2

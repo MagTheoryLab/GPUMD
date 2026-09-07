@@ -116,7 +116,6 @@ public:
   int spin_order;
   int spin_soc;
   int spin_curriculum;
-  int spin_mforce_mode; // 0=full -dE/dS, 1=transverse projection
   int spin_basis_size[2];
   int spin_l_max[3];
   float spin_cutoff;
@@ -166,7 +165,6 @@ public:
   bool is_spin_order_set;
   bool is_spin_soc_set;
   bool is_spin_curriculum_set;
-  bool is_spin_mforce_mode_set;
   bool is_spin_basis_size_set;
   bool is_spin_l_max_set;
   bool is_spin_cutoff_set;
@@ -268,7 +266,6 @@ private:
   void parse_spin_order(const char** param, int num_param);
   void parse_spin_soc(const char** param, int num_param);
   void parse_spin_curriculum(const char** param, int num_param);
-  void parse_spin_mforce_mode(const char** param, int num_param);
   void parse_spin_basis_size(const char** param, int num_param);
   void parse_spin_l_max(const char** param, int num_param);
   void parse_spin_cutoff(const char** param, int num_param);

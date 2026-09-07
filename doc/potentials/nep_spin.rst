@@ -529,33 +529,29 @@ magnetic-force and torque RMSE terms,
    + \lambda_\mathrm{tau} L_\mathrm{tau}
    + \lambda_\mathrm{resp} L_\mathrm{resp},
 
-where, for :math:`N_\mathrm{m}` labeled active nonzero spins,
+where :math:`N_\mathrm{m}` counts labeled active spins and
+:math:`N_\mathrm{tau}` counts only their nonzero spins,
 
 .. math::
 
-   L_\mathrm{m,full}
+   L_\mathrm{m}
    &=\left[
      \frac{1}{3N_\mathrm{m}}
      \sum_i |\boldsymbol{M}^{\mathrm{NEP}}_i-
                   \boldsymbol{M}^{\mathrm{tar}}_i|^2
      \right]^{1/2},\\
-   L_\mathrm{m,transverse}
-   &=\left[
-     \frac{1}{2N_\mathrm{m}}
-     \sum_i |P_i^\perp(\boldsymbol{M}^{\mathrm{NEP}}_i-
-                  \boldsymbol{M}^{\mathrm{tar}}_i)|^2
-     \right]^{1/2},\\
    L_\mathrm{tau}
    &=\left[
-     \frac{1}{2N_\mathrm{m}}
+     \frac{1}{2N_\mathrm{tau}}
      \sum_i |\boldsymbol{s}_i\times\boldsymbol{M}^{\mathrm{NEP}}_i-
                   \boldsymbol{s}_i\times\boldsymbol{M}^{\mathrm{tar}}_i|^2
      \right]^{1/2}.
 
-Here :math:`P_i^\perp=I-\boldsymbol{s}_i\boldsymbol{s}_i^T/
-|\boldsymbol{s}_i|^2`. The required :ref:`spin_mforce_mode
-<kw_spin_mforce_mode>` keyword selects the full or transverse magnetic-force
-loss. Zero spins are excluded from the transverse and torque denominators.
+The magnetic-force loss always includes all three Cartesian components and
+includes zero spins. The torque loss excludes zero spins. To supervise only
+spin rotation, set ``lambda_m 0`` and a positive ``lambda_tau``. For nonzero
+spins, the squared torque error equals the squared transverse magnetic-force
+error multiplied by :math:`|\boldsymbol{s}_i|^2`.
 
 For a grouped rotation path with coordinate :math:`\theta`, the response
 generator evaluated for frame :math:`n` is

@@ -19,7 +19,6 @@ NEP_IN = """\
 type 2 Fe Ge
 version 4
 spin_mode 3
-spin_mforce_mode full
 spin_dof_type Fe
 spin_env_type Fe Ge
 cutoff 6.0 5.0
@@ -137,9 +136,6 @@ def validate_parser(root):
         "invalid_soc": NEP_IN.replace("spin_soc 1", "spin_soc 2"),
         "removed_spin_mode_1": NEP_IN.replace("spin_mode 3", "spin_mode 1"),
         "removed_spin_mode_2": NEP_IN.replace("spin_mode 3", "spin_mode 2"),
-        "missing_mforce_mode": NEP_IN.replace("spin_mforce_mode full\n", ""),
-        "invalid_mforce_mode": NEP_IN.replace(
-            "spin_mforce_mode full", "spin_mforce_mode radial"),
         "invalid_spin_cutoff_arity": NEP_IN.replace(
             "spin_cutoff 6.0", "spin_cutoff 4.0 5.0 6.0"),
         "removed_spin_chiral": NEP_IN.replace("spin_soc 1", "spin_soc 1\nspin_chiral 1"),
@@ -148,6 +144,8 @@ def validate_parser(root):
         "response_requires_metadata": NEP_IN.replace(
             "lambda_tau 0.5", "lambda_tau 0.5\nlambda_spin_response 0.3"),
     }
+    for value in ("0", "1", "full", "transverse"):
+        cases[f"removed_mforce_mode_{value}"] = NEP_IN + f"spin_mforce_mode {value}\n"
     results = {}
     for name, text in cases.items():
         case = root / name
@@ -197,14 +195,15 @@ def validate_response_training(root):
 
 def validate_training_and_runtime(
         root, enable_zbl=False, spin_compress=2, typewise_spin_cutoff=False,
-        mforce_mode="full", all_spin_types=False, check_restart=False):
+        all_spin_types=False, check_restart=False, torque_only=False):
     root.mkdir()
     training = root / "training"
     nep_in = NEP_IN.replace("version 4", "version 4\nzbl 2.5") \
         if enable_zbl else NEP_IN
     nep_in = nep_in.replace(
         "spin_compress 2", f"spin_compress {spin_compress}")
-    nep_in = nep_in.replace("spin_mforce_mode full", f"spin_mforce_mode {mforce_mode}")
+    if torque_only:
+        nep_in = nep_in.replace("lambda_m 1.0", "lambda_m 0")
     if all_spin_types:
         nep_in = nep_in.replace("spin_dof_type Fe\n", "spin_dof_type Fe Ge\n")
     if typewise_spin_cutoff:
@@ -347,7 +346,7 @@ def validate_training_and_runtime(
         "zbl": enable_zbl,
         "spin_compress": spin_compress,
         "typewise_spin_cutoff": typewise_spin_cutoff,
-        "mforce_mode": mforce_mode,
+        "torque_only": torque_only,
         "descriptor_dim": descriptor_dim,
         "grouped_dump": "passed",
     }
@@ -481,7 +480,7 @@ def main():
                 root / "all-types-o3c3", spin_compress=3, all_spin_types=True),
             "rank_one_training_runtime": validate_training_and_runtime(
                 root / "rank-one", spin_compress=1,
-                typewise_spin_cutoff=True, mforce_mode="transverse"),
+                typewise_spin_cutoff=True, torque_only=True),
             "zbl_training_runtime": validate_training_and_runtime(
                 root / "zbl", enable_zbl=True),
             "channel_layout_restart": validate_training_and_runtime(

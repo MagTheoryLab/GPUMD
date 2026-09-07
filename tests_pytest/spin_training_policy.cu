@@ -20,6 +20,40 @@ int main()
   assert(snes_spin::curriculum_scale(true, 12, 12) == 1.0f);
   assert(snes_spin::curriculum_scale(true, 1, 1) == 0.0f);
   Parameters para;
+  // Full force retains longitudinal errors and zero spins; torque retains neither.
+  {
+    Dataset loss_data;
+    loss_data.N = 2;
+    loss_data.Nc = 1;
+    loss_data.structures.resize(1);
+    auto& frame = loss_data.structures[0];
+    frame.num_atom = 2;
+    frame.type = {0, 0};
+    frame.sx = frame.sy = {0.0, 0.0};
+    frame.sz = {2.0, 0.0};
+    loss_data.has_mforce_cpu = {1};
+    loss_data.weight_cpu = {1.0f};
+    loss_data.has_type.assign(para.num_types + 1, 1);
+    loss_data.error_cpu.resize(1);
+    loss_data.error_gpu.resize(1);
+    auto upload = [](auto& gpu, const auto& values) {
+      gpu.resize(values.size());
+      gpu.copy_from_host(values.data());
+    };
+    upload(loss_data.Na, std::vector<int>{2});
+    upload(loss_data.Na_sum, std::vector<int>{0});
+    upload(loss_data.type, std::vector<int>{0, 0});
+    upload(loss_data.has_mforce_gpu, std::vector<int>{1});
+    upload(loss_data.spin_dof_type_active_gpu, para.spin_dof_type_active);
+    upload(loss_data.spin, std::vector<double>{0, 0, 0, 0, 2, 0});
+    upload(loss_data.mforce_ref_gpu, std::vector<float>(6, 0));
+    upload(loss_data.mforce, std::vector<float>{3, 0, 4, 0, 0, 6});
+    assert(std::abs(loss_data.get_rmse_mforce(para, false, 0).back() - std::sqrt(61.0 / 6)) < 1e-6);
+    assert(std::abs(loss_data.get_rmse_tau(para, false, 0).back() - std::sqrt(50.0)) < 1e-6);
+    upload(loss_data.mforce, std::vector<float>{3, 0, 4, 0, 5, 6});
+    assert(std::abs(loss_data.get_rmse_mforce(para, false, 0).back() - std::sqrt(86.0 / 6)) < 1e-6);
+    assert(std::abs(loss_data.get_rmse_tau(para, false, 0).back() - std::sqrt(50.0)) < 1e-6);
+  }
   std::mt19937 rng(12345678), same_rng(12345678);
   std::vector<float> mu(para.number_of_variables), sigma(mu.size());
   auto same_mu = mu;
