@@ -13,7 +13,7 @@
     along with GPUMD.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "spin_fitness.cuh"
+#include "fitness_spin.cuh"
 #include "parameters.cuh"
 #include "dataset.cuh"
 #include "structure.cuh"
@@ -26,7 +26,124 @@
 #include <limits>
 #include <map>
 
-namespace spin_fitness {
+namespace fitness_spin {
+
+bool prepare_checkpoint(Parameters& para)
+{
+  const bool spin_restart = para.spin_mode && !para.prediction &&
+    std::ifstream("nep.restart").good();
+  if (para.spin_mode && (para.prediction || spin_restart)) {
+    load_spin_checkpoint_metadata(para);
+  }
+  return spin_restart;
+}
+
+void prepare_training_data(Parameters& para, std::vector<Structure>& structures_train, bool spin_restart)
+{
+  if (para.lambda_spin_response > 0.0f) {
+    derive_spin_response_tangents(para, structures_train);
+  }
+  if (para.spin_mode && !para.prediction && !spin_restart) {
+    fit_spin_energy_baseline(structures_train, para);
+    printf("Spin energy baseline:");
+    for (const float value : para.spin_baseline) {
+      printf(" %.10g", value);
+    }
+    printf("\n");
+  }
+}
+
+void validate_batches(const Parameters& para, int num_batches)
+{
+  if (para.lambda_spin_response > 0.0f && num_batches != 1) {
+    PRINT_INPUT_ERROR(
+      "lambda_spin_response requires batch >= the number of training frames "
+      "so every response group is complete in each fitness evaluation.\n");
+  }
+}
+
+void write_mforce(FILE* fid_mforce, Dataset& dataset)
+{
+  dataset.mforce.copy_to_host(dataset.mforce_cpu.data());
+  for (int nc = 0; nc < dataset.Nc; ++nc) {
+    if (!dataset.structures[nc].has_mforce) {
+      continue;
+    }
+    const int offset = dataset.Na_sum_cpu[nc];
+    for (int atom = 0; atom < dataset.Na_cpu[nc]; ++atom) {
+      const int index = offset + atom;
+      fprintf(
+        fid_mforce,
+        "%g %g %g %g %g %g\n",
+        dataset.mforce_cpu[index],
+        dataset.mforce_cpu[dataset.N + index],
+        dataset.mforce_cpu[2 * dataset.N + index],
+        dataset.mforce_ref_cpu[index],
+        dataset.mforce_ref_cpu[dataset.N + index],
+        dataset.mforce_ref_cpu[2 * dataset.N + index]);
+    }
+  }
+}
+
+void print_loss_header()
+{
+  printf(
+    "%-8s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s\n",
+    "Step",
+    "Total",
+    "L1Reg",
+    "L2Reg",
+    "E-Train",
+    "F-Train",
+    "V-Train",
+    "M-Train",
+    "T-Train",
+    "E-Test",
+    "F-Test",
+    "V-Test",
+    "M-Test",
+    "T-Test");
+}
+
+void write_loss(FILE* fid_loss_out, int generation, float loss_total, float loss_L1, float loss_L2,
+  float rmse_energy_train, float rmse_force_train, float rmse_virial_train,
+  float rmse_mforce_train, float rmse_tau_train, float rmse_energy_test,
+  float rmse_force_test, float rmse_virial_test, float rmse_mforce_test, float rmse_tau_test)
+{
+  printf(
+    "%-8d%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f\n",
+    generation + 1,
+    loss_total,
+    loss_L1,
+    loss_L2,
+    rmse_energy_train,
+    rmse_force_train,
+    rmse_virial_train,
+    rmse_mforce_train,
+    rmse_tau_train,
+    rmse_energy_test,
+    rmse_force_test,
+    rmse_virial_test,
+    rmse_mforce_test,
+    rmse_tau_test);
+  fprintf(
+    fid_loss_out,
+    "%-8d%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f\n",
+    generation + 1,
+    loss_total,
+    loss_L1,
+    loss_L2,
+    rmse_energy_train,
+    rmse_force_train,
+    rmse_virial_train,
+    rmse_mforce_train,
+    rmse_tau_train,
+    rmse_energy_test,
+    rmse_force_test,
+    rmse_virial_test,
+    rmse_mforce_test,
+    rmse_tau_test);
+}
 
 void load_spin_checkpoint_metadata(Parameters& para)
 {
@@ -659,4 +776,4 @@ void write_checkpoint_metadata(FILE* fid_nep, const Parameters& para)
   }
 }
 
-} // namespace spin_fitness
+} // namespace fitness_spin

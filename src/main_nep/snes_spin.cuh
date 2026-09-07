@@ -21,10 +21,11 @@
 class Parameters;
 
 // Preserve RNG consumption and parameter ordering across fresh/restart paths.
-namespace spin_snes {
+namespace snes_spin {
+float curriculum_scale(bool enabled, int epoch, int maximum_generation);
 void initialize_search(const Parameters& para, std::mt19937& rng,
   std::vector<float>& mu, std::vector<float>& sigma);
 void initialize_curriculum(const Parameters& para, std::vector<float>& mu);
 void mark_curriculum(const Parameters& para, std::vector<int>& curriculum_parameter);
 void assign_variable_types(const Parameters& para, int offset, std::vector<int>& type_of_variable);
-} // namespace spin_snes
+} // namespace snes_spin

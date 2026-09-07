@@ -22,7 +22,7 @@ Get the fitness
 #include "nep_vdw.cuh"
 #include "nep_charge.cuh"
 #include "nep_spin.cuh"
-#include "spin_fitness.cuh"
+#include "fitness_spin.cuh"
 #include "nep_charge_vdw.cuh"
 #include "tnep.cuh"
 #include "parameters.cuh"
@@ -47,30 +47,12 @@ Fitness::Fitness(Parameters& para)
   int deviceCount;
   CHECK(gpuGetDeviceCount(&deviceCount));
 
-  const bool spin_restart = para.spin_mode && !para.prediction &&
-    std::ifstream("nep.restart").good();
-  if (para.spin_mode && (para.prediction || spin_restart)) {
-    spin_fitness::load_spin_checkpoint_metadata(para);
-  }
+  const bool spin_restart = fitness_spin::prepare_checkpoint(para);
   std::vector<Structure> structures_train;
   read_structures(true, para, structures_train);
-  if (para.lambda_spin_response > 0.0f) {
-    spin_fitness::derive_spin_response_tangents(para, structures_train);
-  }
-  if (para.spin_mode && !para.prediction && !spin_restart) {
-    spin_fitness::fit_spin_energy_baseline(structures_train, para);
-    printf("Spin energy baseline:");
-    for (const float value : para.spin_baseline) {
-      printf(" %.10g", value);
-    }
-    printf("\n");
-  }
+  fitness_spin::prepare_training_data(para, structures_train, spin_restart);
   num_batches = (structures_train.size() - 1) / para.batch_size + 1;
-  if (para.lambda_spin_response > 0.0f && num_batches != 1) {
-    PRINT_INPUT_ERROR(
-      "lambda_spin_response requires batch >= the number of training frames "
-      "so every response group is complete in each fitness evaluation.\n");
-  }
+  fitness_spin::validate_batches(para, num_batches);
   printf("Number of devices = %d\n", deviceCount);
   printf("Number of batches = %d\n", num_batches);
   int batch_size_old = para.batch_size;
@@ -213,7 +195,7 @@ void Fitness::initialize_q_scaler(
       deviceCount);
   }
 
-  spin_fitness::finalize_q_scaler(para, deviceCount);
+  fitness_spin::finalize_q_scaler(para, deviceCount);
 }
 
 void Fitness::compute(
@@ -234,7 +216,7 @@ void Fitness::compute(
   int population_iter = (para.population_size - 1) / deviceCount + 1;
 
   {
-    std::vector<spin_fitness::ResponseLoss> response_points;
+    std::vector<fitness_spin::ResponseLoss> response_points;
     if (para.lambda_spin_response > 0.0f) {
       response_points.resize(para.population_size);
     }
@@ -421,7 +403,7 @@ void Fitness::write_nep_txt(FILE* fid_nep, Parameters& para, float* elite)
   }
   fprintf(fid_nep, "\n");
   if (para.spin_mode) {
-    spin_fitness::write_checkpoint_metadata(fid_nep, para);
+    fitness_spin::write_checkpoint_metadata(fid_nep, para);
   }
   if (para.enable_zbl) {
     if (para.flexible_zbl) {
@@ -601,39 +583,10 @@ void Fitness::report_error(
     if (para.train_mode == 0 || para.train_mode == 3) {
       if (!(para.charge_mode || para.charge_vdw)) {
         if (para.spin_mode) {
-          printf(
-            "%-8d%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f\n",
-            generation + 1,
-            loss_total,
-            loss_L1,
-            loss_L2,
-            rmse_energy_train,
-            rmse_force_train,
-            rmse_virial_train,
-            rmse_mforce_train,
-            rmse_tau_train,
-            rmse_energy_test,
-            rmse_force_test,
-            rmse_virial_test,
-            rmse_mforce_test,
-            rmse_tau_test);
-          fprintf(
-            fid_loss_out,
-            "%-8d%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f%-11.5f\n",
-            generation + 1,
-            loss_total,
-            loss_L1,
-            loss_L2,
-            rmse_energy_train,
-            rmse_force_train,
-            rmse_virial_train,
-            rmse_mforce_train,
-            rmse_tau_train,
-            rmse_energy_test,
-            rmse_force_test,
-            rmse_virial_test,
-            rmse_mforce_test,
-            rmse_tau_test);
+          fitness_spin::write_loss(fid_loss_out, generation, loss_total, loss_L1, loss_L2,
+            rmse_energy_train, rmse_force_train, rmse_virial_train, rmse_mforce_train,
+            rmse_tau_train, rmse_energy_test, rmse_force_test, rmse_virial_test,
+            rmse_mforce_test, rmse_tau_test);
         } else {
           // NEP models
           printf(
@@ -743,7 +696,7 @@ void Fitness::report_error(
           }
         } else if (para.spin_mode) {
           FILE* fid_mforce = my_fopen("mforce_test.out", "w");
-          update_mforce(fid_mforce, test_set[0]);
+          fitness_spin::write_mforce(fid_mforce, test_set[0]);
           fclose(fid_mforce);
         }
       } else if (para.train_mode == 1) {
@@ -790,29 +743,6 @@ void Fitness::update_energy_force_virial(
 
   output(false, 6, fid_virial, dataset.virial_cpu.data(), dataset.virial_ref_cpu.data(), dataset);
   output(true, 6, fid_stress, dataset.virial_cpu.data(), dataset.virial_ref_cpu.data(), dataset);
-}
-
-void Fitness::update_mforce(FILE* fid_mforce, Dataset& dataset)
-{
-  dataset.mforce.copy_to_host(dataset.mforce_cpu.data());
-  for (int nc = 0; nc < dataset.Nc; ++nc) {
-    if (!dataset.structures[nc].has_mforce) {
-      continue;
-    }
-    const int offset = dataset.Na_sum_cpu[nc];
-    for (int atom = 0; atom < dataset.Na_cpu[nc]; ++atom) {
-      const int index = offset + atom;
-      fprintf(
-        fid_mforce,
-        "%g %g %g %g %g %g\n",
-        dataset.mforce_cpu[index],
-        dataset.mforce_cpu[dataset.N + index],
-        dataset.mforce_cpu[2 * dataset.N + index],
-        dataset.mforce_ref_cpu[index],
-        dataset.mforce_ref_cpu[dataset.N + index],
-        dataset.mforce_ref_cpu[2 * dataset.N + index]);
-    }
-  }
 }
 
 void Fitness::update_charge(FILE* fid_charge, Dataset& dataset)
@@ -879,7 +809,7 @@ void Fitness::predict(Parameters& para, float* elite)
           update_bec(fid_bec, train_set[batch_id][0]);
         }
       } else if (para.spin_mode) {
-        update_mforce(fid_mforce, train_set[batch_id][0]);
+        fitness_spin::write_mforce(fid_mforce, train_set[batch_id][0]);
       }
     }
     fclose(fid_energy);

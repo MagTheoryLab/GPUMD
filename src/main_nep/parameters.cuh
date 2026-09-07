@@ -220,6 +220,9 @@ private:
   void read_nep_in();
   void read_zbl_in();
   void calculate_parameters();
+  bool parse_spin_keyword(const char** param, int num_param);
+  void validate_spin_parameters();
+  void calculate_spin_dimensions();
   void report_inputs();
   void check_existing_model();
   void check_nep_txt(const std::string& filename, const bool fatal, const char* remedy);

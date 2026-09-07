@@ -24,7 +24,17 @@ class Structure;
 class Dataset;
 
 // Spin-only training policy; callers retain batch/device orchestration.
-namespace spin_fitness {
+namespace fitness_spin {
+
+bool prepare_checkpoint(Parameters& para);
+void prepare_training_data(Parameters& para, std::vector<Structure>& structures, bool spin_restart);
+void validate_batches(const Parameters& para, int num_batches);
+void write_mforce(FILE* fid_mforce, Dataset& dataset);
+void print_loss_header();
+void write_loss(FILE* fid_loss_out, int generation, float loss_total, float loss_L1, float loss_L2,
+  float rmse_energy_train, float rmse_force_train, float rmse_virial_train,
+  float rmse_mforce_train, float rmse_tau_train, float rmse_energy_test,
+  float rmse_force_test, float rmse_virial_test, float rmse_mforce_test, float rmse_tau_test);
 
 class ResponseLoss {
 public:
@@ -47,4 +57,4 @@ void derive_spin_response_tangents(const Parameters& para, std::vector<Structure
 void finalize_q_scaler(Parameters& para, int deviceCount);
 void write_checkpoint_metadata(FILE* fid_nep, const Parameters& para);
 
-} // namespace spin_fitness
+} // namespace fitness_spin

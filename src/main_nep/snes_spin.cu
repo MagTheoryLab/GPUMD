@@ -13,12 +13,35 @@
     along with GPUMD.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "spin_snes.cuh"
+#include "snes_spin.cuh"
 #include "parameters.cuh"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
-namespace spin_snes {
+namespace snes_spin {
+
+float curriculum_scale(bool enabled, int epoch, int maximum_generation)
+{
+  float curriculum_scale = 1.0f;
+  if (enabled) {
+    const int full_o3_epoch = std::max(2, 2 * maximum_generation / 3);
+    const int warmup_end = std::max(1, full_o3_epoch / 2);
+    if (epoch <= warmup_end) {
+      curriculum_scale = 0.0f;
+    } else if (epoch < full_o3_epoch) {
+      curriculum_scale = static_cast<float>(epoch - warmup_end) /
+        static_cast<float>(full_o3_epoch - warmup_end);
+    }
+    if (epoch == 1 || epoch == warmup_end || epoch == full_o3_epoch) {
+      printf(
+        "O3 curriculum generation %d: perturbation_scale=%.6f\n",
+        epoch,
+        curriculum_scale);
+    }
+  }
+  return curriculum_scale;
+}
 
 void initialize_search(const Parameters& para, std::mt19937& rng,
   std::vector<float>& mu, std::vector<float>& sigma)
@@ -183,4 +206,4 @@ void assign_variable_types(const Parameters& para, int offset, std::vector<int>&
   }
 }
 
-} // namespace spin_snes
+} // namespace snes_spin

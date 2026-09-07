@@ -26,7 +26,8 @@ https://doi.org/10.1145/2001576.2001692
 #include "fitness.cuh"
 #include "parameters.cuh"
 #include "snes.cuh"
-#include "spin_snes.cuh"
+#include "snes_spin.cuh"
+#include "fitness_spin.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
 #include <algorithm>
@@ -101,7 +102,7 @@ SNES::SNES(Parameters& para, Fitness* fitness_function)
   gpu_utility.copy_from_host(utility.data());
   find_type_of_variable(para);
   if (curriculum_enabled) {
-    spin_snes::mark_curriculum(para, curriculum_parameter);
+    snes_spin::mark_curriculum(para, curriculum_parameter);
   }
   gpu_curriculum_parameter.copy_from_host(curriculum_parameter.data());
   gpu_type_of_variable.copy_from_host(type_of_variable.data());
@@ -124,7 +125,7 @@ void SNES::initialize_mu_and_sigma(Parameters& para)
   FILE* fid_restart = fopen("nep.restart", "r");
   if (fid_restart == NULL) {
     if (para.spin_mode == 3) {
-      spin_snes::initialize_search(para, rng, mu, sigma);
+      snes_spin::initialize_search(para, rng, mu, sigma);
     } else {
       std::uniform_real_distribution<float> r1(0, 1);
       for (int n = 0; n < number_of_variables; ++n) {
@@ -133,7 +134,7 @@ void SNES::initialize_mu_and_sigma(Parameters& para)
       }
     }
     if (curriculum_enabled) {
-      spin_snes::initialize_curriculum(para, mu);
+      snes_spin::initialize_curriculum(para, mu);
     }
     // make sure the initial charges are zero
     if ((para.charge_mode || para.charge_vdw)) {
@@ -400,7 +401,7 @@ void SNES::find_type_of_variable(Parameters& para)
     (para.n_max_angular + 1) * (para.basis_size_angular + 1) *
     para.num_types * para.num_types;
   if (para.spin_mode) {
-    spin_snes::assign_variable_types(para, offset, type_of_variable);
+    snes_spin::assign_variable_types(para, offset, type_of_variable);
   }
 #endif
 }
@@ -422,22 +423,7 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
     if (para.train_mode == 0 || para.train_mode == 3) {
       if (!(para.charge_mode || para.charge_vdw)) {
         if (para.spin_mode) {
-          printf(
-            "%-8s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s%-11s\n",
-            "Step",
-            "Total",
-            "L1Reg",
-            "L2Reg",
-            "E-Train",
-            "F-Train",
-            "V-Train",
-            "M-Train",
-            "T-Train",
-            "E-Test",
-            "F-Test",
-            "V-Test",
-            "M-Test",
-            "T-Test");
+          fitness_spin::print_loss_header();
         } else {
           printf(
             "%-8s%-11s%-11s%-11s%-13s%-13s%-13s%-13s%-13s%-13s\n",
@@ -484,24 +470,8 @@ void SNES::compute(Parameters& para, Fitness* fitness_function)
 
   if (para.prediction == 0) {
     for (int n = 0; n < maximum_generation; ++n) {
-      float curriculum_scale = 1.0f;
-      if (curriculum_enabled) {
-        const int epoch = n + 1;
-        const int full_o3_epoch = std::max(2, 2 * maximum_generation / 3);
-        const int warmup_end = std::max(1, full_o3_epoch / 2);
-        if (epoch <= warmup_end) {
-          curriculum_scale = 0.0f;
-        } else if (epoch < full_o3_epoch) {
-          curriculum_scale = static_cast<float>(epoch - warmup_end) /
-            static_cast<float>(full_o3_epoch - warmup_end);
-        }
-        if (epoch == 1 || epoch == warmup_end || epoch == full_o3_epoch) {
-          printf(
-            "O3 curriculum generation %d: perturbation_scale=%.6f\n",
-            epoch,
-            curriculum_scale);
-        }
-      }
+      const float curriculum_scale =
+        snes_spin::curriculum_scale(curriculum_enabled, n + 1, maximum_generation);
       create_population(curriculum_scale);
       fitness_function->compute(
         n, 
