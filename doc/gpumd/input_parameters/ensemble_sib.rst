@@ -125,13 +125,14 @@ original direction. A final force evaluation caches the endpoint energy,
 force, virial, and magnetic force for output and the next timestep. Thus SIB
 uses two Spin-potential evaluations per timestep after the initial force.
 
-The angular-noise standard deviation for a spin magnitude :math:`\mu_s` is
+The angular-noise standard deviation for a spin magnitude :math:`\mu_s`
+follows from matching its variance to the damping mobility
+:math:`\gamma\alpha/(1+\alpha^2)` (fluctuation--dissipation):
 
 .. math::
 
    \sigma_\Omega =
-   \frac{\sqrt{2\alpha\gamma k_B T\Delta t/\mu_s}}
-        {1+\alpha^2}.
+   \sqrt{\frac{2\alpha\gamma k_B T\Delta t}{\mu_s(1+\alpha^2)}}.
 
 Restrictions
 ------------

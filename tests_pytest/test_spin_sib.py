@@ -1,5 +1,6 @@
 """Semi-implicit B spin-integrator regression tests."""
 
+import math
 import os
 import shutil
 import subprocess
@@ -11,6 +12,8 @@ import pytest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin3"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", Path(__file__).parents[1] / "src" / "gpumd"))
+BOLTZMANN = 8.617343e-5
+MASK64 = 0xFFFFFFFFFFFFFFFF
 
 
 def _environment():
@@ -89,6 +92,32 @@ def _cayley(direction, omega):
     ) / (1.0 + half_squared)
 
 
+def _splitmix64(value):
+    value = (value + 0x9E3779B97F4A7C15) & MASK64
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & MASK64
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & MASK64
+    return value ^ (value >> 31)
+
+
+def _sib_gaussian(seed, atom_index, step, component):
+    """Replay the counter-based Gaussian of the SIB kernel."""
+    state = seed
+    state ^= (atom_index * 0xD1B54A32D192ED03) & MASK64
+    state ^= (step * 0x9E3779B97F4A7C15) & MASK64
+    state ^= (component * 0x94D049BB133111EB) & MASK64
+
+    def uniform_01():
+        nonlocal state
+        state = _splitmix64(state)
+        return (state >> 11) * (1.0 / 9007199254740992.0)
+
+    u1 = 0.0
+    while u1 <= 0.0:
+        u1 = uniform_01()
+    u2 = uniform_01()
+    return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+
+
 def test_sib_one_step_matches_two_field_cayley_oracle(tmp_path):
     model = _base_model()
     initial = _evaluate(tmp_path / "initial", model)
@@ -134,6 +163,63 @@ def test_sib_one_step_matches_two_field_cayley_oracle(tmp_path):
     np.testing.assert_allclose(
         np.linalg.norm(actual["spin"], axis=1), magnitude[:, 0],
         rtol=0.0, atol=3.0e-7)
+
+
+@pytest.mark.parametrize("alpha", [0.37, 1.0])
+def test_sib_thermal_increment_matches_fdt_oracle(tmp_path, alpha):
+    """The seeded thermal increment must carry the fluctuation-dissipation variance.
+
+    A single step is replayed from the dumped initial and chord-midpoint fields,
+    so only the integrator is under test: the same countered Gaussian increment
+    enters the predictor and the corrector, exactly as in the kernels. The
+    increment variance must be 2 alpha gamma k_B T dt / (mu_s (1 + alpha**2));
+    dividing its amplitude by (1 + alpha**2) once more, as the pre-fix
+    normalization did, cools the bath to T / (1 + alpha**2) and fails here.
+    """
+    seed = 987654
+    gamma = 1200.0
+    temperature = 300.0
+    time_step_fs = 0.1
+    model = _base_model()
+    initial = _evaluate(tmp_path / "initial", model)
+    magnitude = np.linalg.norm(initial["spin"], axis=1)
+    direction = initial["spin"] / magnitude[:, None]
+
+    drift = gamma * time_step_fs / 1000.0 / (1.0 + alpha * alpha)
+    sigma = np.sqrt(
+        2.0 * alpha * gamma * BOLTZMANN * temperature * (time_step_fs / 1000.0)
+        / (magnitude * (1.0 + alpha * alpha)))
+    increment = sigma[:, None] * np.array([
+        [_sib_gaussian(seed, atom_index, 0, component) for component in range(3)]
+        for atom_index in range(1, magnitude.size + 1)])
+
+    predictor_omega = drift * (
+        initial["mforce"] + alpha * _cross(direction, initial["mforce"])) + increment
+    predictor = _cayley(direction, predictor_omega)
+    midpoint_direction = 0.5 * (direction + predictor)
+    midpoint = _evaluate(
+        tmp_path / "midpoint",
+        _replace_spins(model, magnitude[:, None] * midpoint_direction))
+
+    corrector_omega = drift * (
+        midpoint["mforce"]
+        + alpha * _cross(midpoint_direction, midpoint["mforce"])) + increment
+    expected_spin = magnitude[:, None] * _cayley(direction, corrector_omega)
+
+    result = _run(
+        tmp_path / "sib",
+        "potential nep.txt\n"
+        f"ensemble nve_sib alpha {alpha} gamma {gamma} "
+        f"stemp {temperature} seed {seed}\n"
+        f"time_step {time_step_fs}\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
+        "run 1\n",
+        model)
+    assert result.returncode == 0, result.stdout + result.stderr
+    actual = _read_last_frame(tmp_path / "sib" / "state.xyz")
+    np.testing.assert_allclose(actual["spin"], expected_spin, rtol=0.0, atol=1.0e-6)
+    np.testing.assert_allclose(
+        np.linalg.norm(actual["spin"], axis=1), magnitude, rtol=0.0, atol=3.0e-7)
 
 
 def test_sib_noise_is_seeded_and_preserves_spin_magnitude(tmp_path):

@@ -229,10 +229,15 @@ void Spin_SIB::compute1(const double time_step, Atom& atom)
   const double noise_temperature =
     spin_temperature_ < 0.0 ? 0.0 :
     (spin_temperature_ == 0.0 ? temperature : spin_temperature_);
+  // The thermal increment enters the rotation vector directly, without the
+  // Gilbert cross term, so its variance must match the damping mobility:
+  // sigma^2 = 2 alpha gamma k_B T dt / (mu_s (1 + alpha^2)). The drift already
+  // carries one 1 / (1 + alpha^2) factor; applying it twice here would make the
+  // bath equilibrate at T / (1 + alpha^2).
   const double noise_prefactor =
     (alpha_ > 0.0 && noise_temperature > 0.0) ?
     2.0 * alpha_ * gamma_ * K_B * noise_temperature * dt_ps /
-      (denominator * denominator) :
+      denominator :
     0.0;
   const int number_of_atoms = atom.number_of_atoms;
   gpu_sib_predictor_midpoint<<<(number_of_atoms - 1) / 128 + 1, 128>>>(

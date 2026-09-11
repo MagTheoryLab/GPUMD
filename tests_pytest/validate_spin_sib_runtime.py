@@ -13,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin3"
 GPUMD = Path(os.environ.get("GPUMD_COMMAND", ROOT / "src" / "gpumd"))
+BOLTZMANN = 8.617343e-5
+MASK64 = 0xFFFFFFFFFFFFFFFF
 
 
 def base_model():
@@ -110,6 +112,30 @@ def assert_close(actual, expected, tolerance, label):
     return error
 
 
+def splitmix64(value):
+    value = (value + 0x9E3779B97F4A7C15) & MASK64
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & MASK64
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & MASK64
+    return value ^ (value >> 31)
+
+
+def sib_gaussian(seed, atom_index, step, component):
+    state = seed
+    state ^= (atom_index * 0xD1B54A32D192ED03) & MASK64
+    state ^= (step * 0x9E3779B97F4A7C15) & MASK64
+    state ^= (component * 0x94D049BB133111EB) & MASK64
+
+    def uniform_01(value):
+        value = splitmix64(value)
+        return value, (value >> 11) * (1.0 / 9007199254740992.0)
+
+    state, u1 = uniform_01(state)
+    while u1 <= 0.0:
+        state, u1 = uniform_01(state)
+    state, u2 = uniform_01(state)
+    return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+
+
 def one_step_oracle(root):
     model = base_model()
     initial = evaluate(root, "initial", model)
@@ -167,6 +193,82 @@ def one_step_oracle(root):
     if norm_error > 3.0e-7:
         raise AssertionError(f"spin norm error {norm_error:.6e}")
     return spin_error, field_error, norm_error
+
+
+def noisy_one_step_oracle(root):
+    """Replay one noisy SIB step against the fluctuation-dissipation variance.
+
+    sigma^2 = 2 alpha gamma k_B T dt / (mu_s (1 + alpha^2)). The pre-fix
+    normalization divided the amplitude by (1 + alpha^2) twice, which cools the
+    bath to T / (1 + alpha^2) and fails this comparison.
+    """
+    alpha = 0.37
+    gamma = 1200.0
+    temperature = 300.0
+    time_step_fs = 0.1
+    seed = 987654
+    model = base_model()
+    initial = evaluate(root, "noisy_initial", model)
+    magnitudes = [norm(spin) for spin in initial["spin"]]
+    directions = [
+        [value / magnitude for value in spin]
+        for spin, magnitude in zip(initial["spin"], magnitudes)
+    ]
+    drift = gamma * time_step_fs / 1000.0 / (1.0 + alpha * alpha)
+    increments = []
+    for atom_index, magnitude in enumerate(magnitudes, start=1):
+        sigma = math.sqrt(
+            2.0 * alpha * gamma * BOLTZMANN * temperature
+            * (time_step_fs / 1000.0) / (magnitude * (1.0 + alpha * alpha)))
+        increments.append([
+            sigma * sib_gaussian(seed, atom_index, 0, component)
+            for component in range(3)
+        ])
+    predictors = []
+    for direction, field, increment in zip(directions, initial["mforce"], increments):
+        damping = cross(direction, field)
+        omega = [
+            drift * (field[k] + alpha * damping[k]) + increment[k] for k in range(3)
+        ]
+        predictors.append(cayley(direction, omega))
+    midpoint_directions = [
+        [0.5 * (direction[k] + predictor[k]) for k in range(3)]
+        for direction, predictor in zip(directions, predictors)
+    ]
+    midpoint_spins = [
+        [magnitude * value for value in midpoint]
+        for magnitude, midpoint in zip(magnitudes, midpoint_directions)
+    ]
+    midpoint = evaluate(root, "noisy_midpoint", replace_spins(model, midpoint_spins))
+    expected = []
+    for magnitude, direction, midpoint_direction, field, increment in zip(
+            magnitudes, directions, midpoint_directions, midpoint["mforce"], increments):
+        damping = cross(midpoint_direction, field)
+        omega = [
+            drift * (field[k] + alpha * damping[k]) + increment[k] for k in range(3)
+        ]
+        expected.append([magnitude * value for value in cayley(direction, omega)])
+    case, result = run_case(
+        root,
+        "noisy_sib",
+        "potential nep.txt\n"
+        f"ensemble nve_sib alpha {alpha} gamma {gamma} "
+        f"stemp {temperature} seed {seed}\n"
+        f"time_step {time_step_fs}\n"
+        "dump_xyz 1 state.xyz mass spin mforce\n"
+        "run 1\n",
+        model)
+    if result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    actual = read_last_frame(case / "state.xyz")
+    spin_error = assert_close(actual["spin"], expected, 1.0e-6, "SIB thermal increment")
+    norm_error = max(
+        abs(norm(spin) - magnitude)
+        for spin, magnitude in zip(actual["spin"], magnitudes)
+    )
+    if norm_error > 3.0e-7:
+        raise AssertionError(f"noisy SIB spin norm error {norm_error:.6e}")
+    return spin_error, norm_error
 
 
 def noise_and_parser_checks(root):
@@ -240,13 +342,17 @@ def main():
     with tempfile.TemporaryDirectory(prefix="gpumd-spin-sib-") as temporary:
         root = Path(temporary)
         spin_error, field_error, norm_error = one_step_oracle(root)
+        thermal_error, thermal_norm_error = noisy_one_step_oracle(root)
         seed_difference, invalid_count = noise_and_parser_checks(root)
         npt_smoke(root)
     print(
         "SIB runtime validation passed: "
         f"nve_oracle=passed, spin_error={spin_error:.3e}, "
         f"endpoint_field_error={field_error:.3e}, "
-        f"norm_error={norm_error:.3e}, seed_difference={seed_difference:.3e}, "
+        f"norm_error={norm_error:.3e}, "
+        f"thermal_fdt_error={thermal_error:.3e}, "
+        f"thermal_norm_error={thermal_norm_error:.3e}, "
+        f"seed_difference={seed_difference:.3e}, "
         f"invalid_inputs={invalid_count}, npt_smoke=passed")
 
 
