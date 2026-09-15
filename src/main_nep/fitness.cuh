@@ -61,6 +61,7 @@ protected:
   std::unique_ptr<Potential> potential;
   std::vector<std::vector<Dataset>> train_set;
   std::vector<Dataset> test_set;
+  std::vector<Dataset> response_set; // complete response.xyz, replicated per device
   void output(
     bool is_stress,
     int num_components,

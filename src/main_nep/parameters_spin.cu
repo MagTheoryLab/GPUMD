@@ -19,6 +19,8 @@
 #include "utilities/read_file.cuh"
 #include <algorithm>
 #include <cstring>
+#include <cmath>
+#include <limits>
 
 bool Parameters::parse_spin_keyword(const char** param, int num_param)
 {
@@ -228,8 +230,9 @@ void Parameters::parse_lambda_spin_response(const char** param, int num_param)
     PRINT_INPUT_ERROR("lambda_spin_response should have 1 parameter.\n");
   }
   double value = 0.0;
-  if (!is_valid_real(param[1], &value) || value < 0.0) {
-    PRINT_INPUT_ERROR("lambda_spin_response should be non-negative.\n");
+  if (!is_valid_real(param[1], &value) || !std::isfinite(value) || value < 0.0 ||
+      value > std::numeric_limits<float>::max()) {
+    PRINT_INPUT_ERROR("lambda_spin_response should be finite and non-negative.\n");
   }
   lambda_spin_response = value;
 }

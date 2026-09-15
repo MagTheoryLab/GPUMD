@@ -28,7 +28,8 @@ namespace fitness_spin {
 
 bool prepare_checkpoint(Parameters& para);
 void prepare_training_data(Parameters& para, std::vector<Structure>& structures, bool spin_restart);
-void validate_batches(const Parameters& para, int num_batches);
+void prepare_response_data(const Parameters& para, std::vector<Structure>& response,
+  const std::vector<Structure>& train, const std::vector<Structure>& test);
 void write_mforce(FILE* fid_mforce, Dataset& dataset);
 void print_loss_header();
 void write_loss(FILE* fid_loss_out, int generation, float loss_total, float loss_L1, float loss_L2,

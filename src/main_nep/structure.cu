@@ -799,3 +799,14 @@ bool read_structures(bool is_train, Parameters& para, std::vector<Structure>& st
 
   return has_test_set;
 }
+
+void read_response_structures(Parameters& para, std::vector<Structure>& structures)
+{
+  std::string filename = "response.xyz";
+  std::ifstream input(filename);
+  if (!input.is_open()) {
+    PRINT_INPUT_ERROR("lambda_spin_response > 0 requires response.xyz.");
+  }
+  printf("Started reading response.xyz (response loss only).\n");
+  read_exyz(para, input, structures, filename);
+}

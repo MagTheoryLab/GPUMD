@@ -9,15 +9,21 @@ This keyword sets the weight of grouped magnetic-response loss::
 
   lambda_spin_response <weight>
 
-The weight must be non-negative and defaults to 0. A positive value requires
-``spin_mode 3`` and a single batch containing all training frames::
+The weight must be finite and non-negative and defaults to 0. A positive value
+requires ``spin_mode 3`` and :ref:`response.xyz <response_xyz>` in the working
+directory. A missing file, an empty file, or an incomplete rotation group is
+an input error. With weight 0, the file is not opened.
 
-  batch <number_of_training_frames>
+Ordinary ``train.xyz`` data still use the ``batch`` setting. All complete
+response groups are evaluated separately for every candidate in every SNES
+generation, so response groups are never split by ordinary minibatches. There
+is no ``response_file`` keyword or additional response batch setting.
 
-The batch size must be at least the number of training frames. Splitting the
-training set into multiple batches is rejected when this loss is enabled, so
-complete response groups enter each SNES fitness evaluation. The upstream
-``batch`` keyword takes only one value.
+Response frames contribute only this loss. They do not contribute ordinary
+energy, force, virial, magnetic-force or torque losses, the fitted energy
+baseline, or descriptor scaling. They reuse the baseline and scaler from
+``train.xyz``. GPUMD's existing test reporting and model-selection behavior
+are unchanged; no separate response validation loss is added.
 
 For a response frame :math:`a`, the derived tangent
 :math:`\boldsymbol{t}_{ai}` defines a scalar generalized response
@@ -32,8 +38,9 @@ and, with a smaller weight, the group mean. This is useful when relative
 magnetic response along a controlled rotation path matters in addition to
 per-component magnetic-force RMSE.
 
-Every participating ``train.xyz`` frame must provide the converged DFT
-``spin:R:3`` and ``mforce:R:3`` together with::
+Every ``response.xyz`` frame must provide ``energy``, ``force:R:3``, the
+converged DFT ``spin:R:3`` and ``mforce:R:3`` (virial is optional), together
+with::
 
   response_probe=rotation response_group=<name> response_coordinate=<value>
 

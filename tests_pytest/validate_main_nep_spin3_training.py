@@ -165,12 +165,6 @@ def validate_parser(root):
     results["spin_tangent_is_not_a_label"] = result.returncode
     if result.returncode == 0 or "not an input label" not in result.stdout + result.stderr:
         raise AssertionError("spin_tangent input was not rejected explicitly")
-    split_case = root / "response_requires_single_batch"
-    write_case(split_case, tangent_input.replace("batch 3", "batch 2"), response_xyz())
-    result = run(NEP, split_case)
-    if result.returncode == 0 or "requires batch >=" not in result.stdout + result.stderr:
-        raise AssertionError("split response groups were not rejected")
-    results["response_requires_single_batch"] = result.returncode
     return results
 
 
@@ -179,7 +173,8 @@ def validate_response_training(root):
         "lambda_tau 0.5",
         "lambda_tau 0.5\nspin_curriculum 1\nlambda_spin_response 0.3",
     ).replace("generation 1", "generation 3")
-    write_case(root, nep_in, response_xyz())
+    write_case(root, nep_in.replace("batch 3", "batch 1"))
+    (root / "response.xyz").write_text(response_xyz())
     result = run(NEP, root)
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)

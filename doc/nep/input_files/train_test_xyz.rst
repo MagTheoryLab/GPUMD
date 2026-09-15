@@ -67,7 +67,8 @@ Magnetic-response groups
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
 The grouped response loss is optional and is enabled by
-:ref:`lambda_spin_response <kw_lambda_spin_response>`. Every participating
+:ref:`lambda_spin_response <kw_lambda_spin_response>`. Its frames belong in
+a separate :ref:`response.xyz <response_xyz>` file. Every response
 frame must contain the final constrained-DFT ``spin:R:3``, ``mforce:R:3``, and
 the following three line-2 metadata items:
 
@@ -84,8 +85,8 @@ meaningful within its group.
 
 Each response group needs at least three distinct coordinate values and must
 keep atom count, type/order, positions, and cell fixed. Ordinary spin training
-does not require response metadata. Non-``rotation`` probe metadata is accepted
-for analysis but does not participate in this loss. Atom types excluded by
+does not require response metadata. Non-``rotation`` probe metadata in ordinary
+train/test data is accepted for analysis; response.xyz requires rotation groups. Atom types excluded by
 :ref:`spin_dof_type <kw_spin_dof_type>` are masked automatically.
 
 Starting from line 3

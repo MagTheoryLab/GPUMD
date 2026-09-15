@@ -25,6 +25,8 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <set>
+#include <sstream>
 
 namespace fitness_spin {
 
@@ -40,9 +42,6 @@ bool prepare_checkpoint(Parameters& para)
 
 void prepare_training_data(Parameters& para, std::vector<Structure>& structures_train, bool spin_restart)
 {
-  if (para.lambda_spin_response > 0.0f) {
-    derive_spin_response_tangents(para, structures_train);
-  }
   if (para.spin_mode && !para.prediction && !spin_restart) {
     fit_spin_energy_baseline(structures_train, para);
     printf("Spin energy baseline:");
@@ -53,12 +52,49 @@ void prepare_training_data(Parameters& para, std::vector<Structure>& structures_
   }
 }
 
-void validate_batches(const Parameters& para, int num_batches)
+// Compare stored geometry/spins, independent of energy/force labels and group names.
+static std::string response_frame_key(const Structure& structure)
 {
-  if (para.lambda_spin_response > 0.0f && num_batches != 1) {
-    PRINT_INPUT_ERROR(
-      "lambda_spin_response requires batch >= the number of training frames "
-      "so every response group is complete in each fitness evaluation.\n");
+  std::ostringstream key;
+  key << std::hexfloat;
+  for (int type : structure.type) key << type << ',';
+  key << ';';
+  for (float value : structure.box_original) key << value << ',';
+  for (const auto* values : {&structure.x, &structure.y, &structure.z,
+                            &structure.sx, &structure.sy, &structure.sz}) {
+    key << ';';
+    for (float value : *values) key << value << ',';
+  }
+  return key.str();
+}
+
+void prepare_response_data(const Parameters& para, std::vector<Structure>& response,
+  const std::vector<Structure>& train, const std::vector<Structure>& test)
+{
+  for (const auto& structure : response) {
+    if (!structure.has_spin_response_metadata || structure.spin_response_probe != "rotation") {
+      PRINT_INPUT_ERROR("Every response.xyz frame must have complete rotation response metadata.");
+    }
+  }
+  derive_spin_response_tangents(para, response);
+  std::set<std::string> test_groups;
+  std::set<std::string> test_frames;
+  for (const auto& structure : test) {
+    if (structure.has_spin_response_metadata) test_groups.insert(structure.spin_response_group);
+    test_frames.insert(response_frame_key(structure));
+  }
+  for (const auto& structure : train) {
+    if (structure.has_spin_response_metadata && test_groups.count(structure.spin_response_group)) {
+      PRINT_INPUT_ERROR("response_group leakage between train.xyz and test.xyz.");
+    }
+  }
+  for (const auto& structure : response) {
+    if (test_groups.count(structure.spin_response_group)) {
+      PRINT_INPUT_ERROR("response_group leakage between response.xyz and test.xyz.");
+    }
+    if (test_frames.count(response_frame_key(structure))) {
+      PRINT_INPUT_ERROR("Response frame leakage between response.xyz and test.xyz.");
+    }
   }
 }
 
@@ -452,16 +488,20 @@ void derive_spin_response_tangents(
     structure.spin_tangent_z.clear();
     if (structure.has_spin_response_metadata &&
         structure.spin_response_probe == "rotation") {
+      if (!std::isfinite(structure.spin_response_coordinate)) {
+        PRINT_INPUT_ERROR("response_coordinate must be finite.");
+      }
       groups[structure.spin_response_group].push_back(&structure);
     }
   }
   if (groups.empty()) {
     PRINT_INPUT_ERROR(
-      "lambda_spin_response requires rotation response frames in train.xyz.\n");
+      "lambda_spin_response requires rotation response frames in response.xyz.\n");
   }
 
   const auto differs = [](const float left, const float right) {
-    return std::abs(static_cast<double>(left) - static_cast<double>(right)) > 1.0e-6;
+    return !std::isfinite(left) || !std::isfinite(right) ||
+      std::abs(static_cast<double>(left) - static_cast<double>(right)) > 1.0e-6;
   };
   for (auto& item : groups) {
     auto& members = item.second;
@@ -505,6 +545,10 @@ void derive_spin_response_tangents(
             differs(structure.z[atom], reference.z[atom])) {
           PRINT_INPUT_ERROR(
             "A rotation response_group cannot change atomic positions.\n");
+        }
+        if (!std::isfinite(structure.mfx[atom]) || !std::isfinite(structure.mfy[atom]) ||
+            !std::isfinite(structure.mfz[atom])) {
+          PRINT_INPUT_ERROR("Magnetic forces in response.xyz must be finite.");
         }
         if (!std::isfinite(structure.sx[atom]) ||
             !std::isfinite(structure.sy[atom]) ||

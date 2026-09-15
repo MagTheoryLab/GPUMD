@@ -52,7 +52,6 @@ Fitness::Fitness(Parameters& para)
   read_structures(true, para, structures_train);
   fitness_spin::prepare_training_data(para, structures_train, spin_restart);
   num_batches = (structures_train.size() - 1) / para.batch_size + 1;
-  fitness_spin::validate_batches(para, num_batches);
   printf("Number of devices = %d\n", deviceCount);
   printf("Number of batches = %d\n", num_batches);
   int batch_size_old = para.batch_size;
@@ -97,6 +96,20 @@ Fitness::Fitness(Parameters& para)
     }
   }
 
+  if (para.lambda_spin_response > 0.0f) {
+    std::vector<Structure> structures_response;
+    read_response_structures(para, structures_response);
+    fitness_spin::prepare_response_data(para, structures_response, structures_train, structures_test);
+    response_set.resize(deviceCount);
+    for (int device_id = 0; device_id < deviceCount; ++device_id) {
+      CHECK(gpuSetDevice(device_id));
+      response_set[device_id].construct(
+        para, structures_response, 0, structures_response.size(), device_id);
+    }
+    printf("Response fitness uses all %zu frames every generation, independently of train batches.\n",
+      structures_response.size());
+  }
+
   int N = -1;
   int Nc = -1;
   int N_times_max_NN_radial = -1;
@@ -136,6 +149,15 @@ Fitness::Fitness(Parameters& para)
     if (train_set[n][0].max_NN_spin > max_NN_spin) {
       max_NN_spin = train_set[n][0].max_NN_spin;
     }
+  }
+
+  if (!response_set.empty()) {
+    const Dataset& response = response_set[0];
+    N = std::max(N, response.N);
+    Nc = std::max(Nc, response.Nc);
+    max_NN_radial = std::max(max_NN_radial, response.max_NN_radial);
+    max_NN_angular = std::max(max_NN_angular, response.max_NN_angular);
+    max_NN_spin = std::max(max_NN_spin, response.max_NN_spin);
   }
 
   if (para.train_mode == 1 || para.train_mode == 2) {
@@ -229,9 +251,6 @@ void Fitness::compute(
         if (population_index >= para.population_size) {
           continue;
         }
-        if (para.lambda_spin_response > 0.0f) {
-          response_points[population_index].append(m, train_set[batch_id][m]);
-        }
         float energy_shift_per_structure_not_used;
         auto rmse_energy_array = train_set[batch_id][m].get_rmse_energy(
           para, energy_shift_per_structure_not_used, true, true, m);
@@ -263,6 +282,16 @@ void Fitness::compute(
             para.lambda_m * rmse_mforce_array[t];
           fitness_tau[deviceCount * n + m + t * para.population_size] =
             para.lambda_tau * rmse_tau_array[t];
+        }
+      }
+    }
+    if (!response_set.empty()) {
+      for (int n = 0; n < population_iter; ++n) {
+        const float* individual = population + deviceCount * n * para.number_of_variables;
+        // Reuse train-only scalers and baseline; never add response E/F/MF to ordinary fitness.
+        potential->find_force(para, individual, response_set, false, deviceCount);
+        for (int m = 0; m < deviceCount && deviceCount * n + m < para.population_size; ++m) {
+          response_points[deviceCount * n + m].append(m, response_set[m]);
         }
       }
     }

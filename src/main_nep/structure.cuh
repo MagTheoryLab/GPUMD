@@ -69,3 +69,5 @@ struct Structure {
 };
 
 bool read_structures(bool is_train, Parameters& para, std::vector<Structure>& structures);
+
+void read_response_structures(Parameters& para, std::vector<Structure>& structures);
