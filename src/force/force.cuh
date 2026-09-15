@@ -97,6 +97,8 @@ public:
 private:
   int mfield_group_method_ = 0;
   int mfield_group_id_ = 0;
+  bool mfield_use_region_ = false;
+  double mfield_region_[6] = {};
   bool mfield_enabled_ = false;
   double mfield_[3] = {}; // eV/muB
   int number_of_atoms_ = -1;

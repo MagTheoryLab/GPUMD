@@ -102,7 +102,7 @@ Simulation setup
      - No
      - No
    * - :ref:`add_mfield <kw_add_mfield>`
-     - Apply a magnetic field to a selected atom group
+     - Apply a magnetic field to an atom group or fractional region
      - No
      - Yes
    * - :ref:`add_spring <kw_add_spring>`

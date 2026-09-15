@@ -31,4 +31,4 @@ Apply the energy and magnetic-force contributions consistently at initial, SIB m
 
 SIB operates on numerical spin magnitudes in muB and magnetic forces in eV/muB. Its existing gamma convention is a coefficient for these numerical arrays; a tesla-valued field must first pass through the conversion above. Do not feed tesla directly into the existing magnetic-force slot or silently change gamma defaults.
 
-The `add_mfield` command supports constant fields over a selected GPUMD group using three tesla-valued components. See `doc/gpumd/input_parameters/add_mfield.rst` for syntax and boundary semantics.
+The `add_mfield` command supports constant fields over a selected GPUMD group or dynamic fractional-coordinate region using three tesla-valued components. See `doc/gpumd/input_parameters/add_mfield.rst` for syntax and boundary semantics.
