@@ -100,7 +100,7 @@ public:
 
   struct ZBL {
     bool enabled = false;
-    bool flexibled = false;
+    bool flexible = false;
     float rc_inner = 1.0f;
     float rc_outer = 2.0f;
     float para[550];
@@ -178,6 +178,8 @@ private:
 
   void find_k_and_G(const double* box);
 
+  bool need_bec = false;
+  void check_need_bec();
   bool use_pppm = true; // use PPPM by default
   void check_ewald_pppm();
   bool has_dftd3 = false;

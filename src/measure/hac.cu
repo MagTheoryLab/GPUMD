@@ -41,6 +41,10 @@ void HAC::pre_run(
 {
   if (compute) {
     int number_of_frames = number_of_steps / sample_interval;
+    if (Nc > number_of_frames) {
+      PRINT_INPUT_ERROR(
+        "The number of HAC correlation steps should not exceed the number of sampled frames.\n");
+    }
     heat_all.resize(NUM_OF_HEAT_COMPONENTS * number_of_frames);
     atom.heat_per_atom.resize(atom.number_of_atoms * 5);
   }
@@ -52,13 +56,13 @@ gpu_sum_heat(const int N, const int Nd, const int nd, const double* g_heat, doub
 {
   // <<<NUM_OF_HEAT_COMPONENTS, 1024>>>
   const int tid = threadIdx.x;
-  const int number_of_patches = (N - 1) / 1024 + 1;
+  const int number_of_batches = (N - 1) / 1024 + 1;
 
   __shared__ double s_data[1024];
   s_data[tid] = 0.0;
 
-  for (int patch = 0; patch < number_of_patches; ++patch) {
-    const int n = tid + patch * 1024;
+  for (int batch = 0; batch < number_of_batches; ++batch) {
+    const int n = tid + batch * 1024;
     if (n < N) {
       s_data[tid] += g_heat[n + N * blockIdx.x];
     }
@@ -120,7 +124,7 @@ static __global__ void gpu_find_hac(const int Nc, const int Nd, const double* g_
 
   int tid = threadIdx.x;
   int bid = blockIdx.x;
-  int number_of_patches = (Nd - 1) / 128 + 1;
+  int number_of_batches = (Nd - 1) / 128 + 1;
   int number_of_data = Nd - bid;
 
   s_hac_xi[tid] = 0.0;
@@ -129,8 +133,8 @@ static __global__ void gpu_find_hac(const int Nc, const int Nd, const double* g_
   s_hac_yo[tid] = 0.0;
   s_hac_z[tid] = 0.0;
 
-  for (int patch = 0; patch < number_of_patches; ++patch) {
-    int index = tid + patch * 128;
+  for (int batch = 0; batch < number_of_batches; ++batch) {
+    int index = tid + batch * 128;
     if (index + bid < Nd) {
       s_hac_xi[tid] += g_heat[index + Nd * 0] * g_heat[index + bid + Nd * 0] +
                        g_heat[index + Nd * 0] * g_heat[index + bid + Nd * 1];
@@ -177,7 +181,7 @@ static void find_rtc(const int Nc, const double factor, const double* hac, doubl
   }
 }
 
-// Calculate HAC (heat currant auto-correlation function)
+// Calculate HAC (heat current auto-correlation function)
 // and RTC (running thermal conductivity)
 void HAC::post_run(
   Atom& atom,
@@ -260,15 +264,24 @@ void HAC::parse(const char** param, int num_param)
   if (!is_valid_int(param[1], &sample_interval)) {
     PRINT_INPUT_ERROR("sample interval for HAC should be an integer number.\n");
   }
+  if (sample_interval <= 0) {
+    PRINT_INPUT_ERROR("sample interval for HAC should be positive.\n");
+  }
   printf("    sample interval is %d.\n", sample_interval);
 
   if (!is_valid_int(param[2], &Nc)) {
     PRINT_INPUT_ERROR("Nc for HAC should be an integer number.\n");
   }
+  if (Nc <= 0) {
+    PRINT_INPUT_ERROR("Nc for HAC should be positive.\n");
+  }
   printf("    Nc is %d\n", Nc);
 
   if (!is_valid_int(param[3], &output_interval)) {
     PRINT_INPUT_ERROR("output_interval for HAC should be an integer number.\n");
+  }
+  if (output_interval <= 0) {
+    PRINT_INPUT_ERROR("output_interval for HAC should be positive.\n");
   }
   printf("    output_interval is %d\n", output_interval);
 }

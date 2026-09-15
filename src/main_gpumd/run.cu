@@ -211,17 +211,9 @@ void Run::execute_run_in()
   }
 
   while (input.peek() != EOF) {
-    std::vector<std::string> tokens = get_tokens(input);
-    std::vector<std::string> tokens_without_comments;
-    for (const auto& t : tokens) {
-      if (t[0] != '#') {
-        tokens_without_comments.emplace_back(t);
-      } else {
-        break;
-      }
-    }
-    if (tokens_without_comments.size() > 0) {
-      parse_one_keyword(tokens_without_comments);
+    std::vector<std::string> tokens = get_tokens_without_comments(input);
+    if (tokens.size() > 0) {
+      parse_one_keyword(tokens);
     }
   }
 
@@ -353,7 +345,6 @@ void Run::perform_a_run()
         atom.force_per_atom.data());
       GPU_CHECK_KERNEL
       integrate.ensemble->find_thermo(
-        false,
         box.get_volume(),
         group,
         atom.mass,
@@ -562,7 +553,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     measure.actions.emplace_back(std::move(action));
   } else if (strcmp(param[0], "compute_rdf") == 0) {
     std::unique_ptr<Action> action;
-    action.reset(new RDF(param, num_param, box, atom.cpu_type_size, number_of_steps));
+    action.reset(new RDF(param, num_param, box, atom.cpu_type_size));
     measure.actions.emplace_back(std::move(action));
   } else if (strcmp(param[0], "compute_adf") == 0) {
     std::unique_ptr<Action> action;
@@ -574,7 +565,7 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     measure.actions.emplace_back(std::move(action));
   } else if (strcmp(param[0], "compute_angular_rdf") == 0) {
     std::unique_ptr<Action> action;
-    action.reset(new AngularRDF(param, num_param, box, number_of_types, number_of_steps));
+    action.reset(new AngularRDF(param, num_param, box, number_of_types));
     measure.actions.emplace_back(std::move(action));
   } else if (strcmp(param[0], "compute_dpdt") == 0) {
     std::unique_ptr<Action> action;
@@ -793,6 +784,9 @@ void Run::parse_run(const char** param, int num_param)
   }
   if (!is_valid_int(param[1], &number_of_steps)) {
     PRINT_INPUT_ERROR("number of steps should be an integer.\n");
+  }
+  if (number_of_steps <= 0) {
+    PRINT_INPUT_ERROR("number of steps should be positive.\n");
   }
   printf("Run %d steps.\n", number_of_steps);
 

@@ -34,6 +34,95 @@ Calculate:
 
 namespace
 {
+// Bin edges reconstructed from host-generated centers can have ULP-sized gaps or overlaps.
+// Check nearby bins explicitly instead of assuming that every value belongs to exactly one bin.
+__device__ __forceinline__ void find_candidate_bin_range(
+  const double scaled_value,
+  const int number_of_bins,
+  int& first_bin,
+  int& last_bin)
+{
+  int bin;
+  if (!(scaled_value > 0.0)) {
+    bin = 0;
+  } else if (scaled_value >= number_of_bins) {
+    bin = number_of_bins - 1;
+  } else {
+    bin = static_cast<int>(scaled_value);
+  }
+
+  first_bin = bin > 2 ? bin - 2 : 0;
+  last_bin = bin < number_of_bins - 2 ? bin + 2 : number_of_bins - 1;
+}
+
+__device__ __forceinline__ void accumulate_angular_rdf(
+  const double distance_square,
+  const double x12,
+  const double y12,
+  const double number_of_center_atoms,
+  const double neighbor_density,
+  const double* __restrict__ radial,
+  const double* __restrict__ theta_bins,
+  double* angular_rdf,
+  const int number_of_radial_bins,
+  const int number_of_theta_bins,
+  const double radial_step,
+  const double theta_step)
+{
+  const double radial_half_step = radial_step / 2;
+  const double radial_lower = radial[0] - radial_half_step;
+  const double radial_upper = radial[number_of_radial_bins - 1] + radial_half_step;
+  if (!(
+        distance_square > radial_lower * radial_lower &&
+        distance_square <= radial_upper * radial_upper)) {
+    return;
+  }
+
+  int first_radial_bin;
+  int last_radial_bin;
+  find_candidate_bin_range(
+    sqrt(distance_square) / radial_step,
+    number_of_radial_bins,
+    first_radial_bin,
+    last_radial_bin);
+
+  const double theta = atan2(y12, x12);
+  const double theta_half_step = theta_step / 2;
+  const double theta_lower = theta_bins[0] - theta_half_step;
+  const double theta_upper = theta_bins[number_of_theta_bins - 1] + theta_half_step;
+  if (!(theta > theta_lower && theta <= theta_upper)) {
+    return;
+  }
+
+  int first_theta_bin;
+  int last_theta_bin;
+  find_candidate_bin_range(
+    (theta - theta_lower) / theta_step,
+    number_of_theta_bins,
+    first_theta_bin,
+    last_theta_bin);
+
+  const double rdf_PI = 3.14159265358979323846;
+  for (int w = first_radial_bin; w <= last_radial_bin; ++w) {
+    const double r_low = radial[w] - radial_half_step;
+    const double r_up = radial[w] + radial_half_step;
+    if (distance_square > r_low * r_low && distance_square <= r_up * r_up) {
+      for (int t = first_theta_bin; t <= last_theta_bin; ++t) {
+        const double theta_low = theta_bins[t] - theta_half_step;
+        const double theta_up = theta_bins[t] + theta_half_step;
+        if (theta > theta_low && theta <= theta_up) {
+          const double shell_volume =
+            4.0 / 3.0 * rdf_PI * (r_up * r_up * r_up - r_low * r_low * r_low);
+          const double theta_area = (theta_up - theta_low) / (2 * rdf_PI);
+          const double bin_volume = theta_area * shell_volume;
+          angular_rdf[w * number_of_theta_bins + t] +=
+            1 / (number_of_center_atoms * neighbor_density * bin_volume);
+        }
+      }
+    }
+  }
+}
+
 static __global__ void gpu_find_rdf_ON1(
   const int N,                            // total number of atoms
   const double density,                   // system density
@@ -58,7 +147,6 @@ static __global__ void gpu_find_rdf_ON1(
 {
   // get current atom index
   const int n1 = blockIdx.x * blockDim.x + threadIdx.x;
-  double rdf_PI = 3.14159265358979323846;
 
   if (n1 < N) {
     // get current atom coordinates
@@ -109,28 +197,19 @@ static __global__ void gpu_find_rdf_ON1(
               double z12 = z[n2] - z1;
               apply_mic(box, x12, y12, z12); // minimum image convention
               const double d2 = x12 * x12 + y12 * y12 + z12 * z12;
-              double theta = atan2(y12, x12);
-
-              // update angular RDF histogram
-              for (int w = 0; w < rdf_bins_; w++) {
-                double r_low = radial_[w] - r_step_ / 2;
-                double r_up = radial_[w] + r_step_ / 2;
-                if (d2 > r_low * r_low && d2 <= r_up * r_up) {
-                  for (int t = 0; t < rdf_theta_bins_; t++) {
-                    double theta_low = theta_[t] - theta_step_ / 2;
-                    double theta_up = theta_[t] + theta_step_ / 2;
-                    if (theta > theta_low && theta <= theta_up) {
-                      //  RDF normalization factor calculation
-                      double shell_volume =
-                        4.0 / 3.0 * rdf_PI * (r_up * r_up * r_up - r_low * r_low * r_low);
-                      double theta_area = (theta_up - theta_low) / (2 * rdf_PI);
-                      double bin_volume = theta_area * shell_volume;
-                      rdf_[n1 * rdf_bins_ * rdf_theta_bins_ + w * rdf_theta_bins_ + t] +=
-                        1 / (N * density * bin_volume);
-                    }
-                  }
-                }
-              }
+              accumulate_angular_rdf(
+                d2,
+                x12,
+                y12,
+                N,
+                density,
+                radial_,
+                theta_,
+                rdf_ + n1 * rdf_bins_ * rdf_theta_bins_,
+                rdf_bins_,
+                rdf_theta_bins_,
+                r_step_,
+                theta_step_);
             }
           }
         }
@@ -168,7 +247,6 @@ static __global__ void gpu_find_rdf_ON1(
   const double theta_step_)
 {
   const int n1 = blockIdx.x * blockDim.x + threadIdx.x;
-  double rdf_PI = 3.14159265358979323846;
   if (n1 < N && type[n1] == atom_id1_) {
     const double x1 = x[n1];
     const double y1 = y[n1];
@@ -212,25 +290,19 @@ static __global__ void gpu_find_rdf_ON1(
               double z12 = z[n2] - z1;
               apply_mic(box, x12, y12, z12);
               const double d2 = x12 * x12 + y12 * y12 + z12 * z12;
-              double theta = atan2(y12, x12);
-              for (int w = 0; w < rdf_bins_; w++) {
-                double r_low = radial_[w] - r_step_ / 2;
-                double r_up = radial_[w] + r_step_ / 2;
-                if (d2 > r_low * r_low && d2 <= r_up * r_up) {
-                  for (int t = 0; t < rdf_theta_bins_; t++) {
-                    double theta_low = theta_[t] - theta_step_ / 2;
-                    double theta_up = theta_[t] + theta_step_ / 2;
-                    if (theta > theta_low && theta <= theta_up) {
-                      double shell_volume =
-                        4.0 / 3.0 * rdf_PI * (r_up * r_up * r_up - r_low * r_low * r_low);
-                      double theta_area = (theta_up - theta_low) / (2 * rdf_PI);
-                      double bin_volume = theta_area * shell_volume;
-                      rdf_[n1 * rdf_bins_ * rdf_theta_bins_ + w * rdf_theta_bins_ + t] +=
-                        1 / (num_atom1_ * density2 * bin_volume);
-                    }
-                  }
-                }
-              }
+              accumulate_angular_rdf(
+                d2,
+                x12,
+                y12,
+                num_atom1_,
+                density2,
+                radial_,
+                theta_,
+                rdf_ + n1 * rdf_bins_ * rdf_theta_bins_,
+                rdf_bins_,
+                rdf_theta_bins_,
+                r_step_,
+                theta_step_);
             }
           }
         }
@@ -279,25 +351,19 @@ static __global__ void gpu_find_rdf_ON1(
               double z12 = z1 - z[n2];
               apply_mic(box, x12, y12, z12);
               const double d2 = x12 * x12 + y12 * y12 + z12 * z12;
-              double theta = atan2(y12, x12);
-              for (int w = 0; w < rdf_bins_; w++) {
-                double r_low = radial_[w] - r_step_ / 2;
-                double r_up = radial_[w] + r_step_ / 2;
-                if (d2 > r_low * r_low && d2 <= r_up * r_up) {
-                  for (int t = 0; t < rdf_theta_bins_; t++) {
-                    double theta_low = theta_[t] - theta_step_ / 2;
-                    double theta_up = theta_[t] + theta_step_ / 2;
-                    if (theta > theta_low && theta <= theta_up) {
-                      double shell_volume =
-                        4.0 / 3.0 * rdf_PI * (r_up * r_up * r_up - r_low * r_low * r_low);
-                      double theta_area = (theta_up - theta_low) / (2 * rdf_PI);
-                      double bin_volume = theta_area * shell_volume;
-                      rdf_[n1 * rdf_bins_ * rdf_theta_bins_ + w * rdf_theta_bins_ + t] +=
-                        1 / (num_atom2_ * density1 * bin_volume);
-                    }
-                  }
-                }
-              }
+              accumulate_angular_rdf(
+                d2,
+                x12,
+                y12,
+                num_atom2_,
+                density1,
+                radial_,
+                theta_,
+                rdf_ + n1 * rdf_bins_ * rdf_theta_bins_,
+                rdf_bins_,
+                rdf_theta_bins_,
+                r_step_,
+                theta_step_);
             }
           }
         }
@@ -430,10 +496,9 @@ AngularRDF::AngularRDF(
   const char** param,
   const int num_param,
   Box& box,
-  const int number_of_types,
-  const int number_of_steps)
+  const int number_of_types)
 {
-  parse(param, num_param, box, number_of_types, number_of_steps);
+  parse(param, num_param, box, number_of_types);
   action_name = "compute_angular_rdf";
 }
 
@@ -453,6 +518,11 @@ void AngularRDF::pre_run(
   // if PIMD, return directly, currently not support PIMD
   if (integrate.type >= 31) {
     return;
+  }
+
+  if (num_interval_ > number_of_steps) {
+    PRINT_INPUT_ERROR(
+      "Angular RDF sampling interval should not exceed the number of MD steps.\n");
   }
 
   // calculate radial step size
@@ -663,8 +733,7 @@ void AngularRDF::parse(
   const char** param,
   const int num_param,
   Box& box,
-  const int number_of_types,
-  const int number_of_steps)
+  const int number_of_types)
 {
   printf("Compute Angular RDF.\n");
   compute_ = true;
@@ -674,6 +743,10 @@ void AngularRDF::parse(
   }
   if (num_param > 23) {
     PRINT_INPUT_ERROR("compute_angular_rdf has too many parameters.\n");
+  }
+  if ((num_param - 5) % 3 != 0) {
+    PRINT_INPUT_ERROR(
+      "Optional arguments for compute_angular_rdf should be specified as atom type1 type2.\n");
   }
 
   // radial cutoff
@@ -738,7 +811,7 @@ void AngularRDF::parse(
       if (atom_id1_[k_a] < 0) {
         PRINT_INPUT_ERROR("atom type index1 should be non-negative.\n");
       }
-      if (atom_id1_[k_a] > number_of_types) {
+      if (atom_id1_[k_a] >= number_of_types) {
         PRINT_INPUT_ERROR("atom type index1 should be less than number of atomic types.\n");
       }
       if (!is_valid_int(param[k + 2], &atom_id2_[k_a])) {
@@ -747,8 +820,8 @@ void AngularRDF::parse(
       if (atom_id2_[k_a] < 0) {
         PRINT_INPUT_ERROR("atom type index2 should be non-negative.\n");
       }
-      if (atom_id2_[k_a] > number_of_types) {
-        PRINT_INPUT_ERROR("atom type index1 should be less than number of atomic types.\n");
+      if (atom_id2_[k_a] >= number_of_types) {
+        PRINT_INPUT_ERROR("atom type index2 should be less than number of atomic types.\n");
       }
     } else {
       PRINT_INPUT_ERROR("Unrecognized argument in compute_angular_rdf.\n");

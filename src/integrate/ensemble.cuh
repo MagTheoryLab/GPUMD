@@ -18,6 +18,7 @@
 #include "model/atom.cuh"
 #include "model/box.cuh"
 #include "model/group.cuh"
+#include "thermo.cuh"
 #include "utilities/gpu_vector.cuh"
 #include <vector>
 
@@ -53,7 +54,6 @@ public:
   }
 
   void find_thermo(
-    const bool use_target_temperature,
     const double volume,
     const std::vector<Group>& group,
     const GPU_Vector<double>& mass,
@@ -94,10 +94,10 @@ public:
   double energy_transferred[2]; // energy transferred from system to heat baths
 
   std::vector<double> energy_transferred_n; // energy transferred from system to multiple heat baths
-  // addtional function for scaling velocities in multiple groups
+  // additional function for scaling velocities in multiple groups
   virtual void scale_velocity_groups(
-    const std::vector<double>& factors,
-    const std::vector<int>& labels,
+    const GPU_Vector<double>& factors,
+    const GPU_Vector<int>& labels,
     const double* vcx,
     const double* vcy,
     const double* vcz,
@@ -113,6 +113,18 @@ public:
   double vel_nhc2[NOSE_HOOVER_CHAIN_LENGTH];
 
 protected:
+  // Reusable workspaces for local heat baths. The kinetic-energy arrays
+  // contain twice the physical kinetic energy.
+  std::vector<double> group_kinetic_energy_cpu_;
+  GPU_Vector<double> group_com_velocity_x_;
+  GPU_Vector<double> group_com_velocity_y_;
+  GPU_Vector<double> group_com_velocity_z_;
+  GPU_Vector<double> group_kinetic_energy_;
+  Thermo thermo_;
+
+  void initialize_group_kinetic_energy_workspace(const int number_of_groups);
+  void initialize_group_com_velocity_workspace(const int number_of_groups);
+
   void velocity_verlet(
     const bool is_step1,
     const double time_step,

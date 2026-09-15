@@ -309,7 +309,7 @@ void Ensemble_MTTK::init_mttk()
   matrix_scale(p_start, 1 / PRESSURE_UNIT_CONVERSION, p_start);
   matrix_scale(p_stop, 1 / PRESSURE_UNIT_CONVERSION, p_stop);
   // set tstat params
-  // Here I negelect center of mass dof.
+  // Here I neglect center of mass dof.
   temperature_dof = atom->number_of_atoms * 3;
   dt = time_step;
   dt2 = dt / 2;
@@ -444,6 +444,8 @@ void Ensemble_MTTK::find_current_pressure()
   find_thermo();
   double t[8];
   thermo->copy_to_host(t, 8);
+  if (use_thermostat)
+    t_current = t[0];
   p_current[0][0] = t[2];
   p_current[1][1] = t[3];
   p_current[2][2] = t[4];
@@ -600,7 +602,6 @@ void Ensemble_MTTK::propagate_box_diagonal()
 void Ensemble_MTTK::find_thermo()
 {
   Ensemble::find_thermo(
-    false,
     box->get_volume(),
     *group,
     atom->mass,
@@ -612,6 +613,10 @@ void Ensemble_MTTK::find_thermo()
 
 double Ensemble_MTTK::find_current_temperature()
 {
+  if (t_current_from_thermo) {
+    t_current_from_thermo = false;
+    return t_current;
+  }
   find_thermo();
   double t = 0;
   thermo->copy_to_host(&t, 1);
@@ -907,8 +912,11 @@ void Ensemble_MTTK::compute2(
   if (use_barostat)
     nh_omega_dot();
 
-  if (use_thermostat)
+  if (use_thermostat) {
+    if (use_barostat)
+      t_current_from_thermo = true;
     nhc_temp_integrate();
+  }
 
   if (use_barostat)
     nhc_press_integrate();

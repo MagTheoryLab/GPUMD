@@ -213,6 +213,7 @@ void Integrate::initialize(
         sink,
         group[0].cpu_size[source],
         group[0].cpu_size[sink],
+        group[0].number,
         temperature,
         temperature_coupling,
         delta_temperature,
@@ -225,6 +226,7 @@ void Integrate::initialize(
         sink,
         group[0].cpu_size[source],
         group[0].cpu_size[sink],
+        group[0].number,
         temperature,
         temperature_coupling,
         delta_temperature,
@@ -253,6 +255,7 @@ void Integrate::initialize(
           group[0].cpu_size[sink],
           group[0].cpu_size_sum[source],
           group[0].cpu_size_sum[sink],
+          group[0].number,
           temperature,
           temperature_coupling,
           delta_temperature));
@@ -260,7 +263,14 @@ void Integrate::initialize(
       break;
     case 23: // heat-BDP
       ensemble.reset(
-        new Ensemble_BDP(type, source, sink, temperature, temperature_coupling, delta_temperature));
+        new Ensemble_BDP(
+          type,
+          source,
+          sink,
+          group[0].number,
+          temperature,
+          temperature_coupling,
+          delta_temperature));
       break;
     case 24: // heat-TTM
       ensemble.reset(new Ensemble_TTM(
@@ -271,6 +281,7 @@ void Integrate::initialize(
         group[0].cpu_size[sink],
         group[0].cpu_size_sum[source],
         group[0].cpu_size_sum[sink],
+        group[0].number,
         group[ttm_parameters.grouping_method].cpu_size[ttm_parameters.group_id],
         group[ttm_parameters.grouping_method].cpu_size_sum[ttm_parameters.group_id],
         temperature,
@@ -301,6 +312,7 @@ void Integrate::initialize(
         heat_labels,     // Now a vector
         sizes,
         offsets,
+        group[0].number,
         temperature,
         heat_coupling, // Now a vector
         delta_temperature,

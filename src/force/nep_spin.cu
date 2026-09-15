@@ -1266,7 +1266,7 @@ __global__ void find_spin_zbl_force(
     const float charge_product = K_C_SP * atomic_number1 * atomic_number2;
     float pair_energy = 0.0f;
     float pair_derivative = 0.0f;
-    if (zbl.flexibled) {
+    if (zbl.flexible) {
       const int lower_type = min(type1, type2);
       const int upper_type = max(type1, type2);
       const int pair = lower_type * zbl.num_types -
@@ -1613,7 +1613,7 @@ void NEP_Spin::read_model(const char* file_potential)
     zbl_.rc_inner = parse_float(tokens[1]);
     zbl_.rc_outer = parse_float(tokens[2]);
     if (zbl_.rc_inner == 0.0f && zbl_.rc_outer == 0.0f) {
-      zbl_.flexibled = true;
+      zbl_.flexible = true;
     } else {
       if (!(zbl_.rc_inner >= 0.0f && zbl_.rc_inner < zbl_.rc_outer)) {
         throw std::runtime_error("invalid spin3 ZBL inner/outer cutoffs");
@@ -1741,7 +1741,7 @@ void NEP_Spin::read_model(const char* file_potential)
     }
     parameters.push_back(parse_float(tokens[0]));
   }
-  if (zbl_.flexibled) {
+  if (zbl_.flexible) {
     const int zbl_parameter_count =
       10 * model_.num_types * (model_.num_types + 1) / 2;
     for (int parameter = 0; parameter < zbl_parameter_count; ++parameter) {

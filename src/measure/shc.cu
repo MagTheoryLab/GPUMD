@@ -14,7 +14,7 @@
 */
 
 /*----------------------------------------------------------------------------80
-Spectral heat current (SHC) calculations. Referene:
+Spectral heat current (SHC) calculations. Reference:
 [1] Z. Fan, H. Dong, A. Harju, T. Ala-Nissila, Homogeneous nonequilibrium
 molecular dynamics method for heat transport and spectral decomposition
 with many-body potentials, Phys. Rev. B 99, 064308 (2019).
@@ -42,6 +42,11 @@ void SHC::pre_run(
 {
   if (!compute) {
     return;
+  }
+
+  if (Nc > number_of_steps / sample_interval) {
+    PRINT_INPUT_ERROR(
+      "The number of SHC correlation steps should not exceed the number of sampled frames.\n");
   }
 
   num_time_origins = 0;

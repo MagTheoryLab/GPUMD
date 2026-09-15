@@ -175,7 +175,7 @@ void Ensemble_NPHug::init_mttk()
   matrix_scale(p_start, 1 / PRESSURE_UNIT_CONVERSION, p_start);
   matrix_scale(p_stop, 1 / PRESSURE_UNIT_CONVERSION, p_stop);
   // set tstat params
-  // Here I negelect center of mass dof.
+  // Here I neglect center of mass dof.
   temperature_dof = atom->number_of_atoms * 3;
   dt = time_step;
   dt2 = dt / 2;
@@ -247,6 +247,7 @@ void Ensemble_NPHug::get_thermo()
 void Ensemble_NPHug::get_target_temp()
 {
   get_thermo();
+  t_current_from_thermo = true;
   // calculate hugoniot
   dhugo = (0.5 * (p_nphug_current + p0) * (v0 - v_current)) + e0 - e_current;
   dhugo /= 3 * atom->number_of_atoms * kB;

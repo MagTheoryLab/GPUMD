@@ -41,6 +41,7 @@ public:
   GPU_Vector<float> box;          // (expanded) box and inverse box (18 components)
   GPU_Vector<float> box_original; // (original) box (9 components)
   GPU_Vector<int> num_cell;       // number of cells in the expanded box (3 components)
+  GPU_Vector<int> pbc;            // 1 for PPP and 0 for FFF (one value per configuration)
 
   GPU_Vector<int> NN_radial;  // radial neighbor number
   GPU_Vector<int> NL_radial;  // radial neighbor list
@@ -94,7 +95,7 @@ public:
   std::vector<float> bec_ref_cpu;         // reference BEC in CPU
   std::vector<float> avirial_ref_cpu;      // reference atomic virial in CPU
   std::vector<float> weight_cpu;          // configuration weight in CPU
-  std::vector<float> temperature_ref_cpu; // reference temeprature in CPU
+  std::vector<float> temperature_ref_cpu; // reference temperature in CPU
 
   GPU_Vector<float> type_weight_gpu; // relative force weight for different atom types (GPU)
   GPU_Vector<int> spin_dof_type_active_gpu;

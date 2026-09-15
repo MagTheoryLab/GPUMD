@@ -28,7 +28,6 @@ void Ensemble_Fixed_Lattice::compute2(
   GPU_Vector<double>& thermo)
 {
   find_thermo(
-    false,
     box.get_volume(),
     group,
     atom.mass,

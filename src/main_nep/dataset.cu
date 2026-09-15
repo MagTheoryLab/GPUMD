@@ -29,119 +29,14 @@
 void Dataset::copy_structures(std::vector<Structure>& structures_input, int n1, int n2)
 {
   Nc = n2 - n1;
-  structures.resize(Nc);
+  structures.assign(structures_input.begin() + n1, structures_input.begin() + n2);
 
   for (int n = 0; n < Nc; ++n) {
-    int n_input = n + n1;
-    structures[n].num_atom = structures_input[n_input].num_atom;
-    structures[n].weight = structures_input[n_input].weight;
-    structures[n].has_virial = structures_input[n_input].has_virial;
-    structures[n].has_bec = structures_input[n_input].has_bec;
-    structures[n].has_mforce = structures_input[n_input].has_mforce;
-    structures[n].has_spin_response_metadata =
-      structures_input[n_input].has_spin_response_metadata;
-    structures[n].has_spin_response = structures_input[n_input].has_spin_response;
-    structures[n].spin_response_probe = structures_input[n_input].spin_response_probe;
-    structures[n].spin_response_group = structures_input[n_input].spin_response_group;
-    structures[n].spin_response_coordinate =
-      structures_input[n_input].spin_response_coordinate;
-    structures[n].has_atomic_virial = structures_input[n_input].has_atomic_virial;
-    structures[n].atomic_virial_diag_only = structures_input[n_input].atomic_virial_diag_only;
-    structures[n].charge = structures_input[n_input].charge;
-    structures[n].energy = structures_input[n_input].energy;
-    structures[n].energy_weight = structures_input[n_input].energy_weight;
-    structures[n].has_temperature = structures_input[n_input].has_temperature;
-    structures[n].temperature = structures_input[n_input].temperature;
-    structures[n].volume = structures_input[n_input].volume;
-    for (int k = 0; k < 6; ++k) {
-      structures[n].virial[k] = structures_input[n_input].virial[k];
-    }
-    for (int k = 0; k < 18; ++k) {
-      structures[n].box[k] = structures_input[n_input].box[k];
-    }
-    for (int k = 0; k < 9; ++k) {
-      structures[n].box_original[k] = structures_input[n_input].box_original[k];
-    }
-    for (int k = 0; k < 3; ++k) {
-      structures[n].num_cell[k] = structures_input[n_input].num_cell[k];
-    }
-
-    structures[n].type.resize(structures[n].num_atom);
-    structures[n].x.resize(structures[n].num_atom);
-    structures[n].y.resize(structures[n].num_atom);
-    structures[n].z.resize(structures[n].num_atom);
-    structures[n].fx.resize(structures[n].num_atom);
-    structures[n].fy.resize(structures[n].num_atom);
-    structures[n].fz.resize(structures[n].num_atom);
-    if (!structures_input[n_input].sx.empty()) {
-      structures[n].sx.resize(structures[n].num_atom);
-      structures[n].sy.resize(structures[n].num_atom);
-      structures[n].sz.resize(structures[n].num_atom);
-      structures[n].mfx.resize(structures[n].num_atom);
-      structures[n].mfy.resize(structures[n].num_atom);
-      structures[n].mfz.resize(structures[n].num_atom);
-      if (structures[n].has_spin_response) {
-        structures[n].spin_tangent_x.resize(structures[n].num_atom);
-        structures[n].spin_tangent_y.resize(structures[n].num_atom);
-        structures[n].spin_tangent_z.resize(structures[n].num_atom);
-      }
-    }
-    structures[n].bec.resize(structures[n].num_atom * 9);
-
-    for (int na = 0; na < structures[n].num_atom; ++na) {
-      structures[n].type[na] = structures_input[n_input].type[na];
-      structures[n].x[na] = structures_input[n_input].x[na];
-      structures[n].y[na] = structures_input[n_input].y[na];
-      structures[n].z[na] = structures_input[n_input].z[na];
-      structures[n].fx[na] = structures_input[n_input].fx[na];
-      structures[n].fy[na] = structures_input[n_input].fy[na];
-      structures[n].fz[na] = structures_input[n_input].fz[na];
-      if (!structures[n].sx.empty()) {
-        structures[n].sx[na] = structures_input[n_input].sx[na];
-        structures[n].sy[na] = structures_input[n_input].sy[na];
-        structures[n].sz[na] = structures_input[n_input].sz[na];
-        structures[n].mfx[na] = structures_input[n_input].mfx[na];
-        structures[n].mfy[na] = structures_input[n_input].mfy[na];
-        structures[n].mfz[na] = structures_input[n_input].mfz[na];
-        if (structures[n].has_spin_response) {
-          structures[n].spin_tangent_x[na] =
-            structures_input[n_input].spin_tangent_x[na];
-          structures[n].spin_tangent_y[na] =
-            structures_input[n_input].spin_tangent_y[na];
-          structures[n].spin_tangent_z[na] =
-            structures_input[n_input].spin_tangent_z[na];
-        }
-      }
-      for (int d = 0; d < 9; ++d) {
-        structures[n].bec[na * 9 + d] = structures_input[n_input].bec[na * 9 + d];
-      }
-    }
-
     if (structures[n].has_atomic_virial != structures[0].has_atomic_virial) {
       throw std::runtime_error("All structures must have the same has_atomic_virial flag.");
     }
     if (structures[n].atomic_virial_diag_only != structures[0].atomic_virial_diag_only) {
       throw std::runtime_error("All structures must have the same atomic_virial_diag_only flag.");
-    }
-    if (structures[n].has_atomic_virial) {
-      structures[n].avirialxx.resize(structures[n].num_atom);
-      structures[n].avirialyy.resize(structures[n].num_atom);
-      structures[n].avirialzz.resize(structures[n].num_atom);
-      for (int na = 0; na < structures[n].num_atom; ++na) {
-        structures[n].avirialxx[na] = structures_input[n_input].avirialxx[na];
-        structures[n].avirialyy[na] = structures_input[n_input].avirialyy[na];
-        structures[n].avirialzz[na] = structures_input[n_input].avirialzz[na];
-      }
-      if (!structures[n].atomic_virial_diag_only) {
-        structures[n].avirialxy.resize(structures[n].num_atom);
-        structures[n].avirialyz.resize(structures[n].num_atom);
-        structures[n].avirialzx.resize(structures[n].num_atom);
-        for (int na = 0; na < structures[n].num_atom; ++na) {
-          structures[n].avirialxy[na] = structures_input[n_input].avirialxy[na];
-          structures[n].avirialyz[na] = structures_input[n_input].avirialyz[na];
-          structures[n].avirialzx[na] = structures_input[n_input].avirialzx[na];
-        }
-      }
     }
   }
 }
@@ -199,6 +94,7 @@ void Dataset::initialize_gpu_data(Parameters& para)
   std::vector<float> box_cpu(Nc * 18);
   std::vector<float> box_original_cpu(Nc * 9);
   std::vector<int> num_cell_cpu(Nc * 3);
+  std::vector<int> pbc_cpu(Nc);
   std::vector<float> r_cpu(N * 3);
   std::vector<double> r_spin_cpu;
   std::vector<double> spin_cpu;
@@ -245,6 +141,7 @@ void Dataset::initialize_gpu_data(Parameters& para)
   temperature_ref_cpu.resize(N);
 
   for (int n = 0; n < Nc; ++n) {
+    pbc_cpu[n] = structures[n].pbc;
     weight_cpu[n] = structures[n].weight;
     if ((para.charge_mode || para.charge_vdw)) {
       charge_ref_cpu[n] = structures[n].charge;
@@ -339,6 +236,7 @@ void Dataset::initialize_gpu_data(Parameters& para)
   box.resize(Nc * 18);
   box_original.resize(Nc * 9);
   num_cell.resize(Nc * 3);
+  pbc.resize(Nc);
   r.resize(N * 3);
   if (para.spin_mode) {
     r_spin.resize(N * 3);
@@ -348,6 +246,7 @@ void Dataset::initialize_gpu_data(Parameters& para)
   box.copy_from_host(box_cpu.data());
   box_original.copy_from_host(box_original_cpu.data());
   num_cell.copy_from_host(num_cell_cpu.data());
+  pbc.copy_from_host(pbc_cpu.data());
   r.copy_from_host(r_cpu.data());
   if (para.spin_mode) {
     r_spin.copy_from_host(r_spin_cpu.data());
@@ -369,6 +268,7 @@ static __global__ void gpu_find_neighbor_number(
   const float* __restrict__ g_box,
   const float* __restrict__ g_box_original,
   const int* __restrict__ g_num_cell,
+  const int* __restrict__ g_pbc,
   const float* x,
   const float* y,
   const float* z,
@@ -382,6 +282,7 @@ static __global__ void gpu_find_neighbor_number(
     const float* __restrict__ box = g_box + 18 * blockIdx.x;
     const float* __restrict__ box_original = g_box_original + 9 * blockIdx.x;
     const int* __restrict__ num_cell = g_num_cell + 3 * blockIdx.x;
+    const int is_periodic = g_pbc[blockIdx.x];
     float x1 = x[n1];
     float y1 = y[n1];
     float z1 = z[n1];
@@ -402,7 +303,9 @@ static __global__ void gpu_find_neighbor_number(
             float x12 = x[n2] + delta_x - x1;
             float y12 = y[n2] + delta_y - y1;
             float z12 = z[n2] + delta_z - z1;
-            dev_apply_mic(box, x12, y12, z12);
+            if (is_periodic) {
+              dev_apply_mic(box, x12, y12, z12);
+            }
             float distance_square = x12 * x12 + y12 * y12 + z12 * z12;
             int t2 = g_type[n2];
             float rc_radial = (g_rc_radial[t1] + g_rc_radial[t2]) * 0.5f;
@@ -443,6 +346,7 @@ static __global__ void gpu_find_neighbor_list(
   const float* __restrict__ g_box,
   const float* __restrict__ g_box_original,
   const int* __restrict__ g_num_cell,
+  const int* __restrict__ g_pbc,
   const float* x,
   const float* y,
   const float* z,
@@ -469,6 +373,7 @@ static __global__ void gpu_find_neighbor_list(
     const float* __restrict__ box = g_box + 18 * blockIdx.x;
     const float* __restrict__ box_original = g_box_original + 9 * blockIdx.x;
     const int* __restrict__ num_cell = g_num_cell + 3 * blockIdx.x;
+    const int is_periodic = g_pbc[blockIdx.x];
     float x1 = x[n1];
     float y1 = y[n1];
     float z1 = z[n1];
@@ -489,7 +394,9 @@ static __global__ void gpu_find_neighbor_list(
             float x12 = x[n2] + delta_x - x1;
             float y12 = y[n2] + delta_y - y1;
             float z12 = z[n2] + delta_z - z1;
-            dev_apply_mic(box, x12, y12, z12);
+            if (is_periodic) {
+              dev_apply_mic(box, x12, y12, z12);
+            }
             float distance_square = x12 * x12 + y12 * y12 + z12 * z12;
             int t2 = g_type[n2];
             float rc_radial = (g_rc_radial[t1] + g_rc_radial[t2]) * 0.5f;
@@ -569,6 +476,7 @@ void Dataset::find_neighbor(Parameters& para)
       box.data(),
       box_original.data(),
       num_cell.data(),
+      pbc.data(),
       r.data(),
       r.data() + N,
       r.data() + N * 2,
@@ -588,6 +496,7 @@ void Dataset::find_neighbor(Parameters& para)
       box.data(),
       box_original.data(),
       num_cell.data(),
+      pbc.data(),
       r.data(),
       r.data() + N,
       r.data() + N * 2,
@@ -685,6 +594,7 @@ void Dataset::find_neighbor(Parameters& para)
       box.data(),
       box_original.data(),
       num_cell.data(),
+      pbc.data(),
       r.data(),
       r.data() + N,
       r.data() + N * 2,
@@ -717,6 +627,7 @@ void Dataset::find_neighbor(Parameters& para)
       box.data(),
       box_original.data(),
       num_cell.data(),
+      pbc.data(),
       r.data(),
       r.data() + N,
       r.data() + N * 2,

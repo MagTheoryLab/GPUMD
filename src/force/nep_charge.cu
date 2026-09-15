@@ -54,7 +54,7 @@ void NEP_Charge::check_ewald_pppm()
   use_pppm = true;
   std::string line;
   while (std::getline(input_run, line)) {
-    std::vector<std::string> tokens = get_tokens(line);
+    std::vector<std::string> tokens = get_tokens_without_comments(line);
     if (tokens.size() != 0) {
       if (tokens[0] == "kspace") {
         if (tokens.size() != 2) {
@@ -77,6 +77,50 @@ void NEP_Charge::check_ewald_pppm()
   input_run.close();
 }
 
+void NEP_Charge::check_need_bec()
+{
+  need_bec = false;
+  std::ifstream input_run("run.in");
+  if (!input_run.is_open()) {
+    PRINT_INPUT_ERROR("Cannot open run.in.");
+  }
+
+  std::string line;
+  while (std::getline(input_run, line)) {
+    std::vector<std::string> tokens = get_tokens_without_comments(line);
+
+    if (tokens.size() != 0) {
+      if (tokens[0] == "compute_dpdt") {
+        need_bec = true;
+        break;
+      }
+
+      if (tokens[0] == "dump_xyz" || tokens[0] == "dump_netcdf") {
+        for (int n = 3; n < tokens.size(); ++n) {
+          if (tokens[n] == "bec") {
+            need_bec = true;
+            break;
+          }
+        }
+        if (need_bec) {
+          break;
+        }
+      }
+
+      if (tokens[0] == "add_efield") {
+        if (
+          tokens.size() == 4 || tokens.size() == 6 ||
+          ((tokens.size() == 5 || tokens.size() == 7) && tokens.back() == "bec")) {
+          need_bec = true;
+          break;
+        }
+      }
+    }
+  }
+
+  input_run.close();
+}
+
 void NEP_Charge::initialize_dftd3()
 {
   std::ifstream input_run("run.in");
@@ -87,7 +131,7 @@ void NEP_Charge::initialize_dftd3()
   has_dftd3 = false;
   std::string line;
   while (std::getline(input_run, line)) {
-    std::vector<std::string> tokens = get_tokens(line);
+    std::vector<std::string> tokens = get_tokens_without_comments(line);
     if (tokens.size() != 0) {
       if (tokens[0] == "dftd3") {
         has_dftd3 = true;
@@ -175,7 +219,7 @@ NEP_Charge::NEP_Charge(const char* file_potential, const int num_atoms)
     zbl.rc_inner = get_double_from_token(tokens[1], __FILE__, __LINE__);
     zbl.rc_outer = get_double_from_token(tokens[2], __FILE__, __LINE__);
     if (zbl.rc_inner == 0 && zbl.rc_outer == 0) {
-      zbl.flexibled = true;
+      zbl.flexible = true;
       printf("    has the flexible ZBL potential\n");
     } else {
       if (tokens.size() == 4) {
@@ -343,7 +387,7 @@ NEP_Charge::NEP_Charge(const char* file_potential, const int num_atoms)
   annmb.q_scaler = nep_data.parameters.data() + annmb.num_para;
 
   // flexible zbl potential parameters
-  if (zbl.flexibled) {
+  if (zbl.flexible) {
     int num_type_zbl = (paramb.num_types * (paramb.num_types + 1)) / 2;
     for (int d = 0; d < 10 * num_type_zbl; ++d) {
       tokens = get_tokens(input);
@@ -355,6 +399,7 @@ NEP_Charge::NEP_Charge(const char* file_potential, const int num_atoms)
   // charge related parameters and data
   charge_para.alpha = float(PI) / paramb.rc_radial; // a good value
   check_ewald_pppm();
+  check_need_bec();
   if (use_pppm) {
     pppm.initialize(charge_para.alpha);
   } else {
@@ -367,7 +412,9 @@ NEP_Charge::NEP_Charge(const char* file_potential, const int num_atoms)
   nep_data.D_real.resize(num_atoms);
   nep_data.charge.resize(num_atoms);
   nep_data.charge_derivative.resize(num_atoms * annmb.dim);
-  nep_data.bec.resize(num_atoms * 9);
+  if (need_bec) {
+    nep_data.bec.resize(num_atoms * 9);
+  }
 
   nep_data.f12x.resize(num_atoms * paramb.MN_angular);
   nep_data.f12y.resize(num_atoms * paramb.MN_angular);
@@ -556,7 +603,7 @@ static __global__ void find_descriptor(
       }
     }
 
-    // nomalize descriptor
+    // normalize descriptor
     for (int d = 0; d < annmb.dim; ++d) {
       q[d] = q[d] * annmb.q_scaler[d];
     }
@@ -1141,7 +1188,7 @@ static __global__ void find_force_ZBL(
       int zj = zbl.atomic_numbers[type2];
       float a_inv = (pow_zi + pow(float(zj), 0.23f)) * 2.134563f;
       float zizj = K_C_SP * zi * zj;
-      if (zbl.flexibled) {
+      if (zbl.flexible) {
         int t1, t2;
         if (type1 < type2) {
           t1 = type1;
@@ -1377,7 +1424,7 @@ void NEP_Charge::compute_large_box(
   zero_total_charge<<<1, 1024>>>(N, nep_data.charge.data());
   GPU_CHECK_KERNEL
 
-  if (true) { // TODO
+  if (need_bec) {
     // get BEC (the diagonal part)
     find_bec_diagonal<<<grid_size, BLOCK_SIZE>>>(
       N,
@@ -1653,7 +1700,7 @@ void NEP_Charge::compute_small_box(
   zero_total_charge<<<1, 1024>>>(N, nep_data.charge.data());
   GPU_CHECK_KERNEL
 
-  if (true) { // TODO
+  if (need_bec) {
     // get BEC (the diagonal part)
     find_bec_diagonal<<<grid_size, BLOCK_SIZE>>>(
       N,

@@ -27,14 +27,14 @@ static __global__ void gpu_get_vsum(const int N, const double* g_vector, double*
 {
   //<<<1, 1024>>>
   int tid = threadIdx.x;
-  int patch, n;
-  int number_of_patches = (N - 1) / 1024 + 1;
+  int batch, n;
+  int number_of_batches = (N - 1) / 1024 + 1;
   double vector1, vector2, vector3;
   __shared__ double s_data[1024];
   s_data[tid] = 0.0;
 
-  for (patch = 0; patch < number_of_patches; patch++) {
-    n = tid + patch * 1024;
+  for (batch = 0; batch < number_of_batches; batch++) {
+    n = tid + batch * 1024;
     if (n < N) {
       vector1 = g_vector[n];
       vector2 = g_vector[n + N];
@@ -62,12 +62,13 @@ static __global__ void gpu_msst_v(
   const double mu,
   const int shock_direction,
   const double omega,
-  const double vsum,
+  const double* g_vsum,
   const double volume,
   double dthalf)
 {
   const int n = threadIdx.x + blockIdx.x * blockDim.x;
   if (n < N) {
+    const double vsum = g_vsum[0];
     double mass = g_mass[n];
     double mass_inv = 1.0 / mass;
     double C[3] = {g_f[n] * mass_inv, g_f[n + N] * mass_inv, g_f[n + 2 * N] * mass_inv};
@@ -167,7 +168,6 @@ Ensemble_MSST::~Ensemble_MSST(void)
 void Ensemble_MSST::find_thermo()
 {
   Ensemble::find_thermo(
-    false,
     box->get_volume(),
     *group,
     atom->mass,
@@ -218,7 +218,6 @@ void Ensemble_MSST::init()
 void Ensemble_MSST::get_vsum()
 {
   gpu_get_vsum<<<1, 1024>>>(N, atom->velocity_per_atom.data(), gpu_vsum.data());
-  gpu_vsum.copy_to_host(&vsum);
 }
 
 void Ensemble_MSST::remap(double dilation)
@@ -283,7 +282,7 @@ void Ensemble_MSST::msst_v()
     mu,
     shock_direction,
     omega,
-    vsum,
+    gpu_vsum.data(),
     vol,
     dthalf);
 }
@@ -355,7 +354,6 @@ void Ensemble_MSST::compute2(
   get_conserved();
   msst_v();
   find_thermo();
-  get_vsum();
   get_omega();
 
   // calculate Lagrangian position of computational cell

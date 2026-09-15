@@ -38,7 +38,6 @@ init_UF_force(int number_of_atoms, double* fx_UF, double* fy_UF, double* fz_UF)
 static __global__ void calc_UF_force(
   int number_of_atoms,
   Box box,
-  double lambda,
   double* eUF,
   double sigma_sqrd,
   double p,
@@ -48,9 +47,6 @@ static __global__ void calc_UF_force(
   double* g_x,
   double* g_y,
   double* g_z,
-  double* fx,
-  double* fy,
-  double* fz,
   double* fx_UF,
   double* fy_UF,
   double* fz_UF)
@@ -97,17 +93,7 @@ static __global__ void calc_UF_force(
 
 static __global__ void gpu_add_UF_force(
   int number_of_atoms,
-  Box box,
   double lambda,
-  double* eUF,
-  double sigma_sqrd,
-  double p,
-  double beta,
-  const int* g_NN,
-  const int* g_NL,
-  double* g_x,
-  double* g_y,
-  double* g_z,
   double* fx,
   double* fy,
   double* fz,
@@ -116,23 +102,24 @@ static __global__ void gpu_add_UF_force(
   double* fz_UF)
 {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-  fy[i] = (1 - lambda) * fy[i] + lambda * fy_UF[i];
-  fz[i] = (1 - lambda) * fz[i] + lambda * fz_UF[i];
-  fx[i] = (1 - lambda) * fx[i] + lambda * fx_UF[i];
+  if (i < number_of_atoms) {
+    fy[i] = (1 - lambda) * fy[i] + lambda * fy_UF[i];
+    fz[i] = (1 - lambda) * fz[i] + lambda * fz_UF[i];
+    fx[i] = (1 - lambda) * fx[i] + lambda * fx_UF[i];
+  }
 }
 
-static __global__ void gpu_get_UF_sum(const int N, double* eUF)
+static __global__ void gpu_get_UF_sum(const int N, const double* eUF, double* ti_values)
 {
 
   int tid = threadIdx.x;
-  int patch, n;
-  int number_of_patches = (N - 1) / 1024 + 1;
+  int batch, n;
+  int number_of_batches = (N - 1) / 1024 + 1;
   __shared__ double s_data[1024];
   s_data[tid] = 0.0;
 
-  for (patch = 0; patch < number_of_patches; patch++) {
-    n = tid + patch * 1024;
+  for (batch = 0; batch < number_of_batches; batch++) {
+    n = tid + batch * 1024;
     if (n < N)
       s_data[tid] += eUF[n];
   }
@@ -143,7 +130,13 @@ static __global__ void gpu_get_UF_sum(const int N, double* eUF)
     __syncthreads();
   }
   if (tid == 0)
-    eUF[0] = s_data[0];
+    ti_values[0] = s_data[0];
+}
+
+static __global__ void gpu_store_ti_pe(const double* thermo, double* ti_values)
+{
+  if (threadIdx.x == 0)
+    ti_values[1] = thermo[1];
 }
 
 } // namespace
@@ -259,26 +252,11 @@ void Ensemble_TI_Liquid::init()
   initialize_curand_states<<<grid_size, 128>>>(curand_states.data(), N, rand());
   GPU_CHECK_KERNEL
 
-  thermo_cpu.resize(thermo->size());
   gpu_eUF.resize(N);
-}
-
-void Ensemble_TI_Liquid::find_thermo()
-{
-  Ensemble::find_thermo(
-    false,
-    box->get_volume(),
-    *group,
-    atom->mass,
-    atom->potential_per_atom,
-    atom->velocity_per_atom,
-    atom->virial_per_atom,
-    *thermo);
-
-  thermo->copy_to_host(thermo_cpu.data());
-
-  pe = thermo_cpu[1];
-  pressure = (thermo_cpu[2] + thermo_cpu[3] + thermo_cpu[4]) / 3;
+  gpu_fx_UF.resize(N);
+  gpu_fy_UF.resize(N);
+  gpu_fz_UF.resize(N);
+  gpu_ti_values.resize(2);
 }
 
 Ensemble_TI_Liquid::~Ensemble_TI_Liquid(void)
@@ -339,10 +317,10 @@ Ensemble_TI_Liquid::~Ensemble_TI_Liquid(void)
   F_UF = fe(x_UF, coef, sum_spline, index) * kT * N;
 
   double c_sum = 0;
-  double de_broigle_sum = 0;
+  double de_broglie_sum = 0;
 
   for (int i = 0; i < N; ++i) {
-    de_broigle_sum += log(HBAR * sqrt(2 * PI / (masses[i] * kT)));
+    de_broglie_sum += log(HBAR * sqrt(2 * PI / (masses[i] * kT)));
     species_count[types[i]]++;
   }
 
@@ -355,7 +333,7 @@ Ensemble_TI_Liquid::~Ensemble_TI_Liquid(void)
     }
   }
 
-  double F_IG = N * kT * (log(1 / V) - 1 + c_sum) + 3 * kT * de_broigle_sum;
+  double F_IG = N * kT * (log(1 / V) - 1 + c_sum) + 3 * kT * de_broglie_sum;
   E_ref = (F_UF + F_IG) / N;
 
   FILE* yaml_file = my_fopen("ti_liquid.yaml", "w");
@@ -395,19 +373,12 @@ void Ensemble_TI_Liquid::add_UF_force(Force& force)
 
   const GPU_Vector<int>& NL = force.potentials[0]->get_NL_radial_ptr();
 
-  GPU_Vector<double> fx_UF;
-  fx_UF.resize(N);
-  GPU_Vector<double> fy_UF;
-  fy_UF.resize(N);
-  GPU_Vector<double> fz_UF;
-  fz_UF.resize(N);
-
-  init_UF_force<<<(N - 1) / 128 + 1, 128>>>(N, fx_UF.data(), fy_UF.data(), fz_UF.data());
+  init_UF_force<<<(N - 1) / 128 + 1, 128>>>(
+    N, gpu_fx_UF.data(), gpu_fy_UF.data(), gpu_fz_UF.data());
 
   calc_UF_force<<<(N - 1) / 128 + 1, 128>>>(
     N,
     *box,
-    lambda,
     gpu_eUF.data(),
     sigma_sqrd,
     p,
@@ -417,41 +388,27 @@ void Ensemble_TI_Liquid::add_UF_force(Force& force)
     atom->position_per_atom.data(),
     atom->position_per_atom.data() + N,
     atom->position_per_atom.data() + 2 * N,
-    atom->force_per_atom.data(),
-    atom->force_per_atom.data() + N,
-    atom->force_per_atom.data() + 2 * N,
-    fx_UF.data(),
-    fy_UF.data(),
-    fz_UF.data());
+    gpu_fx_UF.data(),
+    gpu_fy_UF.data(),
+    gpu_fz_UF.data());
 
   gpu_add_UF_force<<<(N - 1) / 128 + 1, 128>>>(
     N,
-    *box,
     lambda,
-    gpu_eUF.data(),
-    sigma_sqrd,
-    p,
-    beta,
-    NN.data(),
-    NL.data(),
-    atom->position_per_atom.data(),
-    atom->position_per_atom.data() + N,
-    atom->position_per_atom.data() + 2 * N,
     atom->force_per_atom.data(),
     atom->force_per_atom.data() + N,
     atom->force_per_atom.data() + 2 * N,
-    fx_UF.data(),
-    fy_UF.data(),
-    fz_UF.data());
-  gpuDeviceSynchronize();
+    gpu_fx_UF.data(),
+    gpu_fy_UF.data(),
+    gpu_fz_UF.data());
+  GPU_CHECK_KERNEL
 }
 
-double Ensemble_TI_Liquid::get_UF_sum()
+void Ensemble_TI_Liquid::get_UF_sum()
 {
-  double temp;
-  gpu_get_UF_sum<<<1, 1024>>>(atom->number_of_atoms, gpu_eUF.data());
-  gpu_eUF.copy_to_host(&temp, 1);
-  return temp;
+  gpu_get_UF_sum<<<1, 1024>>>(
+    atom->number_of_atoms, gpu_eUF.data(), gpu_ti_values.data());
+  GPU_CHECK_KERNEL
 }
 
 void Ensemble_TI_Liquid::compute1(
@@ -466,15 +423,9 @@ void Ensemble_TI_Liquid::compute1(
   Ensemble_LAN::compute1(time_step, group, box, atoms, thermo);
 }
 
-void Ensemble_TI_Liquid::find_lambda()
+bool Ensemble_TI_Liquid::find_lambda()
 {
-  find_thermo();
-  int N = atom->number_of_atoms;
   bool need_output = false;
-
-  if (*current_step < t_equil) {
-    avg_pressure += pressure / t_equil;
-  }
 
   const int t = *current_step - t_equil;
   const double r_switch = 1.0 / t_switch;
@@ -489,11 +440,10 @@ void Ensemble_TI_Liquid::find_lambda()
     need_output = true;
   }
 
-  if (need_output) {
-    eUF = get_UF_sum();
-    fprintf(output_file, "%e,%e,%e,%e\n", lambda, dlambda, pe / N, eUF / N);
-    E_diff += 0.5 * (pe - eUF) * abs(dlambda) / N;
-  }
+  if (need_output)
+    get_UF_sum();
+
+  return need_output;
 }
 
 void Ensemble_TI_Liquid::compute3(
@@ -505,11 +455,22 @@ void Ensemble_TI_Liquid::compute3(
   Force& force_object)
 {
 
-  find_lambda();
+  const bool need_output = find_lambda();
 
   add_UF_force(force_object);
 
   Ensemble_LAN::compute2(time_step, group, box, atoms, thermo);
+
+  if (need_output) {
+    gpu_store_ti_pe<<<1, 1>>>(thermo.data(), gpu_ti_values.data());
+    double ti_values[2];
+    gpu_ti_values.copy_to_host(ti_values, 2);
+    const double eUF = ti_values[0];
+    const double pe = ti_values[1];
+    const int N = atom->number_of_atoms;
+    fprintf(output_file, "%e,%e,%e,%e\n", lambda, dlambda, pe / N, eUF / N);
+    E_diff += 0.5 * (pe - eUF) * abs(dlambda) / N;
+  }
 }
 
 double Ensemble_TI_Liquid::switch_func(double t)
