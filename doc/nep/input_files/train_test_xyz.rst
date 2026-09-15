@@ -55,6 +55,7 @@ Essentially any keyword is allowed, but we only read the following ones:
   * :attr:`mforce:R:3` target magnetic-force vector (optional). The aliases
     ``mforces``, ``force_mag``, ``forces_mag``, ``magnetic_force``, and
     ``magnetic_forces`` are also accepted.
+
   ``spin_tangent`` is not an input property. The trainer derives it internally
   from each complete final-DFT spin path.
 

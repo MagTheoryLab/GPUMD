@@ -168,6 +168,7 @@ Here is an example :attr:`nep.in` file using all the default parameters::
   batch         1000      # default
   population	50        # default
   generation	100000    # default
+
 Spin3 example
 -------------
 
