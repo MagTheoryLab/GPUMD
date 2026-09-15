@@ -284,6 +284,9 @@ void Run::compute_force()
 
 void Run::perform_a_run()
 {
+  if (force.has_mfield() && (!force.has_spin_potential() || !atom.has_spin)) {
+    PRINT_INPUT_ERROR("add_mfield requires a Spin potential and spin:R:3.");
+  }
   if ((integrate.use_spin_tspin || integrate.use_spin_sib) &&
       (!force.has_spin_potential() || !atom.has_spin)) {
     PRINT_INPUT_ERROR("A spin ensemble requires a Spin potential and spin:R:3 in model.xyz.");
@@ -655,6 +658,8 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     std::unique_ptr<Action> action;
     action.reset(new Add_Spring(param, num_param, group, atom));
     measure.actions.emplace_back(std::move(action));
+  } else if (strcmp(param[0], "add_mfield") == 0) {
+    force.parse_mfield(param, num_param, group);
   } else if (strcmp(param[0], "add_efield") == 0) {
     std::unique_ptr<Action> action;
     action.reset(new Add_Efield(param, num_param, group));

@@ -16,7 +16,7 @@ the Cartesian magnetic force
 
    \boldsymbol{M}_i=-\frac{\partial U}{\partial\boldsymbol{s}_i},
 
-whose unit is eV per unit spin. Only frames containing ``mforce:R:3`` and
+whose unit is eV/muB. Only frames containing ``mforce:R:3`` and
 atoms enabled by :ref:`spin_dof_type <kw_spin_dof_type>` enter this RMSE. A
 frame without magnetic-force labels can still contribute energy, force, or
 virial data.

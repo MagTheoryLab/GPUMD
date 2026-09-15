@@ -50,7 +50,7 @@ Essentially any keyword is allowed, but we only read the following ones:
   * :attr:`force:R:3` or :attr:`forces:R:3` target force vector
   * :attr:`bec:R:9` target Born effective charge (:term:`BEC`) tensor (optional)
   * :attr:`spin:R:3`, :attr:`spins:R:3`, :attr:`moment:R:3`, or
-    :attr:`moments:R:3` dimensionless Cartesian spin vector (required when
+    :attr:`moments:R:3` Cartesian magnetic-moment vector in muB (required when
     :ref:`spin_mode <kw_spin_mode>` is nonzero)
   * :attr:`mforce:R:3` target magnetic-force vector (optional). The aliases
     ``mforces``, ``force_mag``, ``forces_mag``, ``magnetic_force``, and
@@ -100,7 +100,8 @@ Units
 * Virials are expected in units of eV (such that the virial divided by the volume yields the stress).
 * Dipole and polarizability can be in arbitrary units (such as the Hartree atomic units) as liked (and remembered) by the user.
 * :term:`BEC` is in units of elementary charge e.
-* Spin is dimensionless and magnetic force is in eV per unit spin.
+* Spin is in Bohr magnetons (muB), and magnetic force is in eV/muB.
+  Magnetic force is the negative Cartesian derivative of energy with respect to spin.
 
 Tips
 ----

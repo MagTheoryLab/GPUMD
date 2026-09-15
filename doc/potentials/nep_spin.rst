@@ -41,7 +41,7 @@ element-dependent neural network used by ordinary NEP4. The total energy is
      \right] + U_\mathrm{ZBL},
 
 where :math:`\boldsymbol{r}_i` is the position, :math:`\boldsymbol{s}_i` is a
-dimensionless Cartesian spin vector, :math:`Z_i` denotes the atom type, and
+Cartesian magnetic-moment vector in Bohr magnetons (muB), :math:`Z_i` denotes the atom type, and
 :math:`E^0_{Z_i}` is a fitted per-type energy baseline. The ZBL term is present
 only for ``nep4_spin3_zbl`` and contains no spin dependence.
 

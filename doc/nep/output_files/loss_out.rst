@@ -46,9 +46,9 @@ If a Spin NEP potential is trained, each row contains the following fields::
 
   gen L_t L_1 L_2 L_e_train L_f_train L_v_train L_m_train L_tau_train L_e_test L_f_test L_v_test L_m_test L_tau_test
 
-Here, :attr:`L_m` is the Cartesian magnetic-force RMSE in eV per unit spin and
+Here, :attr:`L_m` is the Cartesian magnetic-force RMSE in eV/muB and
 :attr:`L_tau` is the RMSE of
-:math:`\boldsymbol{s}_i\times\boldsymbol{M}_i`, also in eV per unit spin.
+:math:`\boldsymbol{s}_i\times\boldsymbol{M}_i`, in eV.
 Only structures containing magnetic-force labels contribute to these two
 terms. The grouped magnetic-response loss, when enabled, contributes to
 :attr:`L_t` but currently has no separate output column.

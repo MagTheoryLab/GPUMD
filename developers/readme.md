@@ -102,3 +102,7 @@ If you use new CUDA and HIP APIs, they should be added to this file.
   * Charge: e (proton charge)
 
   
+
+## Spin units
+
+See [Spin units and external magnetic field contract](spin_units.md) for the muB, tesla, and eV/muB conventions.

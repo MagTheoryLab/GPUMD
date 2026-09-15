@@ -68,6 +68,9 @@ public:
 
   bool has_spin_potential(void) const { return has_spin_potential_; }
 
+  void parse_mfield(const char** param, int num_param, const std::vector<Group>& group);
+  bool has_mfield() const { return mfield_enabled_; }
+
   void finalize();
 
   int get_number_of_types(FILE* fid_potential);
@@ -92,6 +95,10 @@ public:
   std::vector<std::unique_ptr<Potential>> potentials;
 
 private:
+  int mfield_group_method_ = 0;
+  int mfield_group_id_ = 0;
+  bool mfield_enabled_ = false;
+  double mfield_[3] = {}; // eV/muB
   int number_of_atoms_ = -1;
   bool is_fcp = false;
   bool has_non_nep = false;

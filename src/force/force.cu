@@ -43,6 +43,7 @@ The driver class calculating force and related quantities.
 #include "utilities/gpu_macro.cuh"
 #include "utilities/read_file.cuh"
 #include <cstring>
+#include <cmath>
 #include <iostream>
 #include <vector>
 
@@ -659,11 +660,53 @@ void Force::compute(
   }
 }
 
+// spin is in muB; this converts a tesla-valued B to magnetic force in eV/muB.
+void Force::parse_mfield(const char** param, int num_param, const std::vector<Group>& group)
+{
+  if (num_param != 6) {
+    PRINT_INPUT_ERROR("add_mfield requires group_method group_id Bx By Bz.");
+  }
+  if (!is_valid_int(param[1], &mfield_group_method_) ||
+      mfield_group_method_ < 0 || mfield_group_method_ >= group.size()) {
+    PRINT_INPUT_ERROR("add_mfield grouping method is invalid.");
+  }
+  if (!is_valid_int(param[2], &mfield_group_id_) || mfield_group_id_ < 0 ||
+      mfield_group_id_ >= group[mfield_group_method_].number) {
+    PRINT_INPUT_ERROR("add_mfield group id is invalid.");
+  }
+  constexpr double muB_eV_per_T = 5.7883818060e-5;
+  double field[3];
+  mfield_enabled_ = false;
+  for (int k = 0; k < 3; ++k) {
+    if (!is_valid_real(param[k + 3], &field[k]) || !std::isfinite(field[k])) {
+      PRINT_INPUT_ERROR("add_mfield components must be finite numbers in tesla.");
+    }
+    mfield_[k] = field[k] * muB_eV_per_T;
+    mfield_enabled_ = mfield_enabled_ || field[k] != 0.0;
+  }
+  printf("External magnetic field: (%g, %g, %g) T, grouping method %d, group %d.\n",
+    field[0], field[1], field[2], mfield_group_method_, mfield_group_id_);
+}
+
+static __global__ void add_mfield(
+  const int n, const int count, const int offset, const int* members,
+  const double hx, const double hy, const double hz,
+  const double* spin, double* energy, double* mforce)
+{
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= count) return;
+  const int i = members[offset + tid];
+  energy[i] -= spin[i] * hx + spin[n + i] * hy + spin[2 * n + i] * hz;
+  mforce[i] += hx;
+  mforce[n + i] += hy;
+  mforce[2 * n + i] += hz;
+}
+
 void Force::compute(
   Box& box,
   GPU_Vector<double>& position_per_atom,
   GPU_Vector<int>& type,
-  std::vector<Group>&,
+  std::vector<Group>& group,
   GPU_Vector<double>& potential_per_atom,
   GPU_Vector<double>& force_per_atom,
   GPU_Vector<double>& virial_per_atom,
@@ -713,6 +756,16 @@ void Force::compute(
     force_per_atom,
     virial_per_atom,
     mforce_per_atom);
+  if (mfield_enabled_ && group[mfield_group_method_].cpu_size[mfield_group_id_] > 0) {
+    const Group& selected = group[mfield_group_method_];
+    const int count = selected.cpu_size[mfield_group_id_];
+    add_mfield<<<(count + 127) / 128, 128>>>(
+      number_of_atoms, count, selected.cpu_size_sum[mfield_group_id_], selected.contents.data(),
+      mfield_[0], mfield_[1], mfield_[2],
+      spin_per_atom.data(), potential_per_atom.data(),
+      mforce_per_atom.data());
+    GPU_CHECK_KERNEL
+  }
 }
 
 static __global__ void gpu_find_per_atom_tensor(
