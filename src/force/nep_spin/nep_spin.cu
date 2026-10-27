@@ -543,12 +543,12 @@ __global__ void find_potential(
   const float* b0 = w0 + static_cast<std::size_t>(hidden_neurons) * descriptor_dim;
   const float* w1 = b0 + hidden_neurons;
   const float* b1 = parameters + static_cast<std::size_t>(num_types) * type_block;
-  float q[MAX_DIM_SPIN] = {0.0f};
+  float q[NEP_Spin_Model_File::MAX_DIM_SPIN] = {0.0f};
   for (int d = 0; d < descriptor_dim; ++d) {
     q[d] = descriptor[static_cast<std::size_t>(N) * d + atom] * q_scaler[d];
   }
   float energy = 0.0f;
-  float fp[MAX_DIM_SPIN] = {0.0f};
+  float fp[NEP_Spin_Model_File::MAX_DIM_SPIN] = {0.0f};
   for (int neuron = 0; neuron < hidden_neurons; ++neuron) {
     float projection = 0.0f;
     for (int d = 0; d < descriptor_dim; ++d) {

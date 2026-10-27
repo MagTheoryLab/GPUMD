@@ -5,7 +5,7 @@ for runtime checks, CUDA and an allocated NVIDIA GPU. Build `src/gpumd` and
 `src/nep` for that GPU; `GPUMD_COMMAND` and `NEP_COMMAND` can select other builds.
 Set `RESULTS` to an existing absolute directory outside the checkout.
 
-Training-only commands, probe builds and the native/JIT × 1/2/4 GPU matrix are
+Training CLI regressions and the native/JIT × 1/2/4 GPU matrix are
 listed in [Spin training validation](spin_training_validation.md).
 
 ## Routine checks
@@ -82,11 +82,6 @@ nvcc -std=c++14 -O3 -arch=sm_70 -Isrc tests_pytest/spin_glsd_analytic.cu \
 python tests_pytest/validate_spin_glsd_analytic.py "$RESULTS/spin_glsd_analytic"
 ```
 
-The magnetic-loss probe checks independent projections, including zero spins.
-The restart probe distinguishes the SNES mean from the exported elite. The
-response probes check rotation geometry, loss normalization and data isolation.
-Initialization and variable-type assignment are checked by the restart probe;
-torque and response-loss edge cases share the magnetic and response probes.
 GLSD's harmonic probe supplies independent statistical expectations
 that a bounded ANN potential cannot supply.
 
