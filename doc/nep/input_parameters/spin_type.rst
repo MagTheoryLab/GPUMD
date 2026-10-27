@@ -19,14 +19,15 @@ parallel/perpendicular and torque supervision when labels are present. All atom
 types contribute structural and magnetic geometric environments within the
 corresponding cutoffs. Only selected types contribute neighbor spin moments.
 
-Atoms outside this selection must have exactly zero input spin. Nonzero values
-are rejected, not silently cleared. Their public magnetic force is zero and
-magnetic labels are excluded from loss counts. Their positions and atomic
-forces remain active, including forces due to magnetic energy.
+For atoms outside this selection, the reader sets the effective spin to zero
+and ignores magnetic-force labels. Original data files need no modification;
+energy and atomic-force labels are preserved. Their public magnetic force is
+zero and they are excluded from magnetic loss counts. Their positions and
+atomic forces remain active, including forces due to magnetic energy.
 
 MD uses the same selection: excluded atoms do not undergo spin integration,
 spin noise or spin-thermostat updates and do not enter spin temperature counts.
-Their restart spin and spin velocity must remain zero.
+Their input spin and restart spin velocity are set to zero in memory.
 
 The grouped-response path derivative uses the selected DFT spin coordinates.
 With :ref:`lambda_spin_response <kw_lambda_spin_response>`, derived tangents
@@ -40,5 +41,5 @@ Do not specify it together with ``spin_type``. The obsolete ``spin_env_type``
 keyword is accepted and ignored: all elements contribute geometric environments,
 regardless of that old list. The same rules apply when reading existing models.
 New models always use ``spin_type`` and never write either obsolete keyword.
-This converts input names, not old environment-dependent model behavior; excluded
-atoms must still have zero spin. These temporary aliases are not part of PR1.
+This converts input names, not old environment-dependent model behavior.
+Excluded atoms use zero effective spin. These temporary aliases are not part of PR1.

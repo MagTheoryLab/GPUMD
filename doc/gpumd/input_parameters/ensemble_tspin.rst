@@ -114,9 +114,9 @@ Spin integration and ``spin_type``
 --------------------------------------
 
 TSPIN integrates only atom types selected by the model's ``spin_type``.
-Other types must have zero spin and zero spin velocity, including in restart
-files, and are excluded from spin kinetic energy and thermostat degrees of
-freedom. All types still participate in lattice dynamics and geometric environments.
+Other types have their input spin and spin velocity set to zero, including
+when reading restart files, and are excluded from spin kinetic energy and
+thermostat degrees of freedom. All types still participate in lattice dynamics and geometric environments.
 
 A zero ``mass_factor`` can additionally freeze a selected magnetic type at its
 current spin. A positive factor cannot activate a type excluded by the model.

@@ -12,7 +12,7 @@ from validate_spin_multigpu import frame
 GPUMD = Path(os.environ.get('GPUMD_COMMAND', Path(__file__).parents[1] / 'src/gpumd'))
 
 
-def execute(directory, ensemble, steps, restart=None):
+def execute(directory, ensemble, steps, restart=None, raw_inactive=False):
     directory.mkdir()
     (directory / 'nep.txt').write_text(selective_type_model())
     if restart:
@@ -22,10 +22,32 @@ def execute(directory, ensemble, steps, restart=None):
         write_xyz(directory / 'model.xyz', oracle['cases']['noncollinear'])
         path = directory / 'model.xyz'
         lines = path.read_text().splitlines()
-        lines[1] = lines[1].replace(':spin:R:3', ':vel:R:3:spin:R:3')
+        lines[1] = lines[1].replace(':spin:R:3', ':vel:R:3:spin:R:3:spin_vel:R:3')
         for i in range(2, len(lines)):
-            fields = lines[i].split(); lines[i] = ' '.join(fields[:4] + ['0']*3 + fields[4:])
+            fields = lines[i].split(); lines[i] = ' '.join(fields[:4] + ['0']*3 + fields[4:] + ['0']*3)
         path.write_text('\n'.join(lines) + '\n')
+    if raw_inactive:
+        path = directory / 'model.xyz'
+        lines = path.read_text().splitlines()
+        properties = next(x for x in lines[1].split() if x.startswith('Properties='))
+        fields = properties.split('=', 1)[1].split(':')
+        offsets, offset = {}, 0
+        for i in range(0, len(fields), 3):
+            offsets[fields[i]] = offset
+            offset += int(fields[i+2])
+        if 'spin_vel' not in offsets:
+            lines[1] = lines[1].replace(properties, properties + ':spin_vel:R:3')
+            offsets['spin_vel'] = offset
+            lines[2:] = [line + ' 0 0 0' for line in lines[2:]]
+        for i in range(2, len(lines)):
+            values = lines[i].split()
+            if values[0] == 'Ge':
+                for name in ('spin', 'spin_vel'):
+                    start = offsets[name]
+                    values[start:start+3] = ['0.4', '-0.3', '0.2']
+                lines[i] = ' '.join(values)
+        path.write_text('\n'.join(lines) + '\n')
+    original = (directory / 'model.xyz').read_bytes()
     spin_velocity = ' spin_velocity' if 'tspin' in ensemble else ''
     (directory / 'run.in').write_text(
         'potential nep.txt\n' + ensemble + '\n'
@@ -37,6 +59,7 @@ def execute(directory, ensemble, steps, restart=None):
     assert result.returncode == 0, result.stdout + result.stderr
     if restart and 'tspin' in ensemble:
         assert 'Reuse initialized spin velocities' in result.stdout
+    assert (directory / 'model.xyz').read_bytes() == original
     state = frame(directory / 'state.xyz')
     rows = (directory / 'model.xyz').read_text().splitlines()[2:]
     inactive = np.array([row.split()[0] == 'Ge' for row in rows])
@@ -57,6 +80,12 @@ def test_nonmagnetic_environment_and_restart(tmp_path, ensemble):
     full = execute(tmp_path / 'full', ensemble, 8)
     first = execute(tmp_path / 'first', ensemble, 4)
     resumed = execute(tmp_path / 'resumed', ensemble, 4, tmp_path / 'first/restart.xyz')
+    raw = execute(tmp_path / 'raw', ensemble, 8, raw_inactive=True)
+    raw_resumed = execute(tmp_path / 'raw_resumed', ensemble, 4,
+                          tmp_path / 'first/restart.xyz', raw_inactive=True)
+    for expected, actual in ((full, raw), (resumed, raw_resumed)):
+        for key in expected:
+            np.testing.assert_array_equal(expected[key], actual[key], err_msg=key)
     # GLSD persists its noise counter. TSPIN persists coordinates/velocities,
     # but initializes a new spin thermostat chain; SIB restarts its noise counter.
     if 'nve_glsd' in ensemble:

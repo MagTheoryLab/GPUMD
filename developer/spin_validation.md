@@ -5,6 +5,9 @@ for runtime checks, CUDA and an allocated NVIDIA GPU. Build `src/gpumd` and
 `src/nep` for that GPU; `GPUMD_COMMAND` and `NEP_COMMAND` can select other builds.
 Set `RESULTS` to an existing absolute directory outside the checkout.
 
+Training-only commands, probe builds and the native/JIT × 1/2/4 GPU matrix are
+listed in [Spin training validation](spin_training_validation.md).
+
 ## Routine checks
 
 ```sh
@@ -24,7 +27,7 @@ and SIB each have one pytest implementation; the external-field SIB oracle is
 part of that suite. Training checks cover actual errors, defaults, masks,
 normalization, model export and restart. The main parity matrix has five cases:
 C2 with selective spins, C3 with all spins and nontrivial restart layout, C1 with
-typewise cutoff and torque supervision, ZBL, and a small periodic box with spin cutoff equal to radial cutoff. Lifecycle checks retain selected and all-type spin degrees of freedom, and reject nonzero spins on excluded types.
+typewise cutoff and torque supervision, ZBL, and a small periodic box with spin cutoff equal to radial cutoff. Lifecycle checks retain selected and all-type spin degrees of freedom, and mask excluded spins and magnetic labels without changing energy or atomic-force labels.
 Detailed malformed model headers belong to the CPU codec suite; the CLI keeps a
 representative rejection check. Spin rejects flexible ZBL in training and in
 current block models; universal ZBL remains in the main parity matrix. The ordinary `tests_regression` suite
@@ -48,7 +51,7 @@ scripts require four allocated GPUs visible through `CUDA_VISIBLE_DEVICES`.
 ```sh
 python -m pytest --noconftest -q -m slow tests_pytest/test_spin_*.py
 python tests_pytest/validate_main_nep_spin3_training.py --check-jit
-python tests_pytest/validate_spin_training_multigpu.py --output "$RESULTS/training"
+python tests_pytest/validate_spin_training_multigpu.py --compile both --output "$RESULTS/training"
 python tests_pytest/validate_spin_multigpu.py --binary src/gpumd \
   --model tests_pytest/fixtures/nep_spin3/nep_spin_o3c2_uniform.nep \
    --output "$RESULTS/runtime"
@@ -74,19 +77,6 @@ Build against current sources and objects. These commands assume V100; change
 changes. The small probes check contracts not exposed by the command-line output.
 
 ```sh
-c++ -std=c++14 -Isrc tests_pytest/rotation_response.cpp -o "$RESULTS/rotation_response"
-"$RESULTS/rotation_response"
-objects=$(find src/main_nep src/utilities -name '*.cu' ! -path 'src/main_nep/main.cu' \
-  | sed 's/\.cu$/.o/')
-for probe in spin_mforce_split restart_parity response_fitness; do
-  nvcc -std=c++14 -O2 -arch=sm_70 -Isrc "tests_pytest/$probe.cu" $objects \
-    -lcublas -lcusolver -lcufft -ldl -lpthread -o "$RESULTS/$probe"
-done
-python tests_pytest/validate_spin_mforce_split.py \
-  --oracle "$RESULTS/spin_mforce_split" --output "$RESULTS/split"
-RESTART_PROBE="$RESULTS/restart_parity" python tests_pytest/validate_restart_scaler.py
-RESPONSE_FITNESS_PROBE="$RESULTS/response_fitness" \
-  python tests_pytest/validate_response_file_runtime.py
 nvcc -std=c++14 -O3 -arch=sm_70 -Isrc tests_pytest/spin_glsd_analytic.cu \
   src/integrate/spin_glsd.cu -o "$RESULTS/spin_glsd_analytic"
 python tests_pytest/validate_spin_glsd_analytic.py "$RESULTS/spin_glsd_analytic"

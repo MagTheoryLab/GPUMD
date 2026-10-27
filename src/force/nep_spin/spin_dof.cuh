@@ -23,13 +23,15 @@ inline void initialize(Atom& atom, const std::vector<int>& active_types)
     atom.cpu_spin_dof[i] = active_types[type];
     if (!atom.cpu_spin_dof[i]) {
       for (int d = 0; d < 3; ++d) {
-        if (spin[d*n+i] != 0.0)
-          PRINT_INPUT_ERROR("Atoms outside spin_type must have zero spin.");
-        if (velocity[d*n+i] != 0.0)
-          PRINT_INPUT_ERROR("Atoms outside spin_type must have zero spin velocity.");
+        spin[d*n+i] = 0.0;
+        velocity[d*n+i] = 0.0;
       }
     }
   }
+  atom.cpu_spin_per_atom = spin;
+  atom.cpu_spin_velocity_per_atom = velocity;
+  atom.spin_per_atom.copy_from_host(spin.data());
+  atom.spin_velocity_per_atom.copy_from_host(velocity.data());
   atom.spin_dof.resize(n);
   atom.spin_dof.copy_from_host(atom.cpu_spin_dof.data());
 }

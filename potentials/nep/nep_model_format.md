@@ -553,7 +553,7 @@ spin_version 1
 `format_version` describes the shared file syntax. `spin_version` describes the
 magnetic descriptor definitions, units, scaler interpretation, and parameter
 layout. Version `1` is the current order/compression (Spin3) model, including its
-existing response/environment masks.
+`spin_type` selection of independent spin coordinates.
 `spin_order` selects O1/O2/O3 within this contract and is not a version number.
 
 `spin_version` is required and must contain exactly the integer token `1`.
@@ -579,10 +579,11 @@ The model fields below supplement the common energy-model fields:
 
 All element types contribute geometric environments within the cutoffs.
 Only `spin_type` elements carry spin degrees of freedom and act as magnetic
-descriptor centers. Other elements must have zero input spin; nonzero input is
-rejected. Their public magnetic force is zero, but atomic forces remain active.
-MD excludes them from spin updates, noise and spin temperature counts; restart
-spin velocities must also be zero. In the internal c516 branch, `spin_dof_type` is temporarily accepted as an input alias for `spin_type`, and `spin_env_type` is accepted but ignored. The two selection names cannot be combined. New model output uses only `spin_type`; PR1 does not include this compatibility path.
+descriptor centers. Readers set other elements' effective spin to zero and
+ignore their magnetic-force labels, preserving energy and atomic-force labels
+without changing the input files. Their public magnetic force is zero, but
+atomic forces remain active. MD clears their spin and restart spin velocity and
+excludes them from spin updates, noise and spin temperature counts. In the internal c516 branch, `spin_dof_type` is temporarily accepted as an input alias for `spin_type`, and `spin_env_type` is accepted but ignored. The two selection names cannot be combined. New model output uses only `spin_type`; PR1 does not include this compatibility path.
 Spins use muB,
 energy uses eV, and magnetic force uses eV/muB. For descriptor definitions and
 scaling formulas, see [the Spin potential documentation](../../doc/potentials/nep_spin.rst).

@@ -350,22 +350,6 @@ def test_nvt_tspin_lattice_off_only_integrates_spins(tmp_path):
     assert np.max(np.abs(rows[:, 6:9] - np.array(initial_spin))) > 1.0e-12
 
 
-@pytest.mark.parametrize("spin,velocity,message", [
-    ("0.4 0 0", "0 0 0", "must have zero spin."),
-    ("0 0 0", "0.15 0 0", "must have zero spin velocity."),
-])
-def test_nonmagnetic_restart_coordinates_rejected(tmp_path, spin, velocity, message):
-    (tmp_path / "nep.txt").write_text(selective_type_model())
-    (tmp_path / "model.xyz").write_text(
-        '2\nLattice="16 0 0 0 16 0 0 0 16" '
-        'Properties=species:S:1:pos:R:3:spin:R:3:spin_vel:R:3\n'
-        'Fe 0 0 0 1 0.2 -0.1 0 0 0\n'
-        f'Ge 3 0 0 {spin} {velocity}\n')
-    (tmp_path / "run.in").write_text("potential nep.txt\n")
-    result = subprocess.run([str(GPUMD)], cwd=tmp_path, capture_output=True, text=True)
-    assert result.returncode != 0 and message in result.stdout + result.stderr
-
-
 def test_element_mass_factor_zero_freezes_only_selected_spins(tmp_path):
     directory = tmp_path / "element_mass"
     directory.mkdir()

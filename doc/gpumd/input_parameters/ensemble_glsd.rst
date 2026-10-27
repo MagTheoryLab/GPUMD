@@ -413,5 +413,5 @@ reductions can still differ; compare deterministic short-time errors and
 stochastic distributions, not long noisy trajectories bitwise.
 The model's ``spin_type`` defines which atoms have spin coordinates.
 Cartesian noise and drift act only on these atoms, including selected atoms
-whose current moment is zero. Excluded atoms must have zero spin and restart
-spin velocity and remain zero under GLSD, including in an external field.
+whose current moment is zero. Excluded atoms have their input spin and restart
+spin velocity set to zero and remain zero under GLSD, including in an external field.

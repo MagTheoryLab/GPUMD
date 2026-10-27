@@ -144,8 +144,8 @@ zero spin vector remains zero. ``nve_sib`` always fixes the lattice and does
 not accept ``lattice``; ``npt_sib`` always includes
 lattice and cell dynamics and therefore does not accept ``lattice off``.
 Only types selected by the model's ``spin_type`` undergo spin integration
-and noise. Excluded types must have zero spin and restart spin velocity; their
-atomic motion remains active.
+and noise. Excluded types have their input spin and restart spin velocity set
+to zero; their atomic motion remains active.
 
 For variable-magnitude dynamics use the independent
 :ref:`GLSD ensembles <kw_ensemble_glsd>`. SIB does not accept ``lsf``, ``damping`` or

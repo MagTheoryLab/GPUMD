@@ -1,5 +1,6 @@
 """Frozen Spin model/oracle loaders; independent of runtime and integrators."""
 import hashlib
+import math
 from pathlib import Path
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin3"
@@ -60,6 +61,8 @@ def read_text_oracle(path, model):
                 raise ValueError(f"{path}: data outside a case: {fields[0]}")
             count = int(fields[1])
             values = [float(value) for value in fields[2:]]
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError(f"{path}: nonfinite {fields[0]} reference")
             if len(values) != count:
                 raise ValueError(
                     f"{path}: {fields[0]} count mismatch: {len(values)} != {count}")
