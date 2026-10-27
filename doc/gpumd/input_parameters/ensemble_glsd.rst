@@ -411,5 +411,7 @@ ghost magnetic forces. Identical input order and seed therefore give identical
 random increments on one and four GPUs. Neighbor ordering and floating-point
 reductions can still differ; compare deterministic short-time errors and
 stochastic distributions, not long noisy trajectories bitwise.
-``spin_dof_type`` is a potential-response mask, not a frozen-spin mask:
-Cartesian thermal noise acts on every atom, including zero moments.
+The model's ``spin_type`` defines which atoms have spin coordinates.
+Cartesian noise and drift act only on these atoms, including selected atoms
+whose current moment is zero. Excluded atoms must have zero spin and restart
+spin velocity and remain zero under GLSD, including in an external field.

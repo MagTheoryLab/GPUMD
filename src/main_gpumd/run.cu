@@ -366,6 +366,7 @@ void Run::parse_one_keyword(
 
   if (tokens[0] == "potential") {
     force.parse_potential(tokens, box, atom.type.size(), run_input);
+    force.initialize_spin_dofs(atom);
     if (force.has_spin_potential() && !spin_unsupported_command.empty()) {
       mark_spin_unsupported(spin_unsupported_command.c_str());
     }

@@ -26,6 +26,8 @@ void run(const char* name, int n, double dt, int steps, double temp,
   std::vector<double> s(3*n,0.0);
   if (!zero) { for (int i=0;i<n;++i) { s[i]=1; s[n+i]=.2; s[2*n+i]=-.3; } }
   atom.spin_per_atom.copy_from_host(s.data());
+  atom.spin_dof.resize(n);
+  atom.spin_dof.fill(1);
   Spin_GLSD integrator(gamma, mobility, temp > 0 ? temp : -1, seed, atom);
   const double natural_dt=dt*1000/TIME_UNIT_CONVERSION;
   for (int j=0;j<steps;++j) {

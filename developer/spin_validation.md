@@ -24,7 +24,7 @@ and SIB each have one pytest implementation; the external-field SIB oracle is
 part of that suite. Training checks cover actual errors, defaults, masks,
 normalization, model export and restart. The main parity matrix has five cases:
 C2 with selective spins, C3 with all spins and nontrivial restart layout, C1 with
-typewise cutoff and torque supervision, ZBL, and a small periodic box with spin cutoff equal to radial cutoff. Lifecycle checks retain both full and subset spin environments.
+typewise cutoff and torque supervision, ZBL, and a small periodic box with spin cutoff equal to radial cutoff. Lifecycle checks retain selected and all-type spin degrees of freedom, and reject nonzero spins on excluded types.
 Detailed malformed model headers belong to the CPU codec suite; the CLI keeps a
 representative rejection check. Spin rejects flexible ZBL in training and in
 current block models; universal ZBL remains in the main parity matrix. The ordinary `tests_regression` suite
@@ -34,6 +34,10 @@ The six files in `fixtures/nep_spin3` are two models, one structure and three
 frozen numerical oracles. The typewise-cutoff case derives its header from the
 C=2 model. SHA256 checks bind each oracle to its model. Never regenerate expected
 values with the candidate implementation to make a failing test pass.
+The nonmagnetic-Ge cases use independent TorchNEP FP64/autograd evaluations;
+Ge spins are zero, while their positions still contribute geometric moments.
+The original oracle was reproduced before updating these inputs; model parameters
+and scalers were unchanged.
 
 ## Extended GPU checks
 

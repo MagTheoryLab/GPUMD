@@ -29,6 +29,7 @@
 #include <vector>
 
 class RunInput;
+class Atom;
 
 class Force
 {
@@ -73,6 +74,8 @@ public:
     GPU_Vector<double>& spin_per_atom,
     GPU_Vector<double>& mforce_per_atom,
     int* position_image = nullptr);
+
+  void initialize_spin_dofs(Atom& atom);
 
   bool has_spin_potential(void) const { return has_spin_potential_; }
 
@@ -129,6 +132,8 @@ private:
   std::vector<std::unique_ptr<Potential>> potentials;
   Spin_Magnetic_Field magnetic_field_;
   bool has_spin_potential_ = false;
+  std::vector<int> spin_types_;
+  GPU_Vector<int> spin_types_gpu_;
   bool is_fcp = false;
   bool has_non_nep = false;
   std::string multiple_potentials_mode_ = "observe"; // "observe" or "average"

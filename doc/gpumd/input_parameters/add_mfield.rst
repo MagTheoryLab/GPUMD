@@ -34,8 +34,9 @@ energy conservation is not guaranteed for atoms crossing this boundary. This
 is a local magnetic drive, not a smooth conservative gradient-field model.
 
 A Spin potential and spin:R:3 are required for a nonzero field. The field acts
-on all selected magnetic moments, independently of the model spin_dof_type
-response mask. It does not impose an integration constraint.
+only on atoms that satisfy the group/region selection and the model's
+``spin_type``. Excluded nonmagnetic atoms retain zero spin and zero public
+magnetic force, including in a nonzero external field.
 
 Each command replaces the previous field and group/region selection. The setting
 persists across run commands. To turn it off::

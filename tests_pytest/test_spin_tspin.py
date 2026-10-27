@@ -23,9 +23,10 @@ TIME_UNIT_CONVERSION = 1.018051e1
 MASK64 = (1 << 64) - 1
 
 
-def _prepare_case(case_dir, run_input, model_text=None):
+def _prepare_case(case_dir, run_input, model_text=None, selected_only=False):
     case_dir.mkdir()
-    shutil.copy(FIXTURE / "nep_spin_o3c2_uniform.nep", case_dir / "nep.txt")
+    model = selective_type_model()
+    (case_dir / "nep.txt").write_text(model if selected_only else model.replace("spin_type Fe\n", ""))
     (case_dir / "model.xyz").write_text(
         model_text if model_text is not None else _model_with_zero_lattice_velocity())
     (case_dir / "run.in").write_text(run_input)
@@ -84,15 +85,16 @@ def _gaussian(seed, atom_index, component):
     return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * PI * u2)
 
 
-def _initial_spin_velocity(seed, mass, temperature, mass_factor):
+def _initial_spin_velocity(seed, mass, temperature, mass_factor, active):
     number_of_atoms = len(mass)
     velocity = np.array([
         [0.5 * _gaussian(seed, atom + 1, component) for component in range(3)]
         for atom in range(number_of_atoms)
     ])
+    velocity[~active] = 0
     twice_kinetic_energy = np.sum(
         mass[:, None] * mass_factor * velocity * velocity)
-    target = 3.0 * number_of_atoms * K_B * temperature
+    target = 3.0 * np.count_nonzero(active) * K_B * temperature
     return velocity * math.sqrt(target / twice_kinetic_energy)
 
 
@@ -150,11 +152,18 @@ def _nhc(position, velocity, mass, twice_kinetic_energy,
 
 
 @pytest.mark.parametrize("pressure_control", [False, True], ids=["nvt", "npt"])
+@pytest.mark.parametrize("selected_only", [False, True])
 def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
-        tmp_path, pressure_control):
+        tmp_path, pressure_control, selected_only):
     # Obtain the initial magnetic force from a fixed-spin run. This keeps the
     # integrator oracle independent of the NEP_Spin derivative implementation.
     static_model = _model_with_zero_lattice_velocity()
+    if selected_only:
+        rows = static_model.splitlines()
+        for i in (3, 5):
+            fields = rows[i].split(); fields[0] = "Ge"; fields[-3:] = ["0", "0", "0"]
+            rows[i] = " ".join(fields)
+        static_model = "\n".join(rows) + "\n"
     lines = static_model.splitlines()
     lines[1] = lines[1].replace(":spin:R:3", ":spin:R:3:spin_vel:R:3")
     for index in range(2, len(lines)):
@@ -166,7 +175,7 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
         "time_step 0\n"
         "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n",
-        "\n".join(lines) + "\n")
+        "\n".join(lines) + "\n", selected_only=selected_only)
     assert static_result.returncode == 0, static_result.stdout + static_result.stderr
     initial = _read_spin_frame(tmp_path / "static" / "state.xyz")
 
@@ -188,14 +197,15 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
         + ensemble
         + f"time_step {time_step_fs}\n"
         "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
-        "run 1\n")
+        "run 1\n", static_model, selected_only=selected_only)
     assert result.returncode == 0, result.stdout + result.stderr
     actual = _read_spin_frame(tmp_path / "tspin" / "state.xyz")
 
     dt = time_step_fs / TIME_UNIT_CONVERSION
-    number_of_atoms = len(actual["mass"])
+    active = np.array([line.split()[0] == "Fe" or not selected_only for line in static_model.splitlines()[2:]])
+    number_of_atoms = np.count_nonzero(active)
     velocity = _initial_spin_velocity(
-        seed, actual["mass"], temperature, mass_factor)
+        seed, actual["mass"], temperature, mass_factor, active)
     position_nhc = np.zeros(4)
     velocity_nhc = np.array([1.0, -1.0, 1.0, -1.0])
     thermal_energy = K_B * temperature
@@ -266,7 +276,7 @@ def test_element_mass_factor_requires_every_present_element(tmp_path):
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
-        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7\n')
+        'Ge 3 0 0 0 0 0 0 0 0\n')
     (directory / "run.in").write_text(
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor Fe 0.001\n"
@@ -340,38 +350,26 @@ def test_nvt_tspin_lattice_off_only_integrates_spins(tmp_path):
     assert np.max(np.abs(rows[:, 6:9] - np.array(initial_spin))) > 1.0e-12
 
 
-def test_tspin_integrates_coordinates_excluded_by_potential_response_mask(tmp_path):
-    directory = tmp_path / "potential_mask"
-    directory.mkdir()
-    (directory / "nep.txt").write_text(selective_type_model())
-    (directory / "model.xyz").write_text(
+@pytest.mark.parametrize("spin,velocity,message", [
+    ("0.4 0 0", "0 0 0", "must have zero spin."),
+    ("0 0 0", "0.15 0 0", "must have zero spin velocity."),
+])
+def test_nonmagnetic_restart_coordinates_rejected(tmp_path, spin, velocity, message):
+    (tmp_path / "nep.txt").write_text(selective_type_model())
+    (tmp_path / "model.xyz").write_text(
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
-        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
-        'pbc="T T T"\n'
-        'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
-        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
-    (directory / "run.in").write_text(
-        "potential nep.txt\n"
-        "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
-        "time_step 0.1\n"
-        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
-        "run 1\n")
-    result = subprocess.run(
-        [str(GPUMD)], cwd=directory,
-        capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    actual = _read_spin_frame(directory / "state.xyz")
-    initial_excluded_spin = np.array([0.4, -0.3, 0.7])
-    assert np.max(np.abs(actual["mforce"][1])) <= 1.0e-12
-    assert np.max(np.abs(actual["spin"][1] - initial_excluded_spin)) > 1.0e-12
-    assert np.max(np.abs(actual["spin_velocity"][1])) > 1.0e-12
+        'Properties=species:S:1:pos:R:3:spin:R:3:spin_vel:R:3\n'
+        'Fe 0 0 0 1 0.2 -0.1 0 0 0\n'
+        f'Ge 3 0 0 {spin} {velocity}\n')
+    (tmp_path / "run.in").write_text("potential nep.txt\n")
+    result = subprocess.run([str(GPUMD)], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode != 0 and message in result.stdout + result.stderr
 
 
 def test_element_mass_factor_zero_freezes_only_selected_spins(tmp_path):
     directory = tmp_path / "element_mass"
     directory.mkdir()
-    (directory / "nep.txt").write_text(selective_type_model())
+    (directory / "nep.txt").write_text(selective_type_model().replace("spin_type Fe\n", ""))
     (directory / "model.xyz").write_text(
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '

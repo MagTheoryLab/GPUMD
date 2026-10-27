@@ -1,0 +1,90 @@
+"""Nonmagnetic geometric environments remain zero under every Spin driver."""
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import numpy as np
+import pytest
+from spin_fixtures import selective_type_model, load_fixture, write_xyz
+from validate_spin_multigpu import frame
+
+GPUMD = Path(os.environ.get('GPUMD_COMMAND', Path(__file__).parents[1] / 'src/gpumd'))
+
+
+def execute(directory, ensemble, steps, restart=None):
+    directory.mkdir()
+    (directory / 'nep.txt').write_text(selective_type_model())
+    if restart:
+        shutil.copyfile(restart, directory / 'model.xyz')
+    else:
+        _, oracle = load_fixture('o3c2_uniform')
+        write_xyz(directory / 'model.xyz', oracle['cases']['noncollinear'])
+        path = directory / 'model.xyz'
+        lines = path.read_text().splitlines()
+        lines[1] = lines[1].replace(':spin:R:3', ':vel:R:3:spin:R:3')
+        for i in range(2, len(lines)):
+            fields = lines[i].split(); lines[i] = ' '.join(fields[:4] + ['0']*3 + fields[4:])
+        path.write_text('\n'.join(lines) + '\n')
+    spin_velocity = ' spin_velocity' if 'tspin' in ensemble else ''
+    (directory / 'run.in').write_text(
+        'potential nep.txt\n' + ensemble + '\n'
+        'add_mfield region 0 1 0 1 0 1 12 -7 31\n'
+        'time_step 0.01\n'
+        f'dump_xyz 1 state.xyz precision double velocity force spin mforce{spin_velocity}\n'
+        f'dump_restart {steps}\nrun {steps}\n')
+    result = subprocess.run([str(GPUMD)], cwd=directory, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if restart and 'tspin' in ensemble:
+        assert 'Reuse initialized spin velocities' in result.stdout
+    state = frame(directory / 'state.xyz')
+    rows = (directory / 'model.xyz').read_text().splitlines()[2:]
+    inactive = np.array([row.split()[0] == 'Ge' for row in rows])
+    assert np.any(inactive), 'test requires nonmagnetic atoms'
+    for name in ('spin', 'mforce') + (('spin_vel',) if spin_velocity else ()):
+        assert np.isfinite(state[name]).all()
+        assert np.count_nonzero(state[name][inactive]) == 0, (name, state[name][inactive])
+    assert np.max(np.abs(state['force'][inactive])) > 1e-8
+    return state
+
+
+@pytest.mark.parametrize('ensemble', [
+    'ensemble nvt_tspin 300 300 100 lattice off seed 731',
+    'ensemble nve_sib alpha 0.1 stemp 300 seed 731',
+    'ensemble nve_glsd damping 0.01 stemp 300 seed 731',
+])
+def test_nonmagnetic_environment_and_restart(tmp_path, ensemble):
+    full = execute(tmp_path / 'full', ensemble, 8)
+    first = execute(tmp_path / 'first', ensemble, 4)
+    resumed = execute(tmp_path / 'resumed', ensemble, 4, tmp_path / 'first/restart.xyz')
+    # GLSD persists its noise counter. TSPIN persists coordinates/velocities,
+    # but initializes a new spin thermostat chain; SIB restarts its noise counter.
+    if 'nve_glsd' in ensemble:
+        np.testing.assert_allclose(full['spin'], resumed['spin'], rtol=0, atol=2e-10)
+    if 'tspin' in ensemble:
+        saved = frame(tmp_path / 'first/restart.xyz')
+        for name in ('spin', 'spin_vel'):
+            # TSPIN's existing restart writer uses %g (six significant digits).
+            serialized = np.array([[float(format(x, '.6g')) for x in row]
+                                   for row in first[name]])
+            np.testing.assert_array_equal(serialized, saved[name])
+
+
+def test_nonmagnetic_geometry_has_magnetic_atomic_force(tmp_path):
+    from copy import deepcopy
+    from spin_fixtures import load_fixture
+    from validate_nep_spin3_runtime import run_case
+    model, oracle = load_fixture('o3c2_uniform')
+    case = deepcopy(oracle['cases']['noncollinear'])
+    atom = case['types'].index('Ge')
+    state = run_case(tmp_path, 'center', case, model)
+    zero = deepcopy(case); zero['spins'] = [[0, 0, 0] for _ in case['types']]
+    nonmagnetic = run_case(tmp_path, 'zero', zero, model)
+    assert max(abs(a-b) for a,b in zip(state['force'][atom], nonmagnetic['force'][atom])) > 1e-5
+    h = 0.002
+    energies = []
+    for direction in (-1, 1):
+        moved = deepcopy(case); moved['positions'][atom][0] += direction * h
+        energies.append(run_case(tmp_path, str(direction), moved, model)['energy'])
+    numerical = -(energies[1]-energies[0]) / (2*h)
+    assert abs(numerical-state['force'][atom][0]) < 2e-4

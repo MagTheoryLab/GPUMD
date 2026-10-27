@@ -115,13 +115,14 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
     }
     return true;
   };
-  spin_dof_type.assign(types, 1);
-  if (doc.find_field("spin_dof_type") && !active_types("spin_dof_type", spin_dof_type)) return false;
-  spin_env_type = spin_dof_type;
-  if (doc.find_field("spin_env_type") && !active_types("spin_env_type", spin_env_type)) return false;
-  for (int t = 0; t < types; ++t)
-    if (spin_dof_type[t] && !spin_env_type[t])
-      return fail(error, "spin_dof_type must be a subset of spin_env_type.");
+  spin_type.assign(types, 1);
+  // Temporary c516 input compatibility; the parsed state uses spin_type only.
+  const bool legacy_type = doc.find_field("spin_dof_type") != nullptr;
+  if (legacy_type && doc.find_field("spin_type"))
+    return fail(error, "Do not combine spin_type and spin_dof_type.");
+  const char* type_field = legacy_type ? "spin_dof_type" : "spin_type";
+  if (doc.find_field(type_field) && !active_types(type_field, spin_type)) return false;
+  if (doc.find_field("spin_env_type")) handled.push_back("spin_env_type");
 
   f = field("energy_reference", types, types);
   if (!f) return false;

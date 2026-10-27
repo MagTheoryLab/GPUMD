@@ -154,7 +154,8 @@ Spin_TSPIN::Spin_TSPIN(
       atom.mforce_per_atom.size() != 3 * number_of_atoms ||
       atom.spin_velocity_per_atom.size() != 3 * number_of_atoms ||
       atom.cpu_mass.size() != number_of_atoms ||
-      atom.cpu_type.size() != number_of_atoms) {
+      atom.cpu_type.size() != number_of_atoms ||
+      atom.cpu_spin_dof.size() != number_of_atoms) {
     PRINT_INPUT_ERROR("TSPIN requires complete spin, mforce, mass, and type arrays.");
   }
   if (!(initial_temperature > 0.0) || !std::isfinite(initial_temperature) ||
@@ -171,7 +172,8 @@ Spin_TSPIN::Spin_TSPIN(
   }
   cpu_mass_factor_per_atom_.resize(number_of_atoms);
   for (int atom_index = 0; atom_index < number_of_atoms; ++atom_index) {
-    const double factor = mass_factor_by_type[atom.cpu_type[atom_index]];
+    const double factor = atom.cpu_spin_dof[atom_index] ?
+      mass_factor_by_type[atom.cpu_type[atom_index]] : 0.0;
     if (factor < 0.0 || !std::isfinite(factor)) {
       PRINT_INPUT_ERROR("TSPIN mass factors should be finite and >= 0.");
     }

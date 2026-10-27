@@ -49,6 +49,7 @@ __device__ void cayley_direction(
 
 static __global__ void gpu_sib_predictor_midpoint(
   const int number_of_atoms,
+  const int* active,
   const double drift,
   const double alpha,
   const double noise_prefactor,
@@ -60,7 +61,7 @@ static __global__ void gpu_sib_predictor_midpoint(
   double* noise_increment)
 {
   const int atom = blockIdx.x * blockDim.x + threadIdx.x;
-  if (atom >= number_of_atoms) {
+  if (atom >= number_of_atoms || !active[atom]) {
     return;
   }
 
@@ -114,6 +115,7 @@ static __global__ void gpu_sib_predictor_midpoint(
 
 static __global__ void gpu_sib_corrector(
   const int number_of_atoms,
+  const int* active,
   const double drift,
   const double alpha,
   const double* spin_start,
@@ -122,7 +124,7 @@ static __global__ void gpu_sib_corrector(
   double* spin)
 {
   const int atom = blockIdx.x * blockDim.x + threadIdx.x;
-  if (atom >= number_of_atoms) {
+  if (atom >= number_of_atoms || !active[atom]) {
     return;
   }
 
@@ -175,7 +177,8 @@ Spin_SIB::Spin_SIB(
 {
   const int number_of_atoms = atom.number_of_atoms;
   if (!atom.has_spin || atom.spin_per_atom.size() != 3 * number_of_atoms ||
-      atom.mforce_per_atom.size() != 3 * number_of_atoms) {
+      atom.mforce_per_atom.size() != 3 * number_of_atoms ||
+      atom.spin_dof.size() != number_of_atoms) {
     PRINT_INPUT_ERROR("SIB requires complete spin and mforce arrays.");
   }
   if (!std::isfinite(alpha_) || alpha_ < 0.0 ||
@@ -211,6 +214,7 @@ void Spin_SIB::compute1(const double time_step, Atom& atom)
   const int number_of_atoms = atom.number_of_atoms;
   gpu_sib_predictor_midpoint<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
     number_of_atoms,
+    atom.spin_dof.data(),
     drift,
     alpha_,
     noise_prefactor,
@@ -230,6 +234,7 @@ void Spin_SIB::compute2(const double time_step, Atom& atom)
   const int number_of_atoms = atom.number_of_atoms;
   gpu_sib_corrector<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
     number_of_atoms,
+    atom.spin_dof.data(),
     drift,
     alpha_,
     spin_start_.data(),

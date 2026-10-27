@@ -8,6 +8,7 @@ class NEP_Spin_MultiGPU : public Potential
 public:
   NEP_Spin_MultiGPU(int devices, const char* model, int atoms, int direction);
   ~NEP_Spin_MultiGPU() override;
+  const NEP_Spin::Model& model() const { return domains_.front()->potential->model(); }
   using Potential::compute;
   void compute(Box&, const GPU_Vector<int>&, const GPU_Vector<double>&,
     GPU_Vector<double>&, GPU_Vector<double>&, GPU_Vector<double>&) override

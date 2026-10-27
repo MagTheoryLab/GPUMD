@@ -35,6 +35,7 @@ The driver class calculating force and related quantities.
 #include "lj.cuh"
 #include "nep.cuh"
 #include "nep_spin/nep_spin.cuh"
+#include "nep_spin/spin_dof.cuh"
 #include "utilities/nep_spin_model_file.cuh"
 #include "nep_spin/nep_spin_multigpu.cuh"
 #include "nep_multigpu.cuh"
@@ -132,6 +133,11 @@ std::unique_ptr<Potential> Force::create_potential(
     CHECK(gpuGetDeviceCount(&num_gpus));
     if (num_gpus == 1) potential.reset(new NEP_Spin(tokens[1].c_str(), number_of_atoms));
     else potential.reset(new NEP_Spin_MultiGPU(num_gpus, tokens[1].c_str(), number_of_atoms, direction));
+    spin_types_ = num_gpus == 1 ?
+      static_cast<NEP_Spin*>(potential.get())->model().spin_type_active :
+      static_cast<NEP_Spin_MultiGPU*>(potential.get())->model().spin_type_active;
+    spin_types_gpu_.resize(spin_types_.size());
+    spin_types_gpu_.copy_from_host(spin_types_.data());
     is_nep = true;
     has_spin_potential_ = true;
   } else if (
@@ -639,6 +645,11 @@ void Force::compute(
 
 }
 
+void Force::initialize_spin_dofs(Atom& atom)
+{
+  if (has_spin_potential_) spin_dof::initialize(atom, spin_types_);
+}
+
 void Force::compute_spin(
   Box& box,
   GPU_Vector<double>& position_per_atom,
@@ -678,4 +689,8 @@ void Force::compute_spin(
     mforce_per_atom);
   magnetic_field_.compute(
     box, position_per_atom, group, spin_per_atom, potential_per_atom, mforce_per_atom);
+  // External fields also respect the model's independent spin coordinates.
+  spin_dof::mask_force<<<(number_of_atoms + 127) / 128, 128>>>(
+    number_of_atoms, type.data(), spin_types_gpu_.data(), mforce_per_atom.data());
+  GPU_CHECK_KERNEL
 }

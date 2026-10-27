@@ -14,13 +14,13 @@
 // The transverse part of mobility H is -mobility S x (S x H)/|S|^2;
 // evaluating the full vector avoids a singular longitudinal/transverse split at zero.
 static __global__ void gpu_glsd_heun(
-  const int n, const bool correct, const double dt, const double gamma,
+  const int n, const int* active, const bool correct, const double dt, const double gamma,
   const double mobility, const double sigma, const std::uint64_t seed,
   const std::uint64_t step, const double* field, double* spin,
   double* start, double* drift_start, double* noise)
 {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= n) return;
+  if (i >= n || !active[i]) return;
   const double sx = spin[i], sy = spin[n+i], sz = spin[2*n+i];
   const double hx = field[i], hy = field[n+i], hz = field[2*n+i];
   const double drift[3] = {gamma * (hy*sz-hz*sy) + mobility*hx,
@@ -47,7 +47,7 @@ Spin_GLSD::Spin_GLSD(
 {
   const int n = atom.number_of_atoms;
   if (!atom.has_spin || atom.spin_per_atom.size() != 3 * n ||
-      atom.mforce_per_atom.size() != 3 * n) {
+      atom.mforce_per_atom.size() != 3 * n || atom.spin_dof.size() != n) {
     PRINT_INPUT_ERROR("GLSD requires complete spin and mforce arrays.");
   }
   if (!std::isfinite(gamma_) || gamma_ <= 0.0 ||
@@ -81,7 +81,7 @@ void Spin_GLSD::compute1(const double time_step, Atom& atom)
     (spin_temperature_ == 0.0 ? temperature : spin_temperature_);
   const double sigma = sqrt(2.0 * mobility_ * K_B * noise_temperature * dt_ps);
   gpu_glsd_heun<<<(atom.number_of_atoms + 127) / 128, 128>>>(
-    atom.number_of_atoms, false, dt_ps, gamma_, mobility_, sigma, seed_, step_,
+    atom.number_of_atoms, atom.spin_dof.data(), false, dt_ps, gamma_, mobility_, sigma, seed_, step_,
     atom.mforce_per_atom.data(), atom.spin_per_atom.data(), spin_start_.data(),
     drift_start_.data(), noise_increment_.data());
   GPU_CHECK_KERNEL
@@ -91,7 +91,7 @@ void Spin_GLSD::compute2(const double time_step, Atom& atom)
 {
   const double dt_ps = time_step * TIME_UNIT_CONVERSION / 1000.0;
   gpu_glsd_heun<<<(atom.number_of_atoms + 127) / 128, 128>>>(
-    atom.number_of_atoms, true, dt_ps, gamma_, mobility_, 0.0, seed_, step_,
+    atom.number_of_atoms, atom.spin_dof.data(), true, dt_ps, gamma_, mobility_, 0.0, seed_, step_,
     atom.mforce_per_atom.data(), atom.spin_per_atom.data(), spin_start_.data(),
     drift_start_.data(), noise_increment_.data());
   GPU_CHECK_KERNEL

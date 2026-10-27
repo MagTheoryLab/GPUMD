@@ -94,11 +94,11 @@ __global__ void mask_inactive_spin_mforce(
   const int atom_count,
   const int atom_stride,
   const int* __restrict__ types,
-  const int* __restrict__ spin_dof_type_active,
+  const int* __restrict__ spin_type_active,
   double* __restrict__ mforce)
 {
   const int atom = blockIdx.x * blockDim.x + threadIdx.x;
-  if (atom < atom_count && spin_dof_type_active[types[atom]] == 0) {
+  if (atom < atom_count && spin_type_active[types[atom]] == 0) {
     mforce[atom] = 0.0;
     mforce[atom_stride + atom] = 0.0;
     mforce[2 * atom_stride + atom] = 0.0;
@@ -870,8 +870,7 @@ void launch_spin3_descriptors_typed(
     static_cast<int>(model.radial_parameter_count + model.angular_parameter_count),
     box,
     type.data(),
-    data.spin_dof_type_active.data(),
-    data.spin_env_type_active.data(),
+    data.spin_type_active.data(),
     position.data(),
     slot_r12,
     r12_plane_size,
@@ -888,7 +887,7 @@ void launch_spin3_descriptors_typed(
     N,
     model.struct_descriptor_dim,
     type.data(),
-    data.spin_dof_type_active.data(),
+    data.spin_type_active.data(),
     spin.data(),
     data.spin_projection_parameters.data(),
     data.spin3_moments.data(),
@@ -956,8 +955,7 @@ void launch_spin3_forces_typed(
       data.spin_cutoff_pair.data(),
       box,
       type.data(),
-      data.spin_dof_type_active.data(),
-      data.spin_env_type_active.data(),
+      data.spin_type_active.data(),
       position.data(),
       slot_r12,
       r12_plane_size,
@@ -1002,14 +1000,14 @@ void launch_spin3_forces(
     case 9: launch_spin3_forces_typed<9>(model, box, type, position, spin, data, force, mforce, virial, slot_r12, r12_plane_size); break;
   }
   const bool has_inactive_dof = std::any_of(
-    model.spin_dof_type_active.begin(),
-    model.spin_dof_type_active.end(),
+    model.spin_type_active.begin(),
+    model.spin_type_active.end(),
     [](const int active) { return active == 0; });
   if (has_inactive_dof) {
     constexpr int block_size = 128;
     const int grid_size = (type.size() - 1) / block_size + 1;
     mask_inactive_spin_mforce<<<grid_size, block_size>>>(
-      type.size(), type.size(), type.data(), data.spin_dof_type_active.data(), mforce.data());
+      type.size(), type.size(), type.data(), data.spin_type_active.data(), mforce.data());
   }
   GPU_CHECK_KERNEL
 }
@@ -1265,8 +1263,7 @@ void NEP_Spin::read_model(const char* file_potential)
   model_.spin_order = file.spin_order;
   model_.spin_soc = file.spin_soc;
   model_.spin_projection_size = file.spin_projection_size;
-  model_.spin_dof_type_active = file.spin_dof_type;
-  model_.spin_env_type_active = file.spin_env_type;
+  model_.spin_type_active = file.spin_type;
   model_.energy_reference = file.energy_reference;
   model_.struct_descriptor_dim = file.dim_struct;
   model_.spin_descriptor_dim = file.dim_spin;
@@ -1332,10 +1329,8 @@ void NEP_Spin::read_model(const char* file_potential)
   const auto& energy_reference = model_.energy_reference;
   data_.energy_reference.resize(energy_reference.size());
   data_.energy_reference.copy_from_host(energy_reference.data());
-  data_.spin_dof_type_active.resize(model_.spin_dof_type_active.size());
-  data_.spin_dof_type_active.copy_from_host(model_.spin_dof_type_active.data());
-  data_.spin_env_type_active.resize(model_.spin_env_type_active.size());
-  data_.spin_env_type_active.copy_from_host(model_.spin_env_type_active.data());
+  data_.spin_type_active.resize(model_.spin_type_active.size());
+  data_.spin_type_active.copy_from_host(model_.spin_type_active.data());
 
   paramb_.num_types = model_.num_types;
   paramb_.num_types_sq = model_.num_types * model_.num_types;
