@@ -359,7 +359,8 @@ receive public magnetic forces. The
 :ref:`spin_env_type <kw_spin_env_type>` mask selects neighbor types that enter
 the moment sums. An environment-only spin can therefore affect the energy and
 other spins while its public magnetic force is zero. This mask belongs to the
-potential response and is not an integration constraint.
+potential response and is not an integration constraint; a TSPIN integrator
+still propagates that spin coordinate.
 
 .. _nep_spin_dimensions:
 
@@ -439,7 +440,8 @@ For an atom type enabled by :ref:`spin_dof_type <kw_spin_dof_type>`, the
 public magnetic force is
 :math:`\boldsymbol{M}_k=\widetilde{\boldsymbol{M}}_k`. For an inactive type it
 is explicitly set to zero, even when that atom is retained as an
-environment-only spin input. This selects reported derivatives, not constrained spin coordinates.
+environment-only spin input. This does not remove the atom from the spin
+integrator or its thermostat degrees of freedom.
 
 Writing :math:`q^i_\nu` for either a structural or magnetic descriptor
 component, the chain rule gives
@@ -474,6 +476,59 @@ The spin torque used for training diagnostics is
 
 ZBL contributes to energy, atomic force, and virial but not to magnetic force
 or torque because it is spin independent.
+
+Pressure-controlled spin dynamics
+=================================
+
+``npt_tspin`` combines TSPIN with the same Nosé--Hoover-chain and
+Parrinello--Rahman/MTTK cell dynamics used by :attr:`npt_mttk`. Its extended
+energy has the schematic form
+
+.. math::
+
+   \mathcal{H}_\mathrm{ext}
+   = K_R + K_S + U(\boldsymbol R,\boldsymbol S)
+   + P_\mathrm{ext}V
+   + \mathcal{H}_{\mathrm{NH},R}
+   + \mathcal{H}_{\mathrm{NH},S}
+   + \mathcal{H}_{\mathrm{NH},h},
+
+where :math:`K_R` is lattice kinetic energy,
+:math:`K_S=\sum_i|\boldsymbol\pi_i^S|^2/(2\mu_i)` is spin-coordinate kinetic
+energy, and :math:`h` denotes the cell degrees of freedom. The spin equations
+are
+
+.. math::
+
+   \dot{\boldsymbol s}_i
+   = \frac{\boldsymbol\pi_i^S}{\mu_i},
+   \qquad
+   \dot{\boldsymbol\pi}_i^S
+   = \boldsymbol M_i-\xi_S\boldsymbol\pi_i^S.
+
+Cartesian spins are internal coordinates: changing :math:`h` remaps atomic
+positions, but neither rescales nor rotates :math:`\boldsymbol s_i`. Therefore
+the barostat pressure contains lattice kinetic stress and the full potential
+virial,
+
+.. math::
+
+   P_{\alpha\beta}
+   = \frac{1}{V}\left[
+       \sum_i m_i v_{i\alpha}v_{i\beta}
+       + W_{\alpha\beta}(\boldsymbol R,\boldsymbol S)
+     \right],
+
+but no :math:`K_S` term. Spin still affects the cell because the analytical
+virial :math:`W` differentiates the complete Spin-potential energy with
+respect to cell deformation. Separate Nosé--Hoover chains control lattice and
+spin kinetic energies at the same target-temperature ramp; the pressure chain
+controls the cell momenta.
+
+The complete user-facing syntax, initialization rules, restart behavior, and
+output example are documented under :ref:`npt_tspin <kw_npt_tspin>`. This
+implementation does not define ``npt_ber_tspin`` or ``npt_scr_tspin``; the
+only pressure-controlled TSPIN path is the MTTK composition described above.
 
 Spin loss terms
 ===============
@@ -563,7 +618,14 @@ Model formats and input
 See :ref:`spin_version <kw_spin_version>` and the neighboring ``spin_*`` keyword
 pages for descriptor configuration. The complete extended-XYZ data contract,
 including magnetic-force labels and grouped response metadata, is documented
-under :ref:`train_test_xyz`.
+under :ref:`train_test_xyz`. Runtime ``model.xyz`` files require one
+``spin:R:3`` vector per atom. Cartesian spin dynamics with separate lattice
+and spin thermostats is available through :attr:`nvt_tspin`;
+pressure-controlled TSPIN dynamics uses :attr:`npt_tspin`. Fixed-magnitude
+stochastic LLG dynamics is available through :ref:`nvt_sib <kw_nvt_sib>` and
+:ref:`npt_sib <kw_npt_sib>`. Variable-magnitude, first-order Langevin dynamics
+is available through the independent :ref:`GLSD ensembles <kw_ensemble_glsd>`.
+
 
 Training specialization
 -----------------------

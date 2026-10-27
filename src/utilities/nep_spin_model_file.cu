@@ -1,5 +1,7 @@
 /* This file is part of GPUMD. SPDX-License-Identifier: LGPL-3.0-or-later */
 #include "nep_spin_model_file.cuh"
+#include <fstream>
+#include <sstream>
 #include "nep_file.cuh"
 #include <algorithm>
 #include <cmath>
@@ -202,4 +204,18 @@ int NEP_Spin_Model_File::spin_dimension(int channels, int l_max, int order, int 
     if (soc && L >= 1 && C >= 3) dimension += C;
   }
   return dimension;
+}
+
+bool is_nep_spin_model_file(const std::string& path)
+{
+  std::ifstream input(path);
+  std::string line;
+  while (std::getline(input, line)) {
+    std::istringstream fields(line.substr(0, line.find('#')));
+    std::string keyword, model, extra;
+    if (fields >> keyword && keyword == "model") {
+      return (fields >> model) && model == "nep_spin" && !(fields >> extra);
+    }
+  }
+  return false;
 }

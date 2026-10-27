@@ -52,6 +52,18 @@ def metadata(model):
                 if line.startswith(('spin_', 'energy_reference ')))
 
 
+def runtime_mforce(directory, model, reference):
+    directory.mkdir()
+    (directory / "nep.txt").write_text(model)
+    (directory / "model.xyz").write_text("\n".join(base.TRAIN_XYZ.splitlines()[:6]) + "\n")
+    (directory / "run.in").write_text(
+        "potential nep.txt\nvelocity 1\nensemble nve\ntime_step 0\n"
+        "dump_xyz 1 result.xyz force potential spin mforce virial precision double\nrun 1\n")
+    result = base.run(base.GPUMD, directory)
+    assert result.returncode == 0, result.stdout + result.stderr
+    rows = [[float(x) for x in line.split()[1:]]
+            for line in (directory / "result.xyz").read_text().splitlines()[-4:]]
+    return compare({"mforce": reference["mforce"][:4]}, {"mforce": [r[9:12] for r in rows]})
 
 
 def strip_labels(xyz, frames):
@@ -154,6 +166,9 @@ def validate(root):
         # An exported import model must also be accepted with omitted input masks.
         predict(root / (name + "_import_reload"), (imported / "nep.txt").read_text())
         if name == "fe_env_fe":
+            # The subset environment is distinct from the all-environment cases
+            # exercised by the main training/runtime parity suite.
+            report[name + "_md"] = runtime_mforce(root / (name + "_md"), saved, after)
             execute(root / "partial_env", NO_MASKS + "spin_env_type Fe\n", model=model, restart=frozen)
             execute(root / "invalid_fresh_subset", NO_MASKS + "spin_env_type Fe\n",
                     error="spin_dof_type must be a subset")

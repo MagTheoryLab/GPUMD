@@ -27,3 +27,6 @@ struct NEP_Spin_Model_File {
   bool read(std::istream& input, std::string& error);
   static int spin_dimension(int channels, int l_max, int order, int soc);
 };
+
+// Inspect the model selector without parsing parameter/scaler blocks.
+bool is_nep_spin_model_file(const std::string& path);
