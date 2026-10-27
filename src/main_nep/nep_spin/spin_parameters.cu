@@ -1,9 +1,6 @@
 /*
     Copyright 2017 Zheyong Fan and GPUMD development team
     This file is part of GPUMD and is distributed under LGPLv3 or later.
-
-    Spin3 training shares its descriptor and derivative implementation with
-    the production NEP_Spin runtime.
 */
 
 #include "main_nep/common/nep_model.cuh"
@@ -111,7 +108,7 @@ bool Spin_Parameters::parse_keyword(const char** param, int num_param)
     parse_spin_cutoff(param, num_param);
   } else if (strcmp(param[0], "spin_type") == 0 || strcmp(param[0], "spin_dof_type") == 0) {
     // Temporary c516 input alias; state and model output use spin_type only.
-    parse_spin_active_types(param, num_param, "spin_type", spin_type_names, is_spin_type_set);
+    parse_spin_type(param, num_param);
     if (strcmp(param[0], "spin_dof_type") == 0) {
       printf("    spin_dof_type is accepted as spin_type (c516 compatibility).\n");
     }
@@ -350,28 +347,24 @@ void Spin_Parameters::parse_spin_cutoff(const char** param, int num_param)
   spin_cutoff = *std::max_element(spin_cutoff_by_type.begin(), spin_cutoff_by_type.end());
 }
 
-void Spin_Parameters::parse_spin_active_types(
-  const char** param,
-  int num_param,
-  const char* keyword,
-  std::vector<std::string>& names,
-  bool& is_set)
+void Spin_Parameters::parse_spin_type(const char** param, int num_param)
 {
-  if (is_set) {
+  if (is_spin_type_set) {
     PRINT_INPUT_ERROR("Duplicate spin_type keyword.\n");
   }
-  is_set = true;
+  is_spin_type_set = true;
   if (num_param < 2) {
     PRINT_INPUT_ERROR("spin_type must enable at least one type.\n");
   }
-  names.clear();
+  spin_type_names.clear();
   for (int n = 1; n < num_param; ++n) {
-    if (std::find(names.begin(), names.end(), param[n]) != names.end()) {
+    if (
+      std::find(spin_type_names.begin(), spin_type_names.end(), param[n]) !=
+      spin_type_names.end()) {
       PRINT_INPUT_ERROR("Duplicate atom type in spin_type.\n");
     }
-    names.emplace_back(param[n]);
+    spin_type_names.emplace_back(param[n]);
   }
-  (void)keyword;
 }
 
 void Spin_Parameters::read_zbl_in()
