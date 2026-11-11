@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Compare generic and compiled version2 at high spin order and high angular rank."""
+"""Compare generic and compiled spin at high spin order and high angular rank."""
 import argparse
 import json
 import random
 import re
 from pathlib import Path
-from validate_spin_v2 import FIXTURE, INPUT, execute, training_xyz
+from validate_spin_model import FIXTURE, INPUT, execute, training_xyz
 
 
 def main():
@@ -22,8 +22,7 @@ def main():
         dim = 30+response
         count = 3*(32*dim+64)+1+810+projection
         header = template
-        for key,value in [('spin_compress',C),('spin_l_max',L),('spin_order',S),
-                          ('spin_projection_size',projection)]:
+        for key,value in [('spin_compress',C),('spin_l_max',L),('spin_order',S)]:
             header = re.sub(rf'(?m)^{key} .*$', f'{key} {value}', header)
         rng = random.Random(3401)
         model = header + f'@ parameters {count}\n'

@@ -1,16 +1,16 @@
 /* This file is part of GPUMD. SPDX-License-Identifier: LGPL-3.0-or-later */
 #pragma once
-#include "force/nep_spin/spin_density_layout.cuh"
+#include "force/nep_spin/spin_layout.cuh"
 #include <iomanip>
 #include <sstream>
 
-namespace spin_density {
+namespace nep_spin {
 // Bake the existing layout tables into getters, so unrolled accesses are constants.
 // This generates metadata only; all forward and adjoint arithmetic stays in the shared kernel.
 inline std::string compile_layout(const Layout& v) {
   std::ostringstream out;
   out << std::scientific << std::setprecision(17);
-  out << "namespace spin_density { struct CompiledLayout {\n";
+  out << "namespace nep_spin { struct CompiledLayout {\n";
   auto count = [&](const char* name, int value) {
     out << "enum : int { " << name << " = " << value << " };\n";
   };
@@ -64,4 +64,4 @@ inline std::string compile_layout(const Layout& v) {
   out << "}; }\n";
   return out.str();
 }
-} // namespace spin_density
+} // namespace nep_spin

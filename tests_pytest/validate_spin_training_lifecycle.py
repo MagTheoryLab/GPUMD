@@ -6,7 +6,7 @@ import re
 import tempfile
 from pathlib import Path
 
-import validate_main_nep_spin3_training as base
+import validate_spin_training as base
 
 CONFIG = base.NEP_IN + "nep_compile 0\nseed 20261021\n"
 NO_MASKS = re.sub(r"^spin_type.*\n", "", CONFIG, flags=re.M)

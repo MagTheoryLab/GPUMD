@@ -28,7 +28,7 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 #pragma once
 
 #include "force/neighbor.cuh"
-#include "force/nep_spin/spin_density_storage.cuh"
+#include "force/nep_spin/spin_storage.cuh"
 #include "force/potential.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_vector.cuh"
@@ -99,7 +99,7 @@ public:
 
 private:
   struct Data {
-    spin_density::Storage density;
+    nep_spin::Storage spin_layout;
     GPU_Vector<float> parameters;
     GPU_Vector<float> descriptor;
     GPU_Vector<float> Fp;
@@ -110,7 +110,7 @@ private:
     GPU_Vector<double> energy_reference;
     GPU_Vector<int> spin_type_active;
     GPU_Vector<float> spin_cutoff_pair;
-    GPU_Vector<float> spin3_moments;
+    GPU_Vector<float> spin_moments;
     GPU_Vector<int> NN_radial;
     GPU_Vector<int> NL_radial;
     GPU_Vector<int> NN_angular;
@@ -145,13 +145,9 @@ private:
     int max_neighbors_global = 0;
     int max_neighbors_angular = 0;
     int neighbor_capacity = 0;
-    int spin_basis_size[2] = {0, 0};
-    int spin_l_max[3] = {0, 0, 0};
-    int spin_version = 1;
     int spin_compress = 0;
     int spin_order = 0;
     int spin_soc = 0;
-    int spin_projection_size = 0;
     double cutoff_radial = 0.0;
     double cutoff_angular = 0.0;
     double spin_cutoff = 0.0;
@@ -161,7 +157,6 @@ private:
     std::size_t ann_parameter_count = 0;
     std::size_t radial_parameter_count = 0;
     std::size_t angular_parameter_count = 0;
-    std::size_t spin_parameter_count = 0;
     std::size_t spin_projection_parameter_count = 0;
     std::size_t model_parameter_count = 0;
     std::vector<std::string> elements;
@@ -260,8 +255,9 @@ private:
     const int block_size,
     const std::size_t shared_size);
 
-  template <int C>
-  void launch_spin3_descriptors_typed(
+
+
+  void launch_spin_descriptors(
     const Model& model,
     const Box& box,
     const GPU_Vector<int>& type,
@@ -272,32 +268,9 @@ private:
     int r12_plane_size = 0,
     gpuStream_t stream = nullptr);
 
-  void launch_spin3_descriptors(
-    const Model& model,
-    const Box& box,
-    const GPU_Vector<int>& type,
-    const GPU_Vector<double>& position,
-    const GPU_Vector<double>& spin,
-    Data& data,
-    const double* slot_r12 = nullptr,
-    int r12_plane_size = 0,
-    gpuStream_t stream = nullptr);
 
-  template <int C>
-  void launch_spin3_forces_typed(
-    const Model& model,
-    const Box& box,
-    const GPU_Vector<int>& type,
-    const GPU_Vector<double>& position,
-    const GPU_Vector<double>& spin,
-    Data& data,
-    GPU_Vector<double>& force,
-    GPU_Vector<double>& mforce,
-    GPU_Vector<double>& virial,
-    const double* slot_r12 = nullptr,
-    int r12_plane_size = 0);
 
-  void launch_spin3_forces(
+  void launch_spin_forces(
     const Model& model,
     const Box& box,
     const GPU_Vector<int>& type,

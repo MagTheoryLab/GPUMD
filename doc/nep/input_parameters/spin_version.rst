@@ -3,85 +3,40 @@
    single: spin_version (keyword in nep.in)
 
 :attr:`spin_version`
-====================
+======================
 
-This keyword specifies the magnetic descriptor and parameter-layout contract
-of the spin-dependent energy model::
+Select the spin descriptor and parameter layout::
 
   model nep_spin
   spin_version 1
 
-Supported values are ``1`` (the default for ``model nep_spin``) and ``2``.
-Version 2 uses the shared-radial density response described in
-:ref:`nep_spin_v2`. Omit this keyword for other models.
-Using ``spin_version`` without ``model`` still selects the spin model, but
-prints a deprecation warning asking for an explicit ``model nep_spin``.
-A missing value, an unsupported version, or a repeated model selector is an
-input error. Version 1 uses the order/compression descriptor described in
-:ref:`nep_spin`; :ref:`spin_order <kw_spin_order>` independently selects its
-contraction order.
+The supported value is 1, which is also the default for ``model nep_spin``.
+Spin training uses NEP ``version 4`` and one hidden layer. ``format_version``
+identifies the model-file syntax and is not an input keyword in ``nep.in``.
 
-Spin training requires ``version 4`` and one hidden layer.
-``version`` identifies the NEP architecture; ``spin_version`` identifies the
-magnetic descriptor and parameter-layout contract. The resulting ``nep.txt``
-contains ``model nep_spin`` and the selected ``spin_version``. Prediction, scaler import,
-and restart require a compatible model. The shared model-file keyword
-``format_version`` does not belong in ``nep.in``.
-
-Every training frame must contain a Cartesian ``spin:R:3`` property. Add
-``mforce:R:3`` to train magnetic forces; see :ref:`train_test_xyz` for aliases
-and units. Charge models and type-dependent structural cutoffs are unsupported.
+Every training frame must contain Cartesian ``spin:R:3``. Add ``mforce:R:3``
+to train magnetic forces; see :ref:`train_test_xyz` for aliases and units.
 Type-dependent :ref:`spin_cutoff <kw_spin_cutoff>` and universal
-:ref:`zbl <kw_zbl>` are supported; flexible ZBL and ``fine_tune`` are unsupported.
-See :ref:`import_q_scaler <kw_import_q_scaler>` for scaler import and restart
-behavior.
+:ref:`zbl <kw_zbl>` are supported. Charge models, type-dependent structural
+cutoffs, flexible ZBL and ``fine_tune`` are unsupported.
 
 .. _spin_training_example:
 
 Training example
 ----------------
 
-The following Spin setup uses the default descriptor shape. ``spin_compress``
-defaults to 2 and may be omitted. Together with the structural defaults, this
-gives 55 magnetic and 97 total coordinates, within :ref:`nep_spin_dimensions`::
+This setup has 30 structural and 34 spin coordinates (64 total), with 6874
+parameters. All types are energy centers; only Fe has independent spins::
 
-  version          4
-  type             2 Fe Ge
   model            nep_spin
+  version          4
   spin_version     1
-  spin_basis_size  8 0
-  spin_l_max       2 0 0
-  spin_compress    2
-  spin_order       3
-  spin_soc         1
-  neuron           30
-  lambda_m         1.0
-  batch            1000
-  generation       100000
-
-Each frame in ``train.xyz`` and ``test.xyz`` must then contain a Cartesian
-``spin:R:3`` property. Add ``mforce:R:3`` when training magnetic forces. See
-:ref:`train_test_xyz` for the complete data contract and :ref:`nep_spin` for
-the Spin3 formalism.
-
-See :ref:`nep_spin_dimensions` before changing the descriptor shape.
-
-Version 2 example
------------------
-
-This configuration has 30 structural and 34 response coordinates (64 total),
-with 7270 trainable parameters. All Fe, Bi and O atoms are energy centers;
-only Fe has independent spin inputs::
-
-  model            nep_spin
-  version          4
-  spin_version     2
   type             3 Fe Bi O
   cutoff           6 5
   n_max            4 4
   basis_size       8 8
   l_max            4 2 0
-  neuron           32
+  neuron           30
   spin_type        Fe
   spin_cutoff      6
   spin_compress    3
@@ -89,28 +44,19 @@ only Fe has independent spin inputs::
   spin_order       2
   spin_soc         1
   lambda_m         1
+  batch            512
+  generation       100000
 
-The version-2 defaults are ``spin_compress 3``, ``spin_l_max 2`` and
-``spin_order 2``. ``spin_basis_size`` can be omitted: it follows the angular
-entry of structural ``basis_size`` because the angular radial coefficients
-are shared. A conflicting explicit value is rejected. ``spin_soc 1`` is the default;
-use ``spin_soc 0`` to enforce independent spatial and spin rotations. For
-the example above, this gives 30 structural plus 31 response coordinates
-(61 total) and 6946 parameters with the 32-neuron network. With 30 neurons
-the same non-SOC model has 6568 parameters. SOC/non-SOC checkpoints have
-different layouts and cannot be converted by editing their header.
+Defaults are ``spin_compress 3``, ``spin_l_max 2``, ``spin_order 2`` and
+``spin_soc 1``. ``spin_basis_size`` follows the angular ``basis_size``.
+For ``spin_soc 0``, this example has 61 total coordinates and 6568 parameters.
+See :ref:`nep_spin` for the construction, scaling and checkpoint layout.
 
-Compiled training kernels
--------------------------
+Compiled kernels
+----------------
 
-With ``nep_compile 1`` (the default), version 2 specializes the sparse coupling
-layout and reuses a contracted radial coefficient matrix in the descriptor and
-force kernels. The matrix is rebuilt for each evaluated parameter vector; it does
-not change the stored model parameters or the restart format. Prediction with
-``nep`` can use the same compiled spin kernels. ``nep_compile 0`` uses the generic
-CUDA implementation.
-
-Compilation currently specializes layouts with at most 512 sparse coupling terms.
-Larger layouts, or unavailable runtime compilation, use the generic implementation.
-This optimization applies to ``nep`` training/prediction; ``gpumd`` continues to
-use the generic version 2 evaluator.
+``nep_compile 1`` specializes the sparse coupling layout and precontracts
+radial coefficients for training and prediction. Coefficients are rebuilt for
+each parameter vector. Layouts with more than 512 coupling terms, or unavailable
+runtime compilation, use generic CUDA kernels. ``nep_compile 0`` selects the
+generic implementation. ``gpumd`` uses the generic evaluator.

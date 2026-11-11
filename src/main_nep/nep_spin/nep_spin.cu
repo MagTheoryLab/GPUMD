@@ -81,13 +81,13 @@ void NEP_Spin_Model::initialize_compiled_kernel(const Spin_Parameters& para)
   if (para.nep_compile && para.prediction == 0) {
     CHECK(gpuSetDevice(0));
     auto config = make_nep_compile_config(para);
-    config.model_name = "Spin3";
+    config.model_name = "NEP-spin";
     config.source_file = "main_nep/nep/nep_specialized.cu";
     compiled_kernel_.reset(new NEP_Compiled_Evaluation(config));
     if (!compiled_kernel_->is_valid())
       compiled_kernel_.reset();
   }
-  if (para.nep_compile && (para.prediction == 0 || para.spin_version == 2)) {
+  if (para.nep_compile) {
     CHECK(gpuSetDevice(0));
     initialize_spin_compiled(para);
   }
@@ -380,24 +380,8 @@ void NEP_Spin_Model::parameter_groups(std::vector<int>& groups)
 {
   auto& para = *model_parameters;
   find_nep_type_of_variable(para, groups, 1, 1);
-  // Density path and center mixing parameters are shared across all energy centers.
-  if (para.spin_version == 2) return;
-  const int offset = para.number_of_variables - para.number_of_variables_descriptor_spin -
-                     para.number_of_variables_spin_projection;
-  for (int channel = 0; channel < para.spin_compress; ++channel) {
-    for (int basis = 0; basis <= para.spin_basis_size[0]; ++basis) {
-      for (int t1 = 0; t1 < para.num_types; ++t1) {
-        for (int t2 = 0; t2 < para.num_types; ++t2) {
-          const int pair = t1 * para.num_types + t2;
-          const int coefficient =
-            (channel * (para.spin_basis_size[0] + 1) + basis) * para.num_types * para.num_types +
-            pair;
-          groups[offset + coefficient] = t1;
-        }
-      }
-    }
-  }
 }
+
 void NEP_Spin_Model::read_model(float* parameters)
 {
   read_spin_model(*model_parameters, parameters);

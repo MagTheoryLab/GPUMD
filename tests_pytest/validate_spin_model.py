@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native version2 oracle, training/prediction, restart and type-mask checks."""
+"""Native spin oracle, training/prediction, restart and type-mask checks."""
 import argparse
 import copy
 import hashlib
@@ -9,12 +9,12 @@ import re
 import shutil
 from pathlib import Path
 
-from validate_nep_spin3_runtime import run_case, max_error
-from validate_main_nep_spin3_training import run, NEP, columns, flatten
+from spin_force_helpers import run_case, max_error
+from validate_spin_training import run, NEP, columns, flatten
 
-FIXTURE = Path(__file__).parent / 'fixtures/nep_spin_v2'
+FIXTURE = Path(__file__).parent / 'fixtures/nep_spin'
 INPUT = '''model nep_spin
-spin_version 2
+spin_version 1
 type 3 Fe Bi O
 cutoff 6 5
 n_max 4 4
@@ -63,11 +63,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workdir', required=True, type=Path)
     parser.add_argument('--require-jit', action='store_true',
-                        help='Require compiled version2 kernels for the small oracle layouts')
+                        help='Require compiled spin kernels for the small oracle layouts')
     args = parser.parse_args()
     args.workdir.mkdir(parents=True,exist_ok=True)
     report = {}
-    for fixture in sorted(FIXTURE.glob('*.json')):
+    for fixture in sorted(FIXTURE.glob('c*l*s*.json')):
         name = fixture.stem
         ref = json.loads(fixture.read_text())
         model = fixture.with_suffix('.nep').read_text()
@@ -137,10 +137,10 @@ def main():
     assert min(response) > 1e-6, response
     symmetry['Bi_O_energy_response'] = response
     report['symmetry'] = symmetry
-    # The selector order must not silently reset version 2 to version 1.
+    # Model selection is independent of keyword order.
     fixed_text = INPUT.format(C=3,L=2,S=2)
-    reverse = fixed_text.replace('model nep_spin\nspin_version 2',
-                                 'spin_version 2\nmodel nep_spin')
+    reverse = fixed_text.replace('model nep_spin\nspin_version 1',
+                                 'spin_version 1\nmodel nep_spin')
     execute(args.workdir/'selector-order', reverse+'prediction 1\n',
             training_xyz(original), fixed_model)
     for label, old, new in [
@@ -150,7 +150,7 @@ def main():
         ('basis','spin_order 2','spin_order 2\nspin_basis_size 7'),
         ('degree','spin_order 2','spin_degree 2'),
         ('initial-para','spin_order 2','spin_order 2\ninitial_para 1'),
-        ('descriptor','spin_version 2','spin_descriptor 2'),
+        ('version','spin_version 1','spin_version 2'),
     ]:
         directory = args.workdir/('invalid-'+label); directory.mkdir()
         (directory/'nep.in').write_text(fixed_text.replace(old,new))
@@ -165,7 +165,7 @@ def main():
     train=args.workdir/'training'
     execute(train,text,xyz)
     model=(train/'nep.txt').read_text()
-    assert '\nspin_version 2\n' in model and '@ parameters 7270\n' in model
+    assert '\nspin_version 1\n' in model and '@ parameters 7270\n' in model
     assert all(math.isfinite(float(x)) for line in (train/'loss.out').read_text().splitlines()
                if not line.startswith('#') for x in line.split())
     execute(args.workdir/'trained-prediction',text+'prediction 1\n',xyz,model)
@@ -198,6 +198,6 @@ def main():
     report['training']={'parameters':7270,'dimension':64,'restart_max_abs':restart_error,
                         'restart_scalers':'identical','generations':2}
     (args.workdir/'report.json').write_text(json.dumps(report,indent=2)+'\n')
-    print('Version2 native runtime, training, prediction and restart passed',flush=True)
+    print('Spin native runtime, training, prediction and restart passed',flush=True)
 
 if __name__ == '__main__': main()

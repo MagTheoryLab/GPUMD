@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze FP64/autograd version2 oracles from the independent BFO prototype.
+"""Freeze FP64/autograd spin oracles from the independent BFO prototype.
 
 Requires torch, e3nn, ASE and --reference-dir containing prototype.py,
 bfo_models.py and its frozen support/reference/torchnep sources. The native
@@ -31,14 +31,14 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     provenance = {str(f.relative_to(args.reference_dir)): hashlib.sha256(f.read_bytes()).hexdigest()
                   for f in args.reference_dir.rglob('*.py') if '__pycache__' not in str(f)}
-    class Density(p.DensityNEP):
+    class SpinModel(p.DensityNEP):
         def make_cache(self, r, z):
             return b.structure(self.base, r, z, self.batch, True)
     for C, L, S in [(3, 2, 2), (2, 4, 4), (1, 0, 1)]:
         torch.manual_seed(3401 + C + L + S)
         p.CONFIG.update({k:v for k,v in b.CONFIG.items() if not k.startswith('spin_')})
         p.CONFIG['spin_mode'] = 0
-        model = Density(False, C, L, S)
+        model = SpinModel(False, C, L, S)
         model.base.fitting_nets = torch.nn.ModuleList([FittingNet(model.dim,32) for _ in b.TYPES])
         with torch.no_grad():
             model.base.c_param_2.normal_(0,.08)
@@ -60,7 +60,7 @@ def main():
         header = f"""nep 3 Fe Bi O
 format_version 1
 model nep_spin
-spin_version 2
+spin_version 1
 cutoff 6 5 128 128
 n_max 4 4
 basis_size 8 8
@@ -74,7 +74,6 @@ spin_soc 1
 spin_scaler 1
 spin_type Fe
 spin_cutoff 6
-spin_projection_size {model.radial_mix.numel()+model.weights.numel()+model.center_mix.numel()}
 energy_reference 0 0 0
 """
         text = header + f'@ parameters {len(parameters)}\n' + ''.join(f'{x:.17g}\n' for x in parameters)

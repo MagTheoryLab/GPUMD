@@ -1,12 +1,12 @@
 /* This file is part of GPUMD. SPDX-License-Identifier: LGPL-3.0-or-later */
 #pragma once
-#include "spin_density_tables.cuh"
+#include "spin_tables.cuh"
 #include <algorithm>
 #include <cstdlib>
 #include <tuple>
 #include <vector>
 
-namespace spin_density {
+namespace nep_spin {
 struct Primitive { int degree, l, offset; };
 struct Sector { int l, parity, time, offset, norm_column, scalar_column, size; };
 struct Term { int geometry, spin, output, path, neighbor; float coefficient; };
@@ -112,4 +112,4 @@ struct Layout {
     return channels * (radial_channels + path_count + static_cast<int>(primitives.size()) - 1);
   }
 };
-} // namespace spin_density
+} // namespace nep_spin

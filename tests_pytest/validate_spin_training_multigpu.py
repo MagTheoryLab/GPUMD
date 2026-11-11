@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-import validate_main_nep_spin3_training as base
+import validate_spin_training as base
 
 
 def run_nep(case, env):

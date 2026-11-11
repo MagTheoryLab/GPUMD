@@ -34,7 +34,7 @@ def main():
     p=argparse.ArgumentParser()
     for key in ('binary','output'):
         p.add_argument('--'+key,type=Path,required=True)
-    p.add_argument('--model', type=Path, default=FIXTURE/'nep_spin_o3c2_uniform.nep')
+    p.add_argument('--model', type=Path, default=FIXTURE/'c3l2s2_fege.nep')
     a=p.parse_args()
     for key in ('binary','model','output'): setattr(a,key,getattr(a,key).resolve())
     a.output.mkdir(parents=True,exist_ok=False)

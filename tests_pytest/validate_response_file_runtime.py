@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 import tempfile
-import validate_main_nep_spin3_training as base
+import validate_spin_training as base
 from validate_spin_training_lifecycle import scalers, metadata
 
 # The first generation initializes scalers; subsequent generations evaluate loss.

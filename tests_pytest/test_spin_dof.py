@@ -14,11 +14,11 @@ GPUMD = Path(os.environ.get('GPUMD_COMMAND', Path(__file__).parents[1] / 'src/gp
 
 def execute(directory, ensemble, steps, restart=None, raw_inactive=False):
     directory.mkdir()
-    (directory / 'nep.txt').write_text(load_fixture('o3c2_uniform')[0])
+    (directory / 'nep.txt').write_text(load_fixture('c3l2s2_fege')[0])
     if restart:
         shutil.copyfile(restart, directory / 'model.xyz')
     else:
-        _, oracle = load_fixture('o3c2_uniform')
+        _, oracle = load_fixture('c3l2s2_fege')
         write_xyz(directory / 'model.xyz', oracle['cases']['noncollinear'])
         path = directory / 'model.xyz'
         lines = path.read_text().splitlines()
@@ -86,24 +86,18 @@ def test_nonmagnetic_environment_and_restart(tmp_path, ensemble):
     for expected, actual in ((full, raw), (resumed, raw_resumed)):
         for key in expected:
             np.testing.assert_array_equal(expected[key], actual[key], err_msg=key)
-    # GLSD persists its noise counter. TSPIN persists coordinates/velocities,
-    # but initializes a new spin thermostat chain; SIB restarts its noise counter.
-    if 'nve_glsd' in ensemble:
-        np.testing.assert_allclose(full['spin'], resumed['spin'], rtol=0, atol=2e-10)
-    if 'tspin' in ensemble:
-        saved = frame(tmp_path / 'first/restart.xyz')
-        for name in ('spin', 'spin_vel'):
-            # TSPIN's existing restart writer uses %g (six significant digits).
-            serialized = np.array([[float(format(x, '.6g')) for x in row]
-                                   for row in first[name]])
-            np.testing.assert_array_equal(serialized, saved[name])
+    # Restart stores coordinates/velocities at full double precision. Noise
+    # counters and thermostat chains are initialized by the new ensemble.
+    saved = frame(tmp_path / 'first/restart.xyz')
+    for name in ('spin', 'spin_vel') if 'tspin' in ensemble else ('spin',):
+        np.testing.assert_array_equal(first[name], saved[name])
 
 
 def test_nonmagnetic_geometry_has_magnetic_atomic_force(tmp_path):
     from copy import deepcopy
     from spin_fixtures import load_fixture
-    from validate_nep_spin3_runtime import run_case
-    model, oracle = load_fixture('o3c2_uniform')
+    from spin_force_helpers import run_case
+    model, oracle = load_fixture('c3l2s2_fege')
     case = deepcopy(oracle['cases']['noncollinear'])
     atom = case['types'].index('Ge')
     state = run_case(tmp_path, 'center', case, model)

@@ -48,10 +48,10 @@ ParameterInput::ParameterInput()
         PRINT_INPUT_ERROR("Specify spin_version only once.");
       }
       has_spin_selector = true;
-      if (tokens.size() != 2 || (tokens[1] != "1" && tokens[1] != "2")) {
-        PRINT_INPUT_ERROR("Unsupported spin_version (expected 1 or 2).");
+      if (tokens.size() != 2 || tokens[1] != "1") {
+        PRINT_INPUT_ERROR("Unsupported spin_version (expected 1).");
       }
-      spin_version = tokens[1] == "2" ? 2 : 1;
+      spin_version = 1;
     } else if (tokens[0] == "model_type") {
       parse_model_type(param.data(), param.size());
     } else if (tokens[0] == "charge_mode") {

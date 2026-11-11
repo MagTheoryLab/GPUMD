@@ -1,10 +1,10 @@
 /* This file is part of GPUMD. SPDX-License-Identifier: LGPL-3.0-or-later */
 #pragma once
 #include "model/box.cuh"
-#include "force/nep_spin/spin_density_storage.cuh"
+#include "force/nep_spin/spin_storage.cuh"
 #include "utilities/nep_utilities.cuh"
 
-namespace spin_density {
+namespace nep_spin {
 // The generic and compiled layouts use the same arithmetic and output ordering.
 template<int Capacity>
 struct RuntimeLayout : View {
@@ -327,4 +327,4 @@ static __global__ void forces(
   if (active[type[i]])
     for (int d = 0; d < 3; ++d) atomicAdd(mforce+d*n+i, -static_cast<double>(center_pull[d]));
 }
-} // namespace spin_density
+} // namespace nep_spin

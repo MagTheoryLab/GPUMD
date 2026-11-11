@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate spin3 training, checkpoint prediction, and restart parity."""
+"""Validate spin training, checkpoint prediction, and restart parity."""
 
 import argparse
 import json
@@ -25,10 +25,9 @@ basis_size 0 0
 l_max 2 0 0
 neuron 4
 spin_compress 2
-spin_basis_size 8 0
-spin_l_max 2 0 0
+spin_l_max 2
 spin_cutoff 6.0
-spin_order 3
+spin_order 2
 spin_soc 1
 lambda_m 1.0
 lambda_tau 0.5
@@ -138,24 +137,20 @@ def parity_tolerance(left, right):
 def validate_parser(root):
     root.mkdir()
     cases = {
-        "invalid_basis": NEP_IN.replace("spin_basis_size 8 0", "spin_basis_size 7 0"),
-        "invalid_second_basis": NEP_IN.replace("spin_basis_size 8 0", "spin_basis_size 8 1"),
-        "invalid_order": NEP_IN.replace("spin_order 3", "spin_order 4"),
+        "invalid_basis": NEP_IN.replace("spin_l_max 2", "spin_l_max 2\nspin_basis_size 7"),
+        "invalid_second_basis": NEP_IN.replace("spin_l_max 2", "spin_l_max 2\nspin_basis_size 0 1"),
+        "invalid_order": NEP_IN.replace("spin_order 2", "spin_order 5"),
         "invalid_soc": NEP_IN.replace("spin_soc 1", "spin_soc 2"),
-        "oversized_spin_shape": NEP_IN.replace("spin_compress 2", "spin_compress 4"),
-        "removed_spin_mode": NEP_IN.replace("spin_version 1", "spin_mode 3"),
+        "oversized_spin_shape": NEP_IN.replace("spin_compress 2", "spin_compress 9"),
         "invalid_spin_cutoff_arity": NEP_IN.replace(
             "spin_cutoff 6.0", "spin_cutoff 4.0 5.0 6.0"),
         "removed_spin_chiral": NEP_IN.replace("spin_soc 1", "spin_soc 1\nspin_chiral 1"),
-        "removed_curriculum": NEP_IN.replace("spin_order 3", "spin_order 2").replace(
-            "lambda_tau 0.5", "lambda_tau 0.5\nspin_curriculum 1"),
         "response_requires_metadata": NEP_IN.replace(
             "lambda_tau 0.5", "lambda_tau 0.5\nlambda_spin_response 0.3"),
     }
     for value in ("0", "3", "1.0", "nan", "1 2", ""):
         cases[f"invalid_spin_version_{value}"] = NEP_IN.replace("spin_version 1", f"spin_version {value}")
     cases["duplicate_spin_version"] = NEP_IN + "spin_version 1\n"
-    cases["mixed_spin_selectors"] = NEP_IN + "spin_mode 3\n"
     for keyword in ("model_type 1", "charge_mode 1", "vdw 1", "charge_vdw 1"):
         for first in (False, True):
             # The complete selector input is checked before reading Spin keywords.
@@ -231,7 +226,7 @@ def validate_flexible_zbl_rejected(root):
     result = run(NEP, training)
     message = "NEP-spin does not support flexible ZBL"
     assert result.returncode != 0 and message in result.stdout + result.stderr
-    model, _ = load_fixture("o3c2_uniform")
+    model, _ = load_fixture("c3l2s2_fege")
     model = model.replace("model nep_spin\n", "model nep_spin\nzbl 0 0\n")
     case = root / "prediction"
     write_case(case, NEP_IN + "zbl 2.5\nprediction 1\n")
@@ -273,17 +268,16 @@ def validate_training_and_prediction(
 
     checkpoint = (training / "nep.txt").read_text()
     if not checkpoint.startswith("nep 2 Fe Ge\nformat_version 1\nmodel nep_spin\n"):
-        raise AssertionError("invalid block-format spin3 checkpoint")
-    if "\nspin_version 1\n" not in checkpoint or "\nspin_mode " in checkpoint:
-        raise AssertionError("Spin models must declare spin_version instead of spin_mode")
+        raise AssertionError("invalid block-format spin checkpoint")
+    if "\nspin_version 1\n" not in checkpoint:
+        raise AssertionError("Missing spin_version")
     if "\nenergy_reference " not in checkpoint or "spin_baseline" in checkpoint:
-        raise AssertionError("Spin3 must use the shared energy reference")
+        raise AssertionError("Spin must use the shared energy reference")
     if enable_zbl and "\nzbl 1.25 2.5\n" not in checkpoint:
-        raise AssertionError("spin3 ZBL checkpoint is missing its zbl line")
+        raise AssertionError("spin ZBL checkpoint is missing its zbl line")
     required = {
-        "spin_basis_size": "8", "spin_l_max": "2", "spin_order": "3",
+        "spin_basis_size": "2" if check_restart else "0", "spin_l_max": "2", "spin_order": "2",
         "spin_soc": "1", "spin_scaler": "1", "spin_compress": str(spin_compress),
-        "spin_projection_size": str(4 * spin_compress * spin_compress),
         "spin_cutoff": "5 6" if typewise_spin_cutoff else "7" if small_cell else "6",
     }
     if not all_spin_types:
@@ -296,14 +290,14 @@ def validate_training_and_prediction(
 
     loss = (training / "loss.out").read_text().splitlines()[-1]
     if re.search(r"\b(?:nan|inf)\b", loss, re.IGNORECASE):
-        raise AssertionError("spin3 training produced a non-finite loss")
+        raise AssertionError("spin training produced a non-finite loss")
     loss_values = [float(value) for value in loss.split()]
     regularization_only = loss_values[2] + loss_values[3]
     if abs(loss_values[1] - regularization_only) > 2.0e-5:
         raise AssertionError(
             "generation zero must use upstream regularization-only fitness")
 
-    spin_descriptor_dims = {1: 21, 2: 55, 3: 91}
+    spin_descriptor_dims = {c: 1+11*c for c in (1,2,3)}
     structural_dim = 15 if check_restart else 3
     descriptor_dim = structural_dim + spin_descriptor_dims[spin_compress]
     q_scaler = [
@@ -311,10 +305,10 @@ def validate_training_and_prediction(
     # The production magnetic scaler downscales but never amplifies channels.
     spin_scaler = q_scaler[structural_dim:]
     if any(not math.isfinite(value) or value <= 0 for value in q_scaler):
-        raise AssertionError("spin3 q_scaler must be positive and finite")
+        raise AssertionError("spin q_scaler must be positive and finite")
     if max(spin_scaler) > 1.0:
         raise AssertionError(
-            f"spin3 magnetic q_scaler must not amplify channels: max={max(spin_scaler)}")
+            f"spin magnetic q_scaler must not amplify channels: max={max(spin_scaler)}")
 
     prediction = root / "prediction"
     prediction.mkdir()
@@ -352,7 +346,7 @@ def validate_training_and_prediction(
             raise RuntimeError(result.stdout + result.stderr)
         resumed_lines = (resumed / "nep.txt").read_text().splitlines()
         if resumed_lines[:first_parameter] != checkpoint_lines[:first_parameter]:
-            raise AssertionError("restart changed the Spin3 header or energy baseline")
+            raise AssertionError("restart changed the Spin header or energy baseline")
         error = maximum_error(
             [float(value) for value in parameters],
             [float(line.split()[0]) for line in (resumed / "nep.restart").read_text().splitlines()[3:]])
@@ -388,13 +382,13 @@ def validate_native_compiled_checkpoint(root):
             expanded.append(" ".join(fields))
     xyz = "\n".join(expanded) + "\n"
     report = {}
-    layouts = ((1, 3, 2, 1), (2, 3, 2, 1), (3, 3, 2, 1), (9, 1, 2, 1),
+    layouts = ((1, 3, 2, 1), (2, 3, 2, 1), (3, 3, 2, 1), (8, 1, 2, 1),
                (2, 2, 1, 0), (2, 3, 0, 0), (2, 2, 2, 1))
     for channels, order, lmax, soc in layouts:
         layout = f"o{order}c{channels}l{lmax}s{soc}"
         config = NEP_IN.replace("spin_compress 2", f"spin_compress {channels}")
-        config = config.replace("spin_order 3", f"spin_order {order}")
-        config = config.replace("spin_l_max 2 0 0", f"spin_l_max {lmax} 0 0")
+        config = config.replace("spin_order 2", f"spin_order {order}")
+        config = config.replace("spin_l_max 2", f"spin_l_max {lmax}")
         config = config.replace("spin_soc 1", f"spin_soc {soc}")
         config = config.replace("spin_type Fe\n", "spin_type Fe Ge\n")
         config = config.replace("n_max 0 0", "n_max 4 4").replace(
@@ -423,10 +417,10 @@ def validate_native_compiled_checkpoint(root):
             if result.returncode:
                 raise RuntimeError(result.stdout + result.stderr)
             if compiled and (
-                    "Compile specialized Spin3 training kernels" not in result.stdout or
+                    "Compile specialized Spin training kernels" not in result.stdout or
                     "Spin layout JIT ready:" not in result.stdout or
                     "specialization disabled" in (result.stdout + result.stderr).lower()):
-                raise AssertionError("Spin3 JIT did not compile successfully")
+                raise AssertionError("Spin JIT did not compile successfully")
             cases.append(case)
         errors = {}
         for name, width in (("energy", 1), ("force", 3), ("virial", 6), ("mforce", 3)):
@@ -441,7 +435,7 @@ def validate_native_compiled_checkpoint(root):
 
 
 def validate_default_shape(root):
-    """Exercise model defaults and compare omitted vs explicit C2 end to end."""
+    """Exercise model defaults and compare omitted vs explicit C3 end to end."""
     root.mkdir()
     # Only select the elements/model and bound the training budget and output.
     # Leave all structural, Spin descriptor, network and loss settings implicit.
@@ -450,7 +444,7 @@ def validate_default_shape(root):
         "population 12\nbatch 3\ngeneration 3\noutput_interval 1\n"
         "save_potential 100000 1 0\n")
     cases = [root / "implicit", root / "explicit"]
-    configs = [config, config + "spin_compress 2\n"]
+    configs = [config, config + "spin_compress 3\n"]
     for case, text in zip(cases, configs):
         write_case(case, text)
     # Without ZBL enabled, a stray zbl.in must not affect any lifecycle stage.
@@ -468,13 +462,13 @@ def validate_default_shape(root):
             if result.returncode:
                 raise RuntimeError(result.stdout + result.stderr)
             checkpoint = (case / "nep.txt").read_text()
-            for line in ("spin_compress 2", "spin_order 3", "spin_soc 1",
-                         "spin_l_max 2", "spin_basis_size 8",
-                         "spin_cutoff 8", "spin_projection_size 16"):
+            for line in ("spin_compress 3", "spin_order 2", "spin_soc 1",
+                         "spin_l_max 2", "spin_basis_size 6",
+                         "spin_cutoff 8"):
                 if f"\n{line}\n" not in checkpoint:
                     raise AssertionError(f"default checkpoint missing {line}")
-            if "@ q_scaler 97\n" not in checkpoint:
-                raise AssertionError("default descriptor must have 42 + 55 coordinates")
+            if "@ q_scaler 76\n" not in checkpoint:
+                raise AssertionError("default descriptor must have 42 + 34 coordinates")
             loss = [float(value) for value in
                     (case / "loss.out").read_text().splitlines()[-1].split()]
             if not all(math.isfinite(value) for value in loss):
@@ -496,9 +490,9 @@ def validate_default_shape(root):
                 / len(energies))
         for filename in files:
             if (cases[0] / filename).read_bytes() != (cases[1] / filename).read_bytes():
-                raise AssertionError(f"{stage}: implicit/explicit C2 differ in {filename}")
-        report[stage] = "implicit/explicit C2 byte-identical"
-    report["descriptor_dim"] = 97
+                raise AssertionError(f"{stage}: implicit/explicit C3 differ in {filename}")
+        report[stage] = "implicit/explicit C3 byte-identical"
+    report["descriptor_dim"] = 76
     return report
 
 
@@ -529,64 +523,6 @@ def validate_shared_nep_io(root):
     return "training/restart/prediction passed"
 
 
-def validate_fixed_models(root):
-    """Use the frozen FP64 oracle, independent of the model reader and writer."""
-    from spin_fixtures import load_fixture
-
-    root.mkdir()
-    report = {}
-    for fixture in ("o3c2_uniform", "o3c2_typewise", "o3c3_uniform"):
-        model, oracle = load_fixture(fixture)
-        fields = {line.split()[0]: line.split()[1:] for line in model.splitlines()
-                  if line and not line.startswith('@')}
-        config = ("type 2 Fe Ge\nversion 4\nspin_version 1\nprediction 1\n"
-                  "n_max 4 4\nbasis_size 8 8\nl_max 4 2 0\nneuron 30\n"
-                  "cutoff 6 5\nspin_basis_size 8 0\nspin_l_max 2 0 0\n"
-                  "spin_order 3\nspin_soc 1\nspin_compress " + fields['spin_compress'][0] +
-                  "\nspin_cutoff " + ' '.join(fields['spin_cutoff']) + "\n")
-        cases = list(oracle['cases'].items())
-        xyz = []
-        for _, case in cases:
-            xyz += [str(len(case['types'])), 'Lattice="' + ' '.join(map(str, case['cell'])) +
-                    '" Properties=species:S:1:pos:R:3:force:R:3:spin:R:3:mforce:R:3 '
-                    'energy=0 virial="0 0 0 0 0 0 0 0 0"']
-            for symbol, position, spin in zip(case['types'], case['positions'], case['spins']):
-                xyz.append(symbol + ' ' + ' '.join(map(str, position + [0]*3 + spin + [0]*3)))
-        directory = root / fixture
-        write_case(directory, config, '\n'.join(xyz) + '\n')
-        (directory / 'nep.txt').write_text(model)
-        result = run(NEP, directory)
-        if result.returncode:
-            raise RuntimeError(result.stdout + result.stderr)
-        energy = columns(directory / 'energy_train.out', 1)
-        force = columns(directory / 'force_train.out', 3)
-        mforce = columns(directory / 'mforce_train.out', 3)
-        virial = columns(directory / 'virial_train.out', 6)
-        assert len(energy) == len(virial) == len(cases)
-        assert len(force) == len(mforce) == sum(len(c['types']) for _, c in cases)
-        atom = 0
-        for index, (name, case) in enumerate(cases):
-            count = len(case['types'])
-            errors = {
-                'energy': abs(energy[index][0] * count - sum(case['potential'])),
-                'force': maximum_error(force[atom:atom+count], case['force']),
-                'mforce': maximum_error(mforce[atom:atom+count], case['mforce']),
-                'virial': maximum_error([v * count for v in virial[index]],
-                    [sum(row[j] for row in case['atom_virial']) for j in (0, 4, 8, 1, 5, 6)]),
-            }
-            assert all(math.isfinite(v) for v in errors.values()), (fixture, name, errors)
-            assert all(errors[k] <= 2e-4 for k in ('energy', 'mforce', 'virial')), (fixture, name, errors)
-            # NEP stores positions in float32. The cutoff-boundary fixture also
-            # contains a 0.002 A pair: its stored separation differs by 7.25e-5
-            # relatively from the FP64 oracle. Allow that coordinate precision
-            # in forces; the other frozen cases retain the absolute-only bound.
-            force_rtol = 1e-4 if name == 'cutoff_boundary' else 0
-            for actual, expected in zip(flatten(force[atom:atom+count]), flatten(case['force'])):
-                assert abs(actual - expected) <= max(2e-4, force_rtol * abs(expected)), (
-                    fixture, name, actual, expected)
-            report[fixture + '/' + name] = errors
-            atom += count
-    return report
 
 
 def main():
@@ -594,13 +530,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--nep", type=Path, default=NEP)
     parser.add_argument("--check-jit", action="store_true",
-                        help="Require the CUDA compiler and validate specialized Spin3 training")
+                        help="Require the CUDA compiler and validate specialized Spin training")
     args = parser.parse_args()
     NEP = args.nep.resolve()
-    with tempfile.TemporaryDirectory(prefix="gpumd-main-nep-spin3-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="gpumd-main-nep-spin-") as tmp:
         root = Path(tmp)
         report = {
-            "fixed_models": validate_fixed_models(root / "fixed-models"),
             "default_shape": validate_default_shape(root / "defaults"),
             "flexible_zbl_rejected": validate_flexible_zbl_rejected(root / "flexible-zbl"),
             "ordinary_nep_io": validate_shared_nep_io(root / "ordinary-nep"),

@@ -5,7 +5,7 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
-#include "force/nep_spin/spin_density_layout.cuh"
+#include "force/nep_spin/spin_layout.cuh"
 
 namespace
 {
@@ -67,7 +67,8 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
   const auto* f = field("spin_version", 1, 1);
   if (!f)
     return false;
-  if (!integer(f, 0, 1, 2, spin_version)) return false;
+  int spin_version;
+  if (!integer(f, 0, 1, 1, spin_version)) return false;
 
   f = field("cutoff", 4, 4);
   if (
@@ -98,18 +99,15 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
 
   int scaler_flag;
   if (
-    !scalar("spin_basis_size", spin_version == 2 ? basis_size[1] : 8,
-            spin_version == 2 ? basis_size[1] : 8, spin_basis_size) ||
-    !scalar("spin_l_max", 0, spin_version == 2 ? 4 : 2, spin_l_max) ||
+    !scalar("spin_basis_size", basis_size[1],
+            basis_size[1], spin_basis_size) ||
+    !scalar("spin_l_max", 0, 4, spin_l_max) ||
     !scalar("spin_compress", 1, 9, spin_compress) ||
-    !scalar("spin_order", 1, spin_version == 2 ? 4 : 3, spin_order) ||
+    !scalar("spin_order", 1, 4, spin_order) ||
     !scalar("spin_soc", 0, 1, spin_soc) ||
     !scalar("spin_scaler", 1, 1, scaler_flag)) return false;
-  const int projection_count = spin_version == 2 ?
-    spin_density::Layout(spin_compress, spin_l_max, spin_order, spin_soc).parameter_count(n_max[1]+1) :
-    4 * spin_compress * spin_compress;
-  if (!scalar("spin_projection_size", projection_count, projection_count, spin_projection_size))
-    return false;
+  projection_parameter_count =
+    nep_spin::Layout(spin_compress, spin_l_max, spin_order, spin_soc).parameter_count(n_max[1]+1);
   f = field("spin_cutoff", 1, types);
   if (!f)
     return false;
@@ -173,17 +171,15 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
     angular_channels += l_max[i];
   const int dim_angular = (n_max[1] + 1) * angular_channels;
   dim_struct = n_max[0] + 1 + dim_angular;
-  dim_spin = spin_version == 2 ? spin_density::Layout(spin_compress, spin_l_max, spin_order, spin_soc).dimension :
-    spin_dimension(spin_compress, spin_l_max, spin_order, spin_soc);
+  dim_spin = nep_spin::Layout(spin_compress, spin_l_max, spin_order, spin_soc).dimension;
   dim = dim_struct + dim_spin;
   if (dim_angular > 90 || dim_spin > 96 || dim > MAX_DIM_SPIN)
     return fail(error, "descriptor dimensions exceed the supported Spin shape.");
   const int parameter_count =
     (dim + 2) * num_neurons * types + 1 +
     types * types *
-      ((n_max[0] + 1) * (basis_size[0] + 1) + (n_max[1] + 1) * (basis_size[1] + 1) +
-       (spin_version == 2 ? 0 : spin_compress * (spin_basis_size + 1))) +
-    spin_projection_size;
+      ((n_max[0] + 1) * (basis_size[0] + 1) + (n_max[1] + 1) * (basis_size[1] + 1)) +
+    projection_parameter_count;
   auto block = [&](const char* name, int count, std::vector<float>& values, bool positive) {
     const auto* b = doc.find_block(name);
     if (!b || b->values.size() != size_t(count))
@@ -198,46 +194,6 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
   return block("parameters", parameter_count, parameters, false) &&
          block("q_scaler", dim, q_scaler, true) &&
          doc.check_unhandled(handled, {"parameters", "q_scaler"}, error);
-}
-
-int NEP_Spin_Model_File::spin_dimension(int channels, int l_max, int order, int soc)
-{
-  const int C = channels;
-  const int L = l_max;
-  const int pairs = C * (C + 1) / 2;
-  int dimension = 1 + 2 * C;
-  if (soc && L >= 2)
-    dimension += 2 * C;
-  if (order >= 2) {
-    dimension += 2 * C;
-    if (L >= 1)
-      dimension += (soc ? 3 : 1) * C;
-    if (L >= 2)
-      dimension += C;
-    dimension += C + 2 * pairs;
-    if (L >= 1)
-      dimension += pairs;
-    if (L >= 2)
-      dimension += pairs;
-    if (soc && L >= 1) {
-      dimension += (C >= 2 ? 2 : 1) * C;
-    }
-    if (soc && L >= 2) {
-      dimension += (C >= 2 ? 2 : 1) * C;
-    }
-  }
-  if (order >= 3) {
-    dimension += C;
-    if (soc && L >= 1) {
-      dimension += (C >= 2 ? 2 : 1) * C;
-    }
-    if (soc && L >= 2) {
-      dimension += (C >= 2 ? 3 : 1) * C;
-    }
-    if (soc && L >= 1 && C >= 3)
-      dimension += C;
-  }
-  return dimension;
 }
 
 bool NEP_Spin_Model_File::is_spin_model(const std::string& filename)

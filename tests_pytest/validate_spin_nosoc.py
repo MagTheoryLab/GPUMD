@@ -151,11 +151,10 @@ class Oracle:
         parameters += [self.b1]+[0.]*405+[self.coefficient]*405
         for array in (self.mix, self.weight, self.center):
             parameters.extend(array.flatten())
-        projection = self.mix.size+self.weight.size+self.center.size
         text = f'''nep 3 Fe Bi O
 format_version 1
 model nep_spin
-spin_version 2
+spin_version 1
 cutoff 6 5 128 128
 n_max 4 4
 basis_size 8 8
@@ -169,7 +168,6 @@ spin_soc 0
 spin_scaler 1
 spin_type {' '.join(t for t, active in zip(['Fe','Bi','O'],self.active) if active)}
 spin_cutoff 6 5 4
-spin_projection_size {projection}
 energy_reference 0 0 0
 @ parameters {len(parameters)}
 '''
@@ -225,16 +223,16 @@ def generate(directory):
 
 
 def validate(fixtures, workdir):
-    from validate_spin_v2 import execute, training_xyz
-    from validate_nep_spin3_runtime import run_case, max_error
-    from validate_main_nep_spin3_training import columns, run, NEP
+    from validate_spin_model import execute, training_xyz
+    from spin_force_helpers import run_case, max_error
+    from validate_spin_training import columns, run, NEP
     workdir.mkdir(parents=True,exist_ok=True)
     report={}
     for fixture in sorted(fixtures.glob('*.json')):
         ref=json.loads(fixture.read_text());name=fixture.stem;model=fixture.with_suffix('.nep').read_text()
         assert hashlib.sha256(model.encode()).hexdigest()==ref['model_sha256']
         text=f'''model nep_spin
-spin_version 2
+spin_version 1
 type 3 Fe Bi O
 cutoff 6 5
 n_max 4 4
@@ -284,7 +282,7 @@ seed 3401
             results['md-'+case['name']]=errors
         if name=='c3l2s2':
             p=workdir/'nosoc-training';execute(p,text+'nep_compile 1\n',xyz)
-            trained=(p/'nep.txt').read_text();assert '\nspin_soc 0\n' in trained and '\nspin_version 2\n' in trained
+            trained=(p/'nep.txt').read_text();assert '\nspin_soc 0\n' in trained and '\nspin_version 1\n' in trained
             execute(workdir/'nosoc-trained-prediction',text+'prediction 1\n',xyz,trained)
             md=run_case(workdir,'nosoc-trained-md',ref['cases'][0],trained)
             pred=workdir/'nosoc-trained-prediction'

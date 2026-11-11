@@ -1,9 +1,9 @@
 /* This file is part of GPUMD. SPDX-License-Identifier: LGPL-3.0-or-later */
 #pragma once
-#include "spin_density_layout.cuh"
+#include "spin_layout.cuh"
 #include "utilities/gpu_vector.cuh"
 
-namespace spin_density {
+namespace nep_spin {
 struct Storage {
   GPU_Vector<Primitive> primitives;
   GPU_Vector<Sector> sectors;
@@ -31,4 +31,4 @@ struct Storage {
             primitives.data(), sectors.data(), terms.data(), centers.data(), harmonic_data.data(), count};
   }
 };
-} // namespace spin_density
+} // namespace nep_spin

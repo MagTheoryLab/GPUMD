@@ -1,7 +1,7 @@
 nep 3 Fe Bi O
 format_version 1
 model nep_spin
-spin_version 2
+spin_version 1
 cutoff 6 5 128 128
 n_max 4 4
 basis_size 8 8
@@ -15,7 +15,6 @@ spin_soc 1
 spin_scaler 1
 spin_type Fe
 spin_cutoff 6
-spin_projection_size 428
 energy_reference 0 0 0
 @ parameters 8151
 0.1948773339481259

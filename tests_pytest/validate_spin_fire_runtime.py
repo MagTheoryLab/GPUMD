@@ -11,7 +11,7 @@ import re
 import subprocess
 import tempfile
 
-FIXTURE = Path(__file__).parent / 'fixtures' / 'nep_spin3'
+FIXTURE = Path(__file__).parent / 'fixtures' / 'nep_spin'
 GPUMD = Path(os.environ.get('GPUMD_COMMAND', Path(__file__).parents[1] / 'src/gpumd')).resolve()
 
 
@@ -134,7 +134,7 @@ def validate(root):
     # First-step oracle from independently dumped force, magnetic force and
     # nonsymmetric virial. At zero initial fictitious velocity, FIRE mixing
     # leaves v=dt*g; this checks simultaneous Cartesian and affine updates.
-    potential=(FIXTURE/'nep_spin_o3c2_uniform.nep').read_text()
+    potential=(FIXTURE/'c3l2s2_fege.nep').read_text()
     skew=structure().replace('20 0 0 0 20 0 0 0 20','20 0 0 2 20 0 0 1 20')
     case,run=run_case(root,'joint_reference',potential,skew,'')
     assert run.returncode==0,run.stderr
