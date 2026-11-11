@@ -6,10 +6,10 @@
 
 namespace nep_spin {
 // The generic and compiled layouts use the same arithmetic and output ordering.
-template<int Capacity>
+template<int Capacity, bool Contracted = false>
 struct RuntimeLayout : View {
   explicit RuntimeLayout(View v) : View(v) {}
-  enum : int { component_capacity = Capacity, spin_capacity = 35, harmonic_capacity = 25, contracted = 0, tile = 1, edge_cached = 0 };
+  enum : int { component_capacity = Capacity, spin_capacity = 35, harmonic_capacity = 25, contracted = Contracted, tile = 1, edge_cached = 0 };
   const float* edge_radial = nullptr;
   __device__ inline Primitive primitive(int i) const { return primitives[i]; }
   __device__ inline Sector sector(int i) const { return sectors[i]; }
@@ -98,14 +98,16 @@ static __global__ void contract_radial(int count, int channels, int na, int basi
 template<class Layout, int Basis>
 static __global__ void cache_radial_edges(
   int n, int plane, int types, const int* type, const int* nn, const int* nl,
-  const double* edges, const float* cutoffs, const float* coefficients, float* cache) {
+  const double* edges, const float* cutoffs, const float* coefficients, float* cache,
+  Box box = Box{}, const double* positions = nullptr) {
   const int slot = blockIdx.x*blockDim.x+threadIdx.x;
   if (slot >= plane) return;
   const int i = slot % n;
   if (slot/n >= nn[i]) return;
   const int pair = type[i]*types+type[nl[slot]];
-  const float x = edges[slot], y = edges[plane+slot], z = edges[2*plane+slot];
-  const float distance = sqrtf(x*x+y*y+z*z), cutoff = cutoffs[pair];
+  float r[3];
+  displacement(n, i, nl[slot], slot, box, positions, edges, plane, r);
+  const float distance = sqrtf(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]), cutoff = cutoffs[pair];
   float fc, fcp, fn[Basis+1], fnp[Basis+1];
   find_fc_and_fcp(cutoff, 1/cutoff, distance, fc, fcp);
   find_fn_and_fnp(Basis, 1/cutoff, distance, fc, fcp, fn, fnp);

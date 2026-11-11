@@ -29,6 +29,7 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 #include "nep_spin.cuh"
 #include "nep_spin_small_box.cuh"
 #include "spin_kernels.cuh"
+#include "spin_md_layouts.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
 #include "utilities/nep_io/nep_spin_model_file.cuh"
@@ -996,20 +997,42 @@ void NEP_Spin::launch_spin_descriptors(
   int r12_plane_size,
   gpuStream_t stream)
 {
+  const int plane = r12_plane_size ? r12_plane_size : static_cast<int>(data.NL_spin.size());
+  const bool cached = model.spin_compress == 3 && data.spin_layout.view.lmax == 2 &&
+                      model.spin_order == 2 && model.basis_size_angular == 8;
+  if (cached) {
+    const std::size_t count = static_cast<std::size_t>(plane) * 6;
+    if (data.radial_edges.size() < count) data.radial_edges.resize(count);
+    nep_spin::cache_radial_edges<nep_spin::MDLayoutSOC<4, true>, 8>
+      <<<(plane + 127) / 128, 128, 0, stream>>>(
+        type.size(), plane, model.num_types, type.data(), data.NN_spin.data(),
+        data.NL_spin.data(), slot_r12, data.spin_cutoff_pair.data(),
+        data.radial_coefficients.data(), data.radial_edges.data(), box, position.data());
+    GPU_CHECK_KERNEL
+  }
   auto launch = [&](auto layout) {
-    nep_spin::descriptors<<<(type.size()*model.spin_compress+63)/64, 64, 0, stream>>>(
+    layout.edge_radial = data.radial_edges.data();
+    nep_spin::descriptors<<<(type.size()*model.spin_compress*decltype(layout)::tile+63)/64, 64, 0, stream>>>(
       layout, static_cast<int>(type.size()), model.struct_descriptor_dim,
       model.num_types, model.n_max_angular, model.basis_size_angular, box,
       type.data(), data.spin_type_active.data(), position.data(), spin.data(),
-      data.NN_spin.data(), data.NL_spin.data(), slot_r12, r12_plane_size,
-      data.spin_cutoff_pair.data(), data.parameters.data() + model.ann_parameter_count + model.radial_parameter_count,
+      data.NN_spin.data(), data.NL_spin.data(), slot_r12, plane,
+      data.spin_cutoff_pair.data(), data.radial_coefficients.data(),
       data.parameters.data() + model.model_parameter_count - model.spin_projection_parameter_count,
       data.spin_moments.data(), data.descriptor.data());
   };
-  if (data.spin_layout.view.components <= 100)
-    launch(nep_spin::DynamicLayout(data.spin_layout.view));
+  if (model.spin_compress == 3 && data.spin_layout.view.lmax == 2 && model.spin_order == 2) {
+    if (cached) {
+      if (model.spin_soc) launch(nep_spin::MDLayoutSOC<4, true>());
+      else launch(nep_spin::MDLayoutNoSOC<4, true>());
+    } else {
+      if (model.spin_soc) launch(nep_spin::MDLayoutSOC<4>());
+      else launch(nep_spin::MDLayoutNoSOC<4>());
+    }
+  } else if (data.spin_layout.view.components <= 100)
+    launch(nep_spin::RuntimeLayout<100, true>(data.spin_layout.view));
   else
-    launch(nep_spin::WideLayout(data.spin_layout.view));
+    launch(nep_spin::RuntimeLayout<625, true>(data.spin_layout.view));
   GPU_CHECK_KERNEL
 }
 
@@ -1028,20 +1051,32 @@ void NEP_Spin::launch_spin_forces(
   const double* slot_r12,
   int r12_plane_size)
 {
+  const int plane = r12_plane_size ? r12_plane_size : static_cast<int>(data.NL_spin.size());
+  const bool cached = model.spin_compress == 3 && data.spin_layout.view.lmax == 2 &&
+                      model.spin_order == 2 && model.basis_size_angular == 8;
   auto launch = [&](auto layout) {
-    nep_spin::forces<<<(type.size()*model.spin_compress+63)/64, 64>>>(
+    layout.edge_radial = data.radial_edges.data();
+    nep_spin::forces<<<(type.size()*model.spin_compress*decltype(layout)::tile+63)/64, 64>>>(
       layout, static_cast<int>(type.size()), model.struct_descriptor_dim,
       model.num_types, model.n_max_angular, model.basis_size_angular, box,
       type.data(), data.spin_type_active.data(), position.data(), spin.data(),
-      data.NN_spin.data(), data.NL_spin.data(), slot_r12, r12_plane_size,
-      data.spin_cutoff_pair.data(), data.parameters.data() + model.ann_parameter_count + model.radial_parameter_count,
+      data.NN_spin.data(), data.NL_spin.data(), slot_r12, plane,
+      data.spin_cutoff_pair.data(), data.radial_coefficients.data(),
       data.parameters.data() + model.model_parameter_count - model.spin_projection_parameter_count,
       data.spin_moments.data(), data.Fp.data(), force.data(), mforce.data(), virial.data(), false);
   };
-  if (data.spin_layout.view.components <= 100)
-    launch(nep_spin::DynamicLayout(data.spin_layout.view));
+  if (model.spin_compress == 3 && data.spin_layout.view.lmax == 2 && model.spin_order == 2) {
+    if (cached) {
+      if (model.spin_soc) launch(nep_spin::MDLayoutSOC<4, true>());
+      else launch(nep_spin::MDLayoutNoSOC<4, true>());
+    } else {
+      if (model.spin_soc) launch(nep_spin::MDLayoutSOC<4>());
+      else launch(nep_spin::MDLayoutNoSOC<4>());
+    }
+  } else if (data.spin_layout.view.components <= 100)
+    launch(nep_spin::RuntimeLayout<100, true>(data.spin_layout.view));
   else
-    launch(nep_spin::WideLayout(data.spin_layout.view));
+    launch(nep_spin::RuntimeLayout<625, true>(data.spin_layout.view));
   GPU_CHECK_KERNEL
 }
 
@@ -1234,6 +1269,16 @@ void NEP_Spin::read_model(const char* file_potential)
   const auto& energy_reference = model_.energy_reference;
   data_.energy_reference.resize(energy_reference.size());
   data_.energy_reference.copy_from_host(energy_reference.data());
+  // MD keeps model parameters fixed: contract once, then reuse on every step.
+  const int radial_count = model_.num_types * model_.num_types * model_.spin_compress *
+                           (model_.basis_size_angular + 1);
+  data_.radial_coefficients.resize(radial_count);
+  nep_spin::contract_radial<<<(radial_count + 127) / 128, 128>>>(
+    radial_count, model_.spin_compress, model_.n_max_angular, model_.basis_size_angular,
+    data_.parameters.data() + model_.ann_parameter_count + model_.radial_parameter_count,
+    data_.parameters.data() + model_.model_parameter_count - model_.spin_projection_parameter_count,
+    data_.radial_coefficients.data());
+  GPU_CHECK_KERNEL
   data_.spin_type_active.resize(model_.spin_type_active.size());
   data_.spin_type_active.copy_from_host(model_.spin_type_active.data());
 

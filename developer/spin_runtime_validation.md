@@ -28,3 +28,25 @@ requires a `DEBUG` build with a fixed PRNG seed. Other runtime tests can use the
 normal build. Restart checks preserve spins and spin velocities at double
 precision; a new SIB/GLSD ensemble initializes its noise counter anew.
 Numerical checks do not establish accuracy on an application dataset.
+
+## MD kernel specialization
+
+MD contracts the fixed angular coefficients with the spin-channel projection once
+when loading a model. C3/L2/S2 SOC and non-SOC layouts use compiled constant tables
+and four neighboring lanes per atom/channel. With angular basis size 8, one edge
+pass caches the radial value and derivative for the descriptor and force passes.
+The cache is refreshed on every force evaluation, including spin correctors;
+it does not assume positions stay unchanged between calls. Other shapes use the
+precontracted generic kernels. No runtime compiler or new input keyword is required.
+
+Regenerate the constant layouts from the shared layout builder, without changing
+any independent oracle, using:
+
+```sh
+c++ -std=c++14 -Isrc tests_pytest/generate_spin_md_layouts.cpp -o "$RESULTS/generate-spin-md"
+"$RESULTS/generate-spin-md" > src/force/nep_spin/spin_md_layouts.cuh
+```
+
+Performance acceptance should compare identical models and initial velocities in
+interleaved GPUMD runs. Report NVE force evaluation separately from spin integrators
+such as SIB, which evaluate the force again for the corrector.

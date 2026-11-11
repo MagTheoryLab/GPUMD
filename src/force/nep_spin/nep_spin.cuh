@@ -111,6 +111,8 @@ private:
     GPU_Vector<int> spin_type_active;
     GPU_Vector<float> spin_cutoff_pair;
     GPU_Vector<float> spin_moments;
+    GPU_Vector<float> radial_coefficients;
+    GPU_Vector<float> radial_edges;
     GPU_Vector<int> NN_radial;
     GPU_Vector<int> NL_radial;
     GPU_Vector<int> NN_angular;
