@@ -32,3 +32,9 @@ This rank cutoff is distinct from :ref:`spin_order <kw_spin_order>` and from
 the ordinary structural :ref:`l_max <kw_l_max>`. A typical Spin3 setting is::
 
   spin_l_max 2 0 0
+
+For ``spin_version 2``, use ``spin_l_max L`` with :math:`0\leq L\leq4`
+(default 2). This bounds the geometry rank, primitive spin rank and coupled
+output rank in the density response. The equivalent ``L 0 0`` form is also
+accepted; the trailing fields must remain zero. Structural ``l_max`` remains
+independent.

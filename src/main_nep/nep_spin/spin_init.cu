@@ -73,6 +73,15 @@ void NEP_Spin_Model::initialize_search(
     radial_count + type_pairs * angular_channel_count * angular_basis_count;
 
   const int spin_offset = descriptor_offset + structural_count;
+  if (para.spin_version == 2) {
+    const int radial_mix_end = spin_offset + angular_channel_count * para.spin_compress;
+    for (int index = spin_offset; index < para.number_of_variables; ++index) {
+      const float scale = index < radial_mix_end ? 1.0f / std::sqrt(float(angular_channel_count)) : 0.2f;
+      mu[index] = normal(rng) * scale;
+      sigma[index] = para.sigma0 * scale;
+    }
+    return;
+  }
   const int basis_count = para.spin_basis_size[0] + 1;
   // Least-squares coefficients of x^c f_c(x) in the fixed B8 magnetic
   // Chebyshev basis, sampled exactly as the Spin3 TorchNEP initializer.

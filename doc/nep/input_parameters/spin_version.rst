@@ -11,9 +11,10 @@ of the spin-dependent energy model::
   model nep_spin
   spin_version 1
 
-The only supported value is ``1``, which is also the default for
-``model nep_spin``. Omit this keyword for other models.
-Using ``spin_version 1`` without ``model`` still selects the spin model, but
+Supported values are ``1`` (the default for ``model nep_spin``) and ``2``.
+Version 2 uses the shared-radial density response described in
+:ref:`nep_spin_v2`. Omit this keyword for other models.
+Using ``spin_version`` without ``model`` still selects the spin model, but
 prints a deprecation warning asking for an explicit ``model nep_spin``.
 A missing value, an unsupported version, or a repeated model selector is an
 input error. Version 1 uses the order/compression descriptor described in
@@ -23,7 +24,7 @@ contraction order.
 Spin training requires ``version 4`` and one hidden layer.
 ``version`` identifies the NEP architecture; ``spin_version`` identifies the
 magnetic descriptor and parameter-layout contract. The resulting ``nep.txt``
-contains ``model nep_spin`` and ``spin_version 1``. Prediction, scaler import,
+contains ``model nep_spin`` and the selected ``spin_version``. Prediction, scaler import,
 and restart require a compatible model. The shared model-file keyword
 ``format_version`` does not belong in ``nep.in``.
 
@@ -64,3 +65,52 @@ Each frame in ``train.xyz`` and ``test.xyz`` must then contain a Cartesian
 the Spin3 formalism.
 
 See :ref:`nep_spin_dimensions` before changing the descriptor shape.
+
+Version 2 example
+-----------------
+
+This configuration has 30 structural and 34 response coordinates (64 total),
+with 7270 trainable parameters. All Fe, Bi and O atoms are energy centers;
+only Fe has independent spin inputs::
+
+  model            nep_spin
+  version          4
+  spin_version     2
+  type             3 Fe Bi O
+  cutoff           6 5
+  n_max            4 4
+  basis_size       8 8
+  l_max            4 2 0
+  neuron           32
+  spin_type        Fe
+  spin_cutoff      6
+  spin_compress    3
+  spin_l_max       2
+  spin_order       2
+  spin_soc         1
+  lambda_m         1
+
+The version-2 defaults are ``spin_compress 3``, ``spin_l_max 2`` and
+``spin_order 2``. ``spin_basis_size`` can be omitted: it follows the angular
+entry of structural ``basis_size`` because the angular radial coefficients
+are shared. A conflicting explicit value is rejected. ``spin_soc 1`` is the default;
+use ``spin_soc 0`` to enforce independent spatial and spin rotations. For
+the example above, this gives 30 structural plus 31 response coordinates
+(61 total) and 6946 parameters with the 32-neuron network. With 30 neurons
+the same non-SOC model has 6568 parameters. SOC/non-SOC checkpoints have
+different layouts and cannot be converted by editing their header.
+
+Compiled training kernels
+-------------------------
+
+With ``nep_compile 1`` (the default), version 2 specializes the sparse coupling
+layout and reuses a contracted radial coefficient matrix in the descriptor and
+force kernels. The matrix is rebuilt for each evaluated parameter vector; it does
+not change the stored model parameters or the restart format. Prediction with
+``nep`` can use the same compiled spin kernels. ``nep_compile 0`` uses the generic
+CUDA implementation.
+
+Compilation currently specializes layouts with at most 512 sparse coupling terms.
+Larger layouts, or unavailable runtime compilation, use the generic implementation.
+This optimization applies to ``nep`` training/prediction; ``gpumd`` continues to
+use the generic version 2 evaluator.

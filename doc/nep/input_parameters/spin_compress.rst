@@ -28,3 +28,10 @@ shape has 55 magnetic coordinates with::
 Together with the default structural descriptors, this default Spin shape has
 97 total coordinates and satisfies both dimension limits. Use the formulas in
 :ref:`nep_spin_dimensions` before increasing this value.
+
+For ``spin_version 2``, the default is 3 and the allowed range is 1--9,
+subject to the same 96-response/199-total dimension limits. A learned
+matrix mixes the ``n_max`` angular channels into :math:`C` response channels.
+At ``spin_l_max 2`` and ``spin_order 2``, the response dimension is
+:math:`1+11C`; hence :math:`C=3` gives 34 response coordinates. This count
+includes geometric density channels at nonmagnetic energy centers.

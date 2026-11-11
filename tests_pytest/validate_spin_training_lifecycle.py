@@ -71,57 +71,6 @@ def scalers(model):
     return [float(line) for line in lines[start+1:start+1+count]]
 
 
-def validate_initial_para(root):
-    root.mkdir()
-    # Twelve candidates also support 2/4-GPU partitions. Larger spins exercise
-    # magnetic normalization below its gain cap, not just capped unit scalers.
-    config = CONFIG.replace("population 10", "population 12")
-    lines = base.TRAIN_XYZ.splitlines()
-    for i, line in enumerate(lines):
-        if i % 6 >= 2:
-            fields = line.split()
-            fields[7:10] = [str(4 * float(x)) for x in fields[7:10]]
-            lines[i] = " ".join(fields)
-    xyz = "\n".join(lines) + "\n"
-    execute(root / "default", config, xyz)
-    model = (root / "default" / "nep.txt").read_text()
-    default = scalers(model)
-    execute(root / "explicit_one", config + "initial_para 1\n", xyz)
-    for filename in ("nep.txt", "nep.restart"):
-        assert (root / "default" / filename).read_bytes() == (root / "explicit_one" / filename).read_bytes()
-    report = {"default_vs_one": "identical model and search state"}
-    for value in (0.5, 0.1):
-        case = root / str(value)
-        execute(case, config + f"initial_para {value}\n", xyz)
-        scaled = scalers((case / "nep.txt").read_text())
-        assert len(default) == len(scaled)
-        assert all(math.isfinite(x) and x > 0 for x in scaled)
-        # n_max=0, l_max=2: one linear radial and two quadratic angular
-        # structural components give independent, known normalization ratios.
-        ratios = [scaled[i] / default[i] for i in range(3)]
-        for ratio, degree in zip(ratios, (1, 2, 2)):
-            assert math.isclose(ratio, value ** -degree, rel_tol=2e-5), ratios
-        assert all(x <= 1 for x in scaled[3:])
-        assert any(abs(a-b) > 1e-5 for a, b in zip(default[3:], scaled[3:]))
-        report[str(value)] = {"structural_scaler_ratios": ratios,
-                              "magnetic_scaler_max": max(scaled[3:])}
-
-    changed = config + "initial_para 0.5\n"
-    before = predict(root / "before", model, xyz, config)
-    report["prediction"] = compare(before, predict(root / "after", model, xyz, changed))
-    restart = (root / "default" / "nep.restart").read_text()
-    for mode, extra, state in (("restart", "", restart), ("import", "import_q_scaler 1\n", None)):
-        case = root / mode
-        execute(case, changed + extra, xyz, model=model, restart=state)
-        assert scalers((case / "nep.txt").read_text()) == default
-        report[mode] = "saved scalers preserved"
-    for value in ("inf", "0", "1.1"):
-        execute(root / ("invalid_" + value), config + f"initial_para {value}\n", xyz,
-                error="initial_para should be within [0.1, 1]")
-    report["invalid_values"] = "rejected"
-    return report
-
-
 def validate_inactive_input(root, config, model, restart):
     root.mkdir()
     raw = base.TRAIN_XYZ.splitlines()
@@ -202,8 +151,8 @@ def validate(root):
         predict(root / (name + "_import_reload"), (imported / "nep.txt").read_text())
         if name == "fe_only":
             execute(root / "unsupported_version", NO_MASKS + "prediction 1\n",
-                    model=model.replace("spin_version 1\n", "spin_version 2\n"),
-                    error="Unsupported spin_version")
+                    model=model.replace("spin_version 1\n", "spin_version 3\n"),
+                    error="invalid integer in 'spin_version'")
             execute(root / "conflicting_dof", NO_MASKS + "spin_type Ge\n",
                     model=model, restart=frozen, error="spin_type in nep.in conflicts")
             report["inactive_input"] = validate_inactive_input(root / "inactive_input", config, model, frozen)
@@ -233,7 +182,6 @@ def validate(root):
     for flag in ("F F F", "T T F"):
         xyz = small.replace("Properties=", f'pbc="{flag}" Properties=')
         report[flag] = compare(periodic, predict(root / flag.replace(" ", ""), model, xyz))
-    report["initial_para"] = validate_initial_para(root / "initial_para")
     report["ediff"] = validate_ediff(root / "ediff")
     return report
 

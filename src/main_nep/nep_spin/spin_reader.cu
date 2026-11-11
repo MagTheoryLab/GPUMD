@@ -100,7 +100,7 @@ void NEP_Spin_Model::Spin_Reader::read_structure(const XYZ_Record& record, Struc
     offset += count;
   }
   if (spin_offset < 0)
-    PRINT_INPUT_ERROR("spin_version 1 requires spin/spins/moment/moments with property type R:3.");
+    PRINT_INPUT_ERROR("NEP-spin requires spin/spins/moment/moments with property type R:3.");
   label.has_mforce = mforce_offset >= 0;
   for (auto* values : {&label.sx, &label.sy, &label.sz, &label.mfx, &label.mfy, &label.mfz})
     values->resize(structure.num_atom, 0.0f);

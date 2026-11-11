@@ -86,6 +86,9 @@ void NEP_Spin_Model::initialize_compiled_kernel(const Spin_Parameters& para)
     compiled_kernel_.reset(new NEP_Compiled_Evaluation(config));
     if (!compiled_kernel_->is_valid())
       compiled_kernel_.reset();
+  }
+  if (para.nep_compile && (para.prediction == 0 || para.spin_version == 2)) {
+    CHECK(gpuSetDevice(0));
     initialize_spin_compiled(para);
   }
 }
@@ -358,11 +361,6 @@ void NEP_Spin_Model::prepare_training()
   std::mt19937 reference_rng(12345678);
   std::vector<float> mu(para.number_of_variables), sigma(para.number_of_variables);
   initialize_search(reference_rng, mu, sigma);
-  // Match the radial scaling used by the initial search population.
-  const int radial_end = para.number_of_variables - para.number_of_variables_spin_projection;
-  for (int n = para.number_of_variables_ann; n < radial_end; ++n)
-    mu[n] *= para.initial_para;
-  printf("Spin scaler reference: initial_para = %g\n", para.initial_para);
   std::vector<float> parameters;
   for (int device = 0; device < training->device_count; ++device)
     parameters.insert(parameters.end(), mu.begin(), mu.end());
@@ -382,6 +380,8 @@ void NEP_Spin_Model::parameter_groups(std::vector<int>& groups)
 {
   auto& para = *model_parameters;
   find_nep_type_of_variable(para, groups, 1, 1);
+  // Density path and center mixing parameters are shared across all energy centers.
+  if (para.spin_version == 2) return;
   const int offset = para.number_of_variables - para.number_of_variables_descriptor_spin -
                      para.number_of_variables_spin_projection;
   for (int channel = 0; channel < para.spin_compress; ++channel) {

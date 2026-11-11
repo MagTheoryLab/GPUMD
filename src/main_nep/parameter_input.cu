@@ -48,10 +48,10 @@ ParameterInput::ParameterInput()
         PRINT_INPUT_ERROR("Specify spin_version only once.");
       }
       has_spin_selector = true;
-      if (tokens.size() != 2 || tokens[1] != "1") {
-        PRINT_INPUT_ERROR("Unsupported spin_version (expected 1).");
+      if (tokens.size() != 2 || (tokens[1] != "1" && tokens[1] != "2")) {
+        PRINT_INPUT_ERROR("Unsupported spin_version (expected 1 or 2).");
       }
-      spin_version = 1;
+      spin_version = tokens[1] == "2" ? 2 : 1;
     } else if (tokens[0] == "model_type") {
       parse_model_type(param.data(), param.size());
     } else if (tokens[0] == "charge_mode") {
@@ -102,7 +102,7 @@ void ParameterInput::parse_model(const char** param, int num_param)
   } else if (model == "nep_temperature") {
     model_type = 3;
   } else if (model == "nep_spin") {
-    spin_version = 1;
+    if (!spin_version) spin_version = 1;
   } else if (model == "qnep1") {
     charge_mode = 1;
   } else if (model == "qnep2") {

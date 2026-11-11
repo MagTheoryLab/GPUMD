@@ -10,6 +10,7 @@ class Spin_Parameters : public NEP_Energy_Parameters
 {
 public:
   explicit Spin_Parameters(const ParameterInput& input);
+  int spin_version = 1;
   int spin_compress = 2, spin_order = 3, spin_soc = 1;
   int spin_basis_size[2] = {8, 0};
   int spin_l_max[3] = {2, 0, 0};

@@ -10,8 +10,7 @@ to the local spatial environment::
 
   spin_soc <flag>
 
-The flag can be 0 or 1 and defaults to 1. It is used only with
-``spin_version 1``.
+The flag can be 0 or 1 and defaults to 1. It is supported by both ``spin_version 1`` and ``spin_version 2``.
 
 .. list-table::
    :header-rows: 1
@@ -29,3 +28,16 @@ subset. With value 1, it also includes scalar contractions between spin and
 spatial rank-1/rank-2 objects up to
 :ref:`spin_l_max <kw_spin_l_max>`. The flag changes the descriptor's allowed
 information flow; it does not impose a particular analytic SOC Hamiltonian.
+
+For ``spin_version 2``, value 0 builds product sectors with separate spatial
+and spin ranks and contracts each full tensor norm. Thus all spins may be
+rotated together without rotating the lattice. Spatial angular information,
+variable spin lengths, and center/neighbor exchange information are retained.
+Value 1 uses the existing joint-rotation coupling sectors (the default).
+Both modes preserve time reversal and have analytical force, magnetic-force
+and virial derivatives, including at zero spin.
+
+Changing this flag changes the descriptor dimensions and projection layout.
+Train a new model; changing the flag in an existing checkpoint is not a
+conversion between SOC and non-SOC models. The flag specifies the allowed
+symmetry, not whether the DFT reference calculations included SOC.

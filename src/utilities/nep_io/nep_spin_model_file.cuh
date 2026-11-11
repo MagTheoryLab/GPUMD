@@ -13,6 +13,7 @@ struct NEP_Spin_Model_File {
   int max_radial = 0, max_angular = 0;
   int n_max[2] = {}, basis_size[2] = {}, l_max[7] = {};
   int num_neurons = 0;
+  int spin_version = 1;
   int spin_basis_size = 0, spin_l_max = 0, spin_compress = 0;
   int spin_order = 0, spin_soc = 0, spin_projection_size = 0;
   int dim_struct = 0, dim_spin = 0, dim = 0;

@@ -28,6 +28,7 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 #pragma once
 
 #include "force/neighbor.cuh"
+#include "force/nep_spin/spin_density_storage.cuh"
 #include "force/potential.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_vector.cuh"
@@ -98,6 +99,7 @@ public:
 
 private:
   struct Data {
+    spin_density::Storage density;
     GPU_Vector<float> parameters;
     GPU_Vector<float> descriptor;
     GPU_Vector<float> Fp;
@@ -145,6 +147,7 @@ private:
     int neighbor_capacity = 0;
     int spin_basis_size[2] = {0, 0};
     int spin_l_max[3] = {0, 0, 0};
+    int spin_version = 1;
     int spin_compress = 0;
     int spin_order = 0;
     int spin_soc = 0;

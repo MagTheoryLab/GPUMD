@@ -14,6 +14,7 @@
 */
 
 #pragma once
+#include "force/nep_spin/spin_density_storage.cuh"
 #include "main_nep/common/energy_difference.cuh"
 #include "main_nep/common/nep_batch_data.cuh"
 #include "main_nep/common/nep_common.cuh"
@@ -205,9 +206,11 @@ private:
   float response_loss(int);
   void write_magnetic_predictions(const char*, const std::vector<std::pair<Dataset*, int>>&);
   struct Spin_Workspace {
+    spin_density::Storage density;
     GPU_Vector<int> spin_type_active;
     GPU_Vector<float> spin_cutoff_pair;
     GPU_Vector<float> spin3_moments;
+    GPU_Vector<float> density_radial;
     GPU_Vector<double> force;
     GPU_Vector<double> mforce;
     GPU_Vector<double> virial;

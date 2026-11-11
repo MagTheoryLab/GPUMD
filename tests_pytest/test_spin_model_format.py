@@ -154,3 +154,46 @@ def test_model_selection_uses_file_parser(codec, tmp_path, record):
     if record is None:
         changed += '\nmodel nep_spin\n'
     assert parse(codec, tmp_path / 'model.nep', changed)['spin_type'] == [1, 0]
+
+
+@pytest.mark.parametrize('name,dimension,count', [
+    ('c3l2s2',64,7270), ('c2l4s4',70,8151), ('c1l0s1',32,4081)])
+def test_version2_model(codec, tmp_path, name, dimension, count):
+    model = (Path(__file__).parent/'fixtures/nep_spin_v2'/(name+'.nep')).read_text()
+    parsed = parse(codec,tmp_path/'model.nep',model)
+    assert parsed['dimensions'] == [30,dimension-30]
+    assert len(parsed['parameters']) == count
+    assert len(parsed['q_scaler']) == dimension
+    assert parsed['spin_type'] == [1,0,0]
+
+
+@pytest.mark.parametrize('old,new', [
+    ('spin_version 2','spin_version 3'),
+    ('spin_version 2','spin_version 1'),
+    ('spin_soc 1','spin_soc 0'),
+    ('spin_order 2','spin_order 5'),
+    ('spin_l_max 2','spin_l_max 5'),
+    ('spin_basis_size 8','spin_basis_size 7'),
+    ('spin_projection_size 123','spin_projection_size 124'),
+    ('spin_type Fe','spin_dof_type Fe'),
+])
+def test_version2_reject_invalid(codec,tmp_path,old,new):
+    model = (Path(__file__).parent/'fixtures/nep_spin_v2/c3l2s2.nep').read_text()
+    path = tmp_path/'invalid.nep';path.write_text(model.replace(old,new))
+    result=subprocess.run([codec,path],capture_output=True,text=True)
+    assert result.returncode == 1 and result.stderr
+
+
+@pytest.mark.parametrize('channels,rank,order,dimension,projection', [
+    (3,2,2,61,87), (1,3,2,44,36), (1,4,4,58,98), (2,1,4,42,54)])
+def test_version2_nosoc_layout(codec,tmp_path,channels,rank,order,dimension,projection):
+    template=(Path(__file__).parent/'fixtures/nep_spin_v2/c3l2s2.nep').read_text().split('@ parameters')[0]
+    for old,new in [('spin_soc 1','spin_soc 0'),('spin_compress 3',f'spin_compress {channels}'),
+                    ('spin_l_max 2',f'spin_l_max {rank}'),('spin_order 2',f'spin_order {order}'),
+                    ('spin_projection_size 123',f'spin_projection_size {projection}')]:
+        template=template.replace(old,new)
+    count=3*32*(dimension+2)+1+810+projection
+    model=template+f'@ parameters {count}\n'+'0\n'*count+f'@ q_scaler {dimension}\n'+'1\n'*dimension
+    parsed=parse(codec,tmp_path/'nosoc.nep',model)
+    assert parsed['dimensions']==[30,dimension-30]
+    assert len(parsed['parameters'])==count

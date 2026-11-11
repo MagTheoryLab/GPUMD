@@ -5,6 +5,7 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include "force/nep_spin/spin_density_layout.cuh"
 
 namespace
 {
@@ -66,8 +67,7 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
   const auto* f = field("spin_version", 1, 1);
   if (!f)
     return false;
-  if (f->values[0] != "1")
-    return fail(error, "Unsupported spin_version (expected 1).");
+  if (!integer(f, 0, 1, 2, spin_version)) return false;
 
   f = field("cutoff", 4, 4);
   if (
@@ -98,15 +98,17 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
 
   int scaler_flag;
   if (
-    !scalar("spin_basis_size", 8, 8, spin_basis_size) || !scalar("spin_l_max", 0, 2, spin_l_max) ||
-    !scalar("spin_compress", 1, 9, spin_compress) || !scalar("spin_order", 1, 3, spin_order) ||
+    !scalar("spin_basis_size", spin_version == 2 ? basis_size[1] : 8,
+            spin_version == 2 ? basis_size[1] : 8, spin_basis_size) ||
+    !scalar("spin_l_max", 0, spin_version == 2 ? 4 : 2, spin_l_max) ||
+    !scalar("spin_compress", 1, 9, spin_compress) ||
+    !scalar("spin_order", 1, spin_version == 2 ? 4 : 3, spin_order) ||
     !scalar("spin_soc", 0, 1, spin_soc) ||
-    !scalar(
-      "spin_projection_size",
-      4 * spin_compress * spin_compress,
-      4 * spin_compress * spin_compress,
-      spin_projection_size) ||
-    !scalar("spin_scaler", 1, 1, scaler_flag))
+    !scalar("spin_scaler", 1, 1, scaler_flag)) return false;
+  const int projection_count = spin_version == 2 ?
+    spin_density::Layout(spin_compress, spin_l_max, spin_order, spin_soc).parameter_count(n_max[1]+1) :
+    4 * spin_compress * spin_compress;
+  if (!scalar("spin_projection_size", projection_count, projection_count, spin_projection_size))
     return false;
   f = field("spin_cutoff", 1, types);
   if (!f)
@@ -171,7 +173,8 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
     angular_channels += l_max[i];
   const int dim_angular = (n_max[1] + 1) * angular_channels;
   dim_struct = n_max[0] + 1 + dim_angular;
-  dim_spin = spin_dimension(spin_compress, spin_l_max, spin_order, spin_soc);
+  dim_spin = spin_version == 2 ? spin_density::Layout(spin_compress, spin_l_max, spin_order, spin_soc).dimension :
+    spin_dimension(spin_compress, spin_l_max, spin_order, spin_soc);
   dim = dim_struct + dim_spin;
   if (dim_angular > 90 || dim_spin > 96 || dim > MAX_DIM_SPIN)
     return fail(error, "descriptor dimensions exceed the supported Spin shape.");
@@ -179,7 +182,7 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
     (dim + 2) * num_neurons * types + 1 +
     types * types *
       ((n_max[0] + 1) * (basis_size[0] + 1) + (n_max[1] + 1) * (basis_size[1] + 1) +
-       spin_compress * (spin_basis_size + 1)) +
+       (spin_version == 2 ? 0 : spin_compress * (spin_basis_size + 1))) +
     spin_projection_size;
   auto block = [&](const char* name, int count, std::vector<float>& values, bool positive) {
     const auto* b = doc.find_block(name);

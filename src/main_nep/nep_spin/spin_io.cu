@@ -24,7 +24,7 @@ void validate_model(Spin_Parameters& para, const NEP_Spin_Model_File& model)
     para.has_q_233,
     para.has_q_134};
   if (
-    model.elements != para.elements || model.n_max[0] != para.n_max_radial ||
+    model.spin_version != para.spin_version || model.elements != para.elements || model.n_max[0] != para.n_max_radial ||
     model.n_max[1] != para.n_max_angular || model.basis_size[0] != para.basis_size_radial ||
     model.basis_size[1] != para.basis_size_angular ||
     !std::equal(model.l_max, model.l_max + 7, l_max) || model.num_neurons != para.num_neurons1 ||
@@ -70,7 +70,7 @@ void write_checkpoint_metadata(FILE* fid_nep, const Spin_Parameters& para)
     std::any_of(para.spin_type_active.begin(), para.spin_type_active.end(), [](int active) {
       return active != 1;
     });
-  fprintf(fid_nep, "spin_version 1\n");
+  fprintf(fid_nep, "spin_version %d\n", para.spin_version);
   fprintf(fid_nep, "spin_basis_size %d\n", para.spin_basis_size[0]);
   fprintf(fid_nep, "spin_l_max %d\n", para.spin_l_max[0]);
   fprintf(fid_nep, "spin_compress %d\n", para.spin_compress);

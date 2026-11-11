@@ -28,6 +28,7 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 
 #include "nep_spin.cuh"
 #include "nep_spin_small_box.cuh"
+#include "nep_spin_density.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
 #include "utilities/nep_io/nep_spin_model_file.cuh"
@@ -1272,6 +1273,25 @@ void NEP_Spin::launch_spin3_descriptors(
   int r12_plane_size,
   gpuStream_t stream)
 {
+  if (model.spin_version == 2) {
+    auto launch_density = [&](auto layout) {
+      spin_density::descriptors<<<(type.size()*model.spin_compress+63)/64, 64, 0, stream>>>(
+        layout, static_cast<int>(type.size()), model.struct_descriptor_dim,
+        model.num_types, model.n_max_angular, model.basis_size_angular, box,
+        type.data(), data.spin_type_active.data(), position.data(), spin.data(),
+        data.NN_spin.data(), data.NL_spin.data(), slot_r12, r12_plane_size,
+        data.spin_cutoff_pair.data(), data.parameters.data() + model.ann_parameter_count + model.radial_parameter_count,
+        data.parameters.data() + model.model_parameter_count - model.spin_projection_parameter_count,
+        data.spin3_moments.data(), data.descriptor.data());
+    };
+    if (data.density.view.components <= 100)
+      launch_density(spin_density::DynamicLayout(data.density.view));
+    else
+      launch_density(spin_density::WideLayout(data.density.view));
+    GPU_CHECK_KERNEL
+    return;
+  }
+
   switch (model.spin_compress) {
     case 1:
       launch_spin3_descriptors_typed<1>(
@@ -1383,6 +1403,25 @@ void NEP_Spin::launch_spin3_forces(
   const double* slot_r12,
   int r12_plane_size)
 {
+  if (model.spin_version == 2) {
+    auto launch_density = [&](auto layout) {
+      spin_density::forces<<<(type.size()*model.spin_compress+63)/64, 64>>>(
+        layout, static_cast<int>(type.size()), model.struct_descriptor_dim,
+        model.num_types, model.n_max_angular, model.basis_size_angular, box,
+        type.data(), data.spin_type_active.data(), position.data(), spin.data(),
+        data.NN_spin.data(), data.NL_spin.data(), slot_r12, r12_plane_size,
+        data.spin_cutoff_pair.data(), data.parameters.data() + model.ann_parameter_count + model.radial_parameter_count,
+        data.parameters.data() + model.model_parameter_count - model.spin_projection_parameter_count,
+        data.spin3_moments.data(), data.Fp.data(), force.data(), mforce.data(), virial.data(), false);
+    };
+    if (data.density.view.components <= 100)
+      launch_density(spin_density::DynamicLayout(data.density.view));
+    else
+      launch_density(spin_density::WideLayout(data.density.view));
+    GPU_CHECK_KERNEL
+    return;
+  }
+
   switch (model.spin_compress) {
     case 1:
       launch_spin3_forces_typed<1>(
@@ -1579,6 +1618,7 @@ void NEP_Spin::read_model(const char* file_potential)
   model_.hidden_neurons = file.num_neurons;
   model_.spin_basis_size[0] = file.spin_basis_size;
   model_.spin_l_max[0] = file.spin_l_max;
+  model_.spin_version = file.spin_version;
   model_.spin_compress = file.spin_compress;
   model_.spin_cutoff_by_type.assign(file.spin_cutoff.begin(), file.spin_cutoff.end());
   model_.spin_cutoff = *std::max_element(file.spin_cutoff.begin(), file.spin_cutoff.end());
@@ -1595,6 +1635,10 @@ void NEP_Spin::read_model(const char* file_potential)
       model_.spin_compress, model_.spin_l_max[0], model_.spin_order, model_.spin_soc)
       .moment_count;
 
+  if (model_.spin_version == 2) {
+    data_.density.initialize(model_.spin_compress, model_.spin_l_max[0], model_.spin_order, model_.spin_soc);
+    model_.spin_moment_count = data_.density.view.components * model_.spin_compress;
+  }
   zbl_.enabled = file.enable_zbl;
   zbl_.num_types = model_.num_types;
   zbl_.rc_inner = file.zbl_rc_inner;
@@ -1618,7 +1662,7 @@ void NEP_Spin::read_model(const char* file_potential)
     static_cast<std::size_t>(model_.n_max_radial + 1) * (model_.basis_size_radial + 1) * type_pairs;
   model_.angular_parameter_count = static_cast<std::size_t>(model_.n_max_angular + 1) *
                                    (model_.basis_size_angular + 1) * type_pairs;
-  model_.spin_parameter_count =
+  model_.spin_parameter_count = model_.spin_version == 2 ? 0 :
     static_cast<std::size_t>(model_.spin_compress) * (model_.spin_basis_size[0] + 1) * type_pairs;
   model_.spin_projection_parameter_count = static_cast<std::size_t>(model_.spin_projection_size);
   model_.model_parameter_count = model_.ann_parameter_count + model_.radial_parameter_count +

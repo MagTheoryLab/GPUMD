@@ -152,7 +152,7 @@ def validate_parser(root):
         "response_requires_metadata": NEP_IN.replace(
             "lambda_tau 0.5", "lambda_tau 0.5\nlambda_spin_response 0.3"),
     }
-    for value in ("0", "2", "1.0", "nan", "1 2", ""):
+    for value in ("0", "3", "1.0", "nan", "1 2", ""):
         cases[f"invalid_spin_version_{value}"] = NEP_IN.replace("spin_version 1", f"spin_version {value}")
     cases["duplicate_spin_version"] = NEP_IN + "spin_version 1\n"
     cases["mixed_spin_selectors"] = NEP_IN + "spin_mode 3\n"

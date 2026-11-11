@@ -14,7 +14,7 @@ virials, magnetic forces, and spin torques are derivatives of this same energy
 and are not produced by independent response networks.
 
 The current format uses ``nep``, ``format_version 1``, and ``model nep_spin``
-with ``spin_version 1`` and named parameter and scaler blocks. It uses the
+with ``spin_version 1`` or ``spin_version 2`` and named parameter and scaler blocks. It uses the
 order/compression (O/C) descriptor described below. An optional ``zbl`` field adds a spin-independent
 universal ZBL term. Flexible ZBL (``zbl 0 0``) is not supported.
 ``spin_version`` identifies the descriptor and parameter-layout
@@ -594,7 +594,7 @@ Model formats and input
      - Description
    * - ``nep`` / ``model nep_spin``
      - ``model nep_spin``
-     - Current block format with ``spin_version 1``; optional :ref:`zbl <kw_zbl>` field.
+     - Current block format with ``spin_version 1`` or ``spin_version 2``; optional :ref:`zbl <kw_zbl>` field.
 
 See :ref:`spin_version <kw_spin_version>` and the neighboring ``spin_*`` keyword
 pages for descriptor configuration. See :ref:`train_test_xyz` for ordinary
@@ -641,3 +641,104 @@ Multi-GPU execution uses every visible GPU in a single process. Use
 ``potential nep.txt x`` (or ``y``/``z``) to select the spatial partition
 direction. Small cells may require replicated geometry and offer little
 speedup. GPU 0 retains the global arrays.
+
+
+.. _nep_spin_v2:
+
+Version 2: shared-radial density response
+---------------------------------------
+
+Select ``model nep_spin`` and ``spin_version 2``. The preceding contraction
+formulas describe version 1; version 2 uses the construction below. All
+atom types are energy centers. ``spin_type`` selects independent spin inputs
+and magnetic-force labels only. The 64-coordinate configuration is given in
+:ref:`kw_spin_version`.
+
+Let :math:`C=\texttt{spin_compress}`, :math:`L=\texttt{spin_l_max}` and
+:math:`S=\texttt{spin_order}`. Real, component-normalized solid harmonics
+form the spin primitives
+
+.. math::
+
+   \phi_{dl}(\mathbf{s}) = |\mathbf{s}|^{d-l}
+      \mathcal{Y}_l(\mathbf{s}),
+   \qquad 0\leq d\leq S,\quad l=d\bmod2,d\bmod2+2,\ldots,\min(d,L).
+
+In SOC mode (``spin_soc 1``), the angular NEP radial coefficients are reused at the spin cutoff, then
+linearly mixed into :math:`C` channels. For each allowed geometry rank,
+spin primitive and coupled output rank, an independent learned channel
+weight multiplies the real Clebsch--Gordan coupling. Degree-zero primitives
+use one site; positive-degree primitives use both center and neighbor spins.
+Edges are summed into center densities grouped by output rank, spatial
+parity and time-reversal parity. Learned center-only spin primitives are
+added to the matching sectors, including for isolated atoms.
+
+The response coordinates are the local positive-degree scalar spin
+primitives, the even scalar density itself, and each sector's squared norm
+divided by :math:`2l+1`, separately for each channel. These coordinates are
+concatenated with the unchanged structural NEP coordinates. This retains
+simultaneous rotation, inversion and time-reversal invariance. Cartesian
+force, magnetic force and all nine virial components are analytical
+chain-rule derivatives of this energy.
+
+Parameter and checkpoint layout
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The shared block-file syntax remains ``format_version 1``. The magnetic
+layout is selected by ``spin_version 2`` together with ``spin_soc``. Parameters are stored
+as per-type ANN parameters, shared ANN bias, structural radial coefficients,
+structural angular coefficients, then these channel-last arrays:
+
+* angular-radial mixing, shape ``(n_max_angular+1, C)``;
+* coupling-path weights, shape ``(number_of_paths, C)``;
+* center-primitive mixing, shape ``(number_of_positive_degree_primitives, C)``.
+
+There is no separate spin radial coefficient block. ``spin_projection_size``
+records the total size of the three additional arrays. Primitive order is
+ascending degree then rank. In SOC mode, path order is geometry rank, primitive, site
+(center before neighbor), then output rank. Sectors are sorted by
+``(rank, spatial parity, time parity)``, with -1 before +1. Scalers follow
+in the ``@ q_scaler`` block. Version 1 and version 2 checkpoints cannot be
+interchanged merely by changing their header.
+
+Current limits are :math:`1\leq C\leq9`, :math:`0\leq L\leq4`,
+:math:`1\leq S\leq4`, at most 96 response and 199 total coordinates.
+The native training optimizer is SNES;
+selecting version 2 does not enable the prototype's Adam/L-BFGS workflow.
+
+Independent-rotation version 2 (non-SOC)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set ``spin_version 2`` and ``spin_soc 0``. The radial mix, variable-length
+spin primitives, and energy-center mask semantics are shared with the SOC
+mode. Instead of coupling spatial rank g and spin rank j into a joint rank,
+keep the product components (m,a) separate::
+
+  T[c,g,j,m,a] = sum_edges sum_degrees sum_sites
+                  radial[c](r) * weight[c,g,j,degree,site]
+                  * Y[g,m](r_hat) * Phi[degree,j,a](spin_site)
+                + delta[g,0] * sum_degrees center[c,degree]
+                  * Phi[degree,j,a](spin_center)
+
+The scalar responses are the full squared Frobenius norms divided by
+``(2*g+1)*(2*j+1)``. Also retain the direct ``g=j=0`` density and local
+even-degree scalar spin primitives. Degrees of the same spin rank mix;
+center and neighbor spins can interfere within a product sector, preserving
+exchange-sensitive responses. Rotating only one spin generally changes the
+energy, while rotating every spin by the same orthogonal transformation does
+not. No normalization by spin length is required at zero spin.
+
+Product sectors are ordered by ascending ``(g,j)``. Paths are ordered by
+``g, j, primitive (degree then rank), site (center then neighbor)``; within
+a product sector the spatial component m precedes spin component a. Center
+coefficients keep the positive-degree primitive ordering of the SOC mode,
+but only enter spatial-rank-zero sectors. This ordering is part of the
+``spin_soc 0`` checkpoint contract.
+
+For maximum angular rank L, order S and C channels, the response dimension is
+``floor(S/2) + C * ((L+1)*(min(L,S)+1) + 1)``. For C=3, L=S=2 this is 31,
+with 81 tensor components per channel. The existing limits of 96 response
+and 199 total coordinates still apply. The largest supported product basis
+has 625 components per channel; large layouts retain the generic CUDA
+fallback. Neither this implementation nor its symmetry checks establish
+training accuracy on a particular non-SOC dataset.

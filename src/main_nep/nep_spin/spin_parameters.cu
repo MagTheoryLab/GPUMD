@@ -13,12 +13,16 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include "force/nep_spin/spin_density_layout.cuh"
 Spin_Parameters::Spin_Parameters(const ParameterInput& input)
 {
   if (input.model_type != 0 || input.charge_mode || input.vdw || input.charge_vdw) {
     PRINT_INPUT_ERROR("Spin NEP only supports a NEP4 potential model without charge/vdW.");
   }
+  spin_version = input.spin_version;
+  if (spin_version == 2) { spin_compress = 3; spin_order = 2; }
   read(input);
+  if (spin_version == 2 && !is_spin_basis_size_set) spin_basis_size[0] = basis_size_angular;
   if (!is_spin_cutoff_set) {
     spin_cutoff = rc_radial_max;
     spin_cutoff_by_type.assign(num_types, spin_cutoff);
@@ -31,15 +35,23 @@ Spin_Parameters::Spin_Parameters(const ParameterInput& input)
   number_of_variables_descriptor_spin =
     num_types * num_types * spin_compress * (spin_basis_size[0] + 1);
   number_of_variables_spin_projection = 4 * spin_compress * spin_compress;
+  if (spin_version == 2) {
+    spin_density::Layout layout(spin_compress, spin_l_max[0], spin_order, spin_soc);
+    number_of_variables_descriptor_spin = 0;
+    number_of_variables_spin_projection = layout.parameter_count(n_max_angular + 1);
+    printf("Density response: %d paths, %d tensor components, %d output columns.\n",
+           layout.path_count, layout.components * spin_compress, layout.dimension);
+  }
   number_of_variables_descriptor +=
     number_of_variables_descriptor_spin + number_of_variables_spin_projection;
   number_of_variables = number_of_variables_ann + number_of_variables_descriptor;
   model_name = "nep_spin";
   set_regularization_defaults();
   initialize_spin_checkpoint();
-  report_inputs(input, "Spin3 potential", nullptr);
+  report_inputs(input, "NEP-spin potential", nullptr);
   printf(
-    "Spin3 O%d/C%d: %d structural + %d magnetic descriptors, %d parameters.\n",
+    "Spin version %d O%d/C%d: %d structural + %d magnetic descriptors, %d parameters.\n",
+    spin_version,
     spin_order,
     spin_compress,
     dim_struct,
@@ -50,7 +62,7 @@ Spin_Parameters::Spin_Parameters(const ParameterInput& input)
 void Spin_Parameters::report_model_inputs() const
 {
   NEP_Energy_Parameters::report_model_inputs();
-  printf("    spin_version = 1.\n");
+  printf("    spin_version = %d.\n", spin_version);
   printf(
     "    spin_order = %d, spin_compress = %d, spin_soc = %d.\n",
     spin_order,
@@ -141,10 +153,14 @@ void Spin_Parameters::validate_spin_parameters()
     PRINT_INPUT_ERROR("Spin NEP fine_tune is not supported until the "
                       "species-transfer checkpoint reader is implemented.\n");
   }
+  if (spin_version == 2 && spin_basis_size[0] != basis_size_angular) {
+    PRINT_INPUT_ERROR("spin_version 2 requires spin_basis_size equal to the structural angular basis_size.\n");
+  }
   if (
-    spin_compress < 1 || spin_compress > 9 || spin_basis_size[0] != 8 || spin_basis_size[1] != 0 ||
-    spin_l_max[0] < 0 || spin_l_max[0] > 2 || spin_l_max[1] != 0 || spin_l_max[2] != 0 ||
-    spin_order < 1 || spin_order > 3 || (spin_soc != 0 && spin_soc != 1) || spin_cutoff <= 0.0f) {
+    spin_compress < 1 || spin_compress > 9 ||
+    (spin_version == 1 && spin_basis_size[0] != 8) || spin_basis_size[1] != 0 ||
+    spin_l_max[0] < 0 || spin_l_max[0] > (spin_version == 2 ? 4 : 2) || spin_l_max[1] != 0 || spin_l_max[2] != 0 ||
+    spin_order < 1 || spin_order > (spin_version == 2 ? 4 : 3) || (spin_soc != 0 && spin_soc != 1) || spin_cutoff <= 0.0f) {
     PRINT_INPUT_ERROR("Unsupported unified Spin NEP O/C shape in nep.in.\n");
   }
 #ifdef USE_CJ
@@ -170,7 +186,8 @@ void Spin_Parameters::validate_spin_parameters()
 
 void Spin_Parameters::calculate_spin_dimensions()
 {
-  dim_spin =
+  dim_spin = spin_version == 2 ?
+    spin_density::Layout(spin_compress, spin_l_max[0], spin_order, spin_soc).dimension :
     NEP_Spin_Model_File::spin_dimension(spin_compress, spin_l_max[0], spin_order, spin_soc);
   if (dim_spin > 96) {
     PRINT_INPUT_ERROR("Number of spin descriptors should not exceed 96.\n");
@@ -274,8 +291,8 @@ void Spin_Parameters::parse_spin_order(const char** param, int num_param)
     PRINT_INPUT_ERROR("Duplicate spin_order keyword.\n");
   }
   is_spin_order_set = true;
-  if (num_param != 2 || !is_valid_int(param[1], &spin_order) || spin_order < 1 || spin_order > 3) {
-    PRINT_INPUT_ERROR("spin_order should be an integer from 1 to 3.\n");
+  if (num_param != 2 || !is_valid_int(param[1], &spin_order) || spin_order < 1 || spin_order > (spin_version == 2 ? 4 : 3)) {
+    PRINT_INPUT_ERROR("spin_order exceeds the range supported by spin_version.\n");
   }
 }
 
@@ -297,10 +314,10 @@ void Spin_Parameters::parse_spin_basis_size(const char** param, int num_param)
   }
   is_spin_basis_size_set = true;
   if (
-    num_param != 3 || !is_valid_int(param[1], &spin_basis_size[0]) ||
-    !is_valid_int(param[2], &spin_basis_size[1]) || spin_basis_size[0] < 0 ||
+    (num_param != 2 && num_param != 3) || !is_valid_int(param[1], &spin_basis_size[0]) ||
+    (num_param == 3 && !is_valid_int(param[2], &spin_basis_size[1])) || spin_basis_size[0] < 0 ||
     spin_basis_size[1] < 0) {
-    PRINT_INPUT_ERROR("spin_basis_size should have two non-negative integers.\n");
+    PRINT_INPUT_ERROR("spin_basis_size requires one integer (or a second zero).\n");
   }
 }
 
@@ -311,9 +328,9 @@ void Spin_Parameters::parse_spin_l_max(const char** param, int num_param)
   }
   is_spin_l_max_set = true;
   if (
-    num_param != 4 || !is_valid_int(param[1], &spin_l_max[0]) ||
-    !is_valid_int(param[2], &spin_l_max[1]) || !is_valid_int(param[3], &spin_l_max[2])) {
-    PRINT_INPUT_ERROR("spin_l_max should have three integers.\n");
+    (num_param != 2 && num_param != 4) || !is_valid_int(param[1], &spin_l_max[0]) ||
+    (num_param == 4 && (!is_valid_int(param[2], &spin_l_max[1]) || !is_valid_int(param[3], &spin_l_max[2])))) {
+    PRINT_INPUT_ERROR("spin_l_max requires one integer (or two trailing zeros).\n");
   }
 }
 
