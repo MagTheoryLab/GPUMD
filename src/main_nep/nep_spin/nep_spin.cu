@@ -9,6 +9,7 @@
 #include "main_nep/common/nep_output.cuh"
 #include "nep_spin.cuh"
 #include "spin_io.cuh"
+#include "force/nep_spin/spin_warp.cuh"
 #include "utilities/error.cuh"
 #include "utilities/nep_utilities.cuh"
 #include <algorithm>
@@ -161,6 +162,7 @@ static __global__ void apply_ann_one_layer_warp(
   constexpr int values_per_lane = (max_dim + warp_size - 1) / warp_size;
   const int lane = threadIdx.x & (warp_size - 1);
   const int atom = (blockIdx.x * blockDim.x + threadIdx.x) / warp_size;
+  const nep_spin::WarpMask mask = nep_spin::tile_mask(warp_size);
   if (atom >= N)
     return;
 
@@ -188,7 +190,7 @@ static __global__ void apply_ann_one_layer_warp(
         w0_times_q += w0[n * dim + d] * q[k];
     }
     for (int offset = warp_size / 2; offset > 0; offset /= 2) {
-      w0_times_q += __shfl_down_sync(0xffffffff, w0_times_q, offset);
+      w0_times_q += __shfl_down_sync(mask, w0_times_q, offset, warp_size);
     }
     float derivative_scale = 0.0f;
     if (lane == 0) {
@@ -196,7 +198,7 @@ static __global__ void apply_ann_one_layer_warp(
       derivative_scale = w1[n] * (1.0f - x1 * x1);
       energy += w1[n] * x1;
     }
-    derivative_scale = __shfl_sync(0xffffffff, derivative_scale, 0);
+    derivative_scale = __shfl_sync(mask, derivative_scale, 0, warp_size);
     for (int k = 0; k < values_per_lane; ++k) {
       const int d = lane + k * warp_size;
       if (d < dim)

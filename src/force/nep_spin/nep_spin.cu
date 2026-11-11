@@ -30,6 +30,7 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 #include "nep_spin_small_box.cuh"
 #include "spin_kernels.cuh"
 #include "spin_md_layouts.cuh"
+#include "spin_warp.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
 #include "utilities/nep_io/nep_spin_model_file.cuh"
@@ -421,7 +422,7 @@ __global__ void find_potential_warp(
   const int work_lane = lane - atom_lane * lanes_per_atom;
   const int atom_local = warp * atoms_per_warp + atom_lane;
   const int atom = blockIdx.x * atoms_per_block + atom_local;
-  const unsigned int atom_mask = ((1u << lanes_per_atom) - 1u) << (atom_lane * lanes_per_atom);
+  const nep_spin::WarpMask atom_mask = nep_spin::tile_mask(lanes_per_atom);
 
   extern __shared__ float state[];
   float* q = state + static_cast<std::size_t>(atom_local) * descriptor_dim;
@@ -499,7 +500,7 @@ __global__ void find_force_angular_warp(
   const int lane = threadIdx.x & 31;
   const int atom_lane = lane / edge_lanes;
   const int edge_lane = lane - atom_lane * edge_lanes;
-  const unsigned int center_mask = (0xffffffffu >> (32 - edge_lanes)) << (atom_lane * edge_lanes);
+  const nep_spin::WarpMask center_mask = nep_spin::tile_mask(edge_lanes);
   const int center_local = warp * atoms_per_warp + atom_lane;
   const int n1 = blockIdx.x * centers_per_block + center_local;
 

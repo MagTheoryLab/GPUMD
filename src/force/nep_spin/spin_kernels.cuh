@@ -2,6 +2,7 @@
 #pragma once
 #include "model/box.cuh"
 #include "force/nep_spin/spin_storage.cuh"
+#include "force/nep_spin/spin_warp.cuh"
 #include "utilities/nep_utilities.cuh"
 
 namespace nep_spin {
@@ -168,7 +169,7 @@ static __global__ void descriptors(
   const int i = work / v.channels, c = work % v.channels;
   // Capture participation before divergent neighbor loops. An activemask taken
   // at a reduction can omit lanes still processing their last neighbor.
-  const unsigned mask = Layout::tile > 1 ? __ballot_sync(0xffffffff, i < n) : 0;
+  const WarpMask mask = Layout::tile > 1 ? warp_ballot(i < n) : 0;
   if (i >= n) return;
   float s[3], h[Layout::component_capacity] = {};
   Value phi_i[Layout::spin_capacity];
@@ -239,7 +240,7 @@ static __global__ void forces(
   const int i = work / v.channels, c = work % v.channels;
   // Capture participation before divergent neighbor loops. An activemask taken
   // at a reduction can omit lanes still processing their last neighbor.
-  const unsigned mask = Layout::tile > 1 ? __ballot_sync(0xffffffff, i < n) : 0;
+  const WarpMask mask = Layout::tile > 1 ? warp_ballot(i < n) : 0;
   if (i >= n) return;
   float s[3], pull[Layout::component_capacity] = {}, center_pull[3] = {};
   double center_force[3] = {};
