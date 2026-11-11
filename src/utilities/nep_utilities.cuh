@@ -15,6 +15,10 @@
 
 #pragma once
 
+#ifdef USE_HIP
+#include <hip/hip_runtime.h>
+#endif
+
 static __device__ __forceinline__ int get_c_index(
   const int type_index,
   const int n,
