@@ -227,7 +227,7 @@ static __global__ void descriptors(
   }
 }
 
-template<class Layout>
+template<class Layout, bool CenterVirial = false>
 static __global__ void forces(
   Layout v, int n, int structural_dim, int types, int na, int basis, Box box,
   const int* type, const int* active, const double* positions, const double* spins,
@@ -243,6 +243,7 @@ static __global__ void forces(
   if (i >= n) return;
   float s[3], pull[Layout::component_capacity] = {}, center_pull[3] = {};
   double center_force[3] = {};
+  double center_virial[CenterVirial ? 9 : 1] = {};
   Value phi_i[Layout::spin_capacity];
   read_spin(n, i, type, active, spins, s);
   primitives_at(v, s, phi_i);
@@ -312,8 +313,12 @@ static __global__ void forces(
     }
     const int rows[9] = {0,1,2,0,0,1,1,2,2};
     const int cols[9] = {0,1,2,1,2,2,0,0,1};
-    for (int k = 0; k < 9; ++k)
-      atomicAdd(virial+k*n+(neighbor_virial ? j : i), -static_cast<double>(r[rows[k]]*grad[cols[k]]));
+    #pragma unroll
+    for (int k = 0; k < 9; ++k) {
+      const double value = -static_cast<double>(r[rows[k]]*grad[cols[k]]);
+      if (CenterVirial) center_virial[k] += value;
+      else atomicAdd(virial+k*n+(neighbor_virial ? j : i), value);
+    }
   }
   #pragma unroll
   for (int d = 0; d < 3; ++d) {
@@ -321,6 +326,17 @@ static __global__ void forces(
     for (int offset = Layout::tile/2; offset > 0; offset /= 2) {
       center_pull[d] += __shfl_down_sync(mask, center_pull[d], offset, Layout::tile);
       center_force[d] += __shfl_down_sync(mask, center_force[d], offset, Layout::tile);
+    }
+  }
+  // MD assigns each edge virial to its center. Reduce before the atomic write;
+  // the training path retains its neighbor-owned per-atom convention.
+  if (CenterVirial) {
+    #pragma unroll
+    for (int k = 0; k < 9; ++k) {
+      #pragma unroll
+      for (int offset = Layout::tile/2; offset > 0; offset /= 2)
+        center_virial[k] += __shfl_down_sync(mask, center_virial[k], offset, Layout::tile);
+      if (lane == 0) atomicAdd(virial+k*n+i, center_virial[k]);
     }
   }
   if (lane != 0) return;

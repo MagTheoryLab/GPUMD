@@ -259,6 +259,16 @@ private:
 
 
 
+  void launch_structural_descriptors(
+    const Box& box,
+    const GPU_Vector<int>& type,
+    const GPU_Vector<double>& position,
+    Data& data,
+    const double* radial_edges,
+    const double* angular_edges,
+    int plane,
+    gpuStream_t stream = nullptr);
+
   void launch_spin_descriptors(
     const Model& model,
     const Box& box,

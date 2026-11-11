@@ -39,6 +39,7 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 namespace
 {
@@ -231,6 +232,7 @@ __global__ void find_neighbor_list_spin_small_box(
   atomicMax(required_capacity, max(count_radial, max(count_angular, count_spin)));
 }
 
+template<bool DefaultAngular = false>
 __global__ void find_structural_descriptor(
   const NEP_Spin::ParaMB paramb,
   const NEP_Spin::ANN ann,
@@ -258,39 +260,47 @@ __global__ void find_structural_descriptor(
   const double x1 = x[n1];
   const double y1 = y[n1];
   const double z1 = z[n1];
-  float q[MAX_DIM] = {0.0f};
+  // Each worker owns one radial or angular channel; at most 14 angular invariants.
+  float q[MAX_NUM_N] = {0.0f};
 
-  for (int i1 = 0; i1 < NN_radial[n1]; ++i1) {
-    const int n2 = NL_radial[static_cast<size_t>(N) * i1 + n1];
-    const int slot = N * i1 + n1;
-    double x12 = r12_radial ? r12_radial[slot] : x[n2] - x1;
-    double y12 = r12_radial ? r12_radial[r12_plane_size + slot] : y[n2] - y1;
-    double z12 = r12_radial ? r12_radial[2 * r12_plane_size + slot] : z[n2] - z1;
-    if (!r12_radial) {
-      apply_mic(box, x12, y12, z12);
-    }
-    const float d12 = sqrtf(x12 * x12 + y12 * y12 + z12 * z12);
-    const int t2 = type[n2];
-    const float rc = (paramb.rc_radial[t1] + paramb.rc_radial[t2]) * 0.5f;
-    const float rcinv = 1.0f / rc;
-    float fc12;
-    find_fc(rc, rcinv, d12, fc12);
-    float fn12[MAX_NUM_N];
-    find_fn(paramb.basis_size_radial, rcinv, d12, fc12, fn12);
-    const int basis_count = (paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1);
-    for (int n = 0; n <= paramb.n_max_radial; ++n) {
+  if (blockIdx.y <= paramb.n_max_radial) {
+    const int n = blockIdx.y;
+    float q_radial = 0.0f;
+    for (int i1 = 0; i1 < NN_radial[n1]; ++i1) {
+      const int n2 = NL_radial[static_cast<size_t>(N) * i1 + n1];
+      const int slot = N * i1 + n1;
+      double x12 = r12_radial ? r12_radial[slot] : x[n2] - x1;
+      double y12 = r12_radial ? r12_radial[r12_plane_size + slot] : y[n2] - y1;
+      double z12 = r12_radial ? r12_radial[2 * r12_plane_size + slot] : z[n2] - z1;
+      if (!r12_radial) {
+        apply_mic(box, x12, y12, z12);
+      }
+      const float d12 = sqrtf(x12 * x12 + y12 * y12 + z12 * z12);
+      const int t2 = type[n2];
+      const float rc = (paramb.rc_radial[t1] + paramb.rc_radial[t2]) * 0.5f;
+      const float rcinv = 1.0f / rc;
+      float fc12;
+      find_fc(rc, rcinv, d12, fc12);
+      float fn12[MAX_NUM_N];
+      find_fn(paramb.basis_size_radial, rcinv, d12, fc12, fn12);
+      const int basis_count = (paramb.n_max_radial + 1) * (paramb.basis_size_radial + 1);
       float gn12 = 0.0f;
       for (int k = 0; k <= paramb.basis_size_radial; ++k) {
         const int basis = n * (paramb.basis_size_radial + 1) + k;
         gn12 += fn12[k] * ann.c_type_pair[(t1 * paramb.num_types + t2) * basis_count + basis];
       }
-      q[n] += gn12;
+      q_radial += gn12;
     }
+    descriptor[static_cast<size_t>(N) * n + n1] = q_radial;
+    return;
   }
 
-  for (int n = 0; n <= paramb.n_max_angular; ++n) {
-    float s[NUM_OF_ABC] = {0.0f};
-    const int abc_count = (paramb.L_max + 1) * (paramb.L_max + 1) - 1;
+  const int n = blockIdx.y - paramb.n_max_radial - 1;
+  {
+    const int lmax = DefaultAngular ? 4 : paramb.L_max;
+    const int basis = DefaultAngular ? 8 : paramb.basis_size_angular;
+    float s[DefaultAngular ? 24 : NUM_OF_ABC] = {0.0f};
+    const int abc_count = (lmax + 1) * (lmax + 1) - 1;
     for (int i1 = 0; i1 < NN_angular[n1]; ++i1) {
       const int n2 = NL_angular[n1 + N * i1];
       const int slot = N * i1 + n1;
@@ -306,38 +316,37 @@ __global__ void find_structural_descriptor(
       const float rcinv = 1.0f / rc;
       float fc12;
       find_fc(rc, rcinv, d12, fc12);
-      float fn12[MAX_NUM_N];
-      find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
+      float fn12[DefaultAngular ? 9 : MAX_NUM_N];
+      find_fn(basis, rcinv, d12, fc12, fn12);
       float gn12 = 0.0f;
-      for (int k = 0; k <= paramb.basis_size_angular; ++k) {
+      for (int k = 0; k <= basis; ++k) {
         int c_index = paramb.num_c_radial;
         c_index += (t1 * paramb.num_types + t2) *
-                   ((paramb.n_max_angular + 1) * (paramb.basis_size_angular + 1));
-        c_index += n * (paramb.basis_size_angular + 1) + k;
+                   ((paramb.n_max_angular + 1) * (basis + 1));
+        c_index += n * (basis + 1) + k;
         gn12 += fn12[k] * ann.c_type_pair[c_index];
       }
-      accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
+      accumulate_s(lmax, d12, x12, y12, z12, gn12, s);
     }
     find_q(
-      paramb.L_max,
+      lmax,
       paramb.has_q_222,
       paramb.has_q_1111,
       paramb.has_q_112,
       paramb.has_q_123,
       paramb.has_q_233,
       paramb.has_q_134,
-      paramb.n_max_angular + 1,
-      n,
+      1,
+      0,
       s,
-      q + paramb.n_max_radial + 1);
+      q);
     for (int abc = 0; abc < abc_count; ++abc) {
       sum_fxyz[static_cast<size_t>(N) * (n * abc_count + abc) + n1] = s[abc];
     }
   }
-  const int struct_dim = paramb.n_max_radial + 1 + paramb.dim_angular;
-  for (int d = 0; d < struct_dim; ++d) {
-    descriptor[static_cast<size_t>(N) * d + n1] = q[d];
-  }
+  const int channels = paramb.n_max_angular + 1;
+  for (int d = 0; d < paramb.dim_angular / channels; ++d)
+    descriptor[static_cast<size_t>(N) * (paramb.n_max_radial + 1 + d * channels + n) + n1] = q[d];
 }
 
 __global__ void find_potential(
@@ -986,6 +995,32 @@ void NEP_Spin::launch_force_angular_warp(
 
 
 
+void NEP_Spin::launch_structural_descriptors(
+  const Box& box,
+  const GPU_Vector<int>& type,
+  const GPU_Vector<double>& position,
+  Data& data,
+  const double* radial_edges,
+  const double* angular_edges,
+  int plane,
+  gpuStream_t stream)
+{
+  const int n = type.size();
+  const dim3 grid((n + 63) / 64, paramb_.n_max_radial + paramb_.n_max_angular + 2);
+  auto launch = [&](auto shape) {
+    find_structural_descriptor<decltype(shape)::value><<<grid, 64, 0, stream>>>(
+      paramb_, ann_, n, box, data.NN_radial.data(), data.NL_radial.data(),
+      data.NN_angular.data(), data.NL_angular.data(), radial_edges, angular_edges, plane,
+      type.data(), position.data(), position.data() + n, position.data() + 2 * n,
+      data.descriptor.data(), data.sum_fxyz.data());
+  };
+  if (paramb_.L_max == 4 && paramb_.basis_size_angular == 8)
+    launch(std::true_type{});
+  else
+    launch(std::false_type{});
+  GPU_CHECK_KERNEL
+}
+
 void NEP_Spin::launch_spin_descriptors(
   const NEP_Spin::Model& model,
   const Box& box,
@@ -1056,7 +1091,7 @@ void NEP_Spin::launch_spin_forces(
                       model.spin_order == 2 && model.basis_size_angular == 8;
   auto launch = [&](auto layout) {
     layout.edge_radial = data.radial_edges.data();
-    nep_spin::forces<<<(type.size()*model.spin_compress*decltype(layout)::tile+63)/64, 64>>>(
+    nep_spin::forces<decltype(layout), true><<<(type.size()*model.spin_compress*decltype(layout)::tile+63)/64, 64>>>(
       layout, static_cast<int>(type.size()), model.struct_descriptor_dim,
       model.num_types, model.n_max_angular, model.basis_size_angular, box,
       type.data(), data.spin_type_active.data(), position.data(), spin.data(),
@@ -1502,25 +1537,8 @@ void NEP_Spin::compute(
       resize_small_box_storage(required_capacity);
     }
     const int plane_size = N * small_box_capacity_;
-    find_structural_descriptor<<<grid_size, block_size>>>(
-      paramb_,
-      ann_,
-      N,
-      box,
-      data_.NN_radial.data(),
-      data_.NL_radial.data(),
-      data_.NN_angular.data(),
-      data_.NL_angular.data(),
-      data_.r12_radial.data(),
-      data_.r12_angular.data(),
-      plane_size,
-      type.data(),
-      position.data(),
-      position.data() + N,
-      position.data() + 2 * N,
-      data_.descriptor.data(),
-      data_.sum_fxyz.data());
-    GPU_CHECK_KERNEL
+    launch_structural_descriptors(
+      box, type, position, data_, data_.r12_radial.data(), data_.r12_angular.data(), plane_size);
     launch_spin_descriptors(
       model_, box, type, position, spin, data_, data_.r12_spin.data(), plane_size);
     find_potential<<<grid_size, block_size>>>(
@@ -1636,25 +1654,8 @@ void NEP_Spin::compute(
     data_.NL_spin.data());
   GPU_CHECK_KERNEL
 
-  find_structural_descriptor<<<grid_size, block_size, 0, structural_descriptor_stream_>>>(
-    paramb_,
-    ann_,
-    N,
-    box,
-    data_.NN_radial.data(),
-    data_.NL_radial.data(),
-    data_.NN_angular.data(),
-    data_.NL_angular.data(),
-    nullptr,
-    nullptr,
-    0,
-    type.data(),
-    position.data(),
-    position.data() + N,
-    position.data() + 2 * N,
-    data_.descriptor.data(),
-    data_.sum_fxyz.data());
-  GPU_CHECK_KERNEL
+  launch_structural_descriptors(
+    box, type, position, data_, nullptr, nullptr, 0, structural_descriptor_stream_);
 
   launch_spin_descriptors(
     model_, box, type, position, spin, data_, nullptr, 0, spin_descriptor_stream_);
