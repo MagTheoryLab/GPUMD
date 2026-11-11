@@ -52,7 +52,7 @@ Essentially any keyword is allowed, but we only read the following ones:
   * ``charge:R:1`` charge (*Optional*: default charge is zero)  
   * ``vel:R:3`` velocity vector (*Optional*)
   * ``spin:R:3`` magnetic-moment vector in Bohr magnetons (muB) (*Required for NEP_Spin*)
-  * ``spin_vel:R:3`` spin velocity vector (*Optional; requires ``spin:R:3``*)
+  * ``spin_vel:R:3`` spin velocity vector (*Optional for NEP-spin; requires ``spin:R:3``*)
   * ``group:I:number_of_grouping_methods`` grouping methods (*Optional*)
 
 
@@ -74,10 +74,12 @@ Magnetic force is the negative energy derivative with respect to spin, in eV/muB
 The spin torque, spin crossed with magnetic force, is in eV.
 External magnetic induction B is specified in tesla (T).
 Spin vectors store Cartesian magnetic moments, not normalized directions.
-Readers do not normalize them or rescale model parameters; training and
-runtime data must use the same spin convention.
-Property names may not be repeated. NEP_Spin fails if ``spin:R:3`` is absent;
-missing spin values are never filled with zeros.
+Active spins are not normalized; training and runtime data must use the same
+spin convention. Elements excluded by the model's ``spin_type`` have zero
+effective spin and zero magnetic force, while their geometry is retained.
+For NEP-spin models, the ``spin`` property may not be repeated, and
+``spin:R:3`` is required; missing spin values are never filled with zeros.
+Other potential models ignore the ``spin`` property.
 
 Example
 -------
@@ -87,7 +89,7 @@ Assume we have the following ``model.xyz`` file:
 .. code::
 
    10
-   pbc="T F F" lattice="4 0 0 0 1 0 0 0 1" properties=species:S:1:pos:R:3:group:I:3
+   pbc="T F F" lattice="10 0 0 0 1 0 0 0 1" properties=species:S:1:pos:R:3:group:I:3
    C  0 0 0 0 0 0
    Si 1 0 0 0 1 0
    C  2 0 0 0 2 0
@@ -103,7 +105,7 @@ This means
 
 * There are 10 atoms.
 * Use periodic boundary conditions in the :math:`x` direction and free boundary conditions in the other directions.
-* The box lengths in the three directions are respectively 4 Å, 1 Å, and 1 Å.
+* The box lengths in the three directions are respectively 10 Å, 1 Å, and 1 Å.
 * There are 5 carbon atoms and 5 silicon atoms. The default masses will be used for the atoms (as there are no specific values given in the input file).
 * The 10 atoms are located along a line in the :math:`x` direction with equal spacing, from 0 Å to 9 Å. 
 * There is no velocity data in this file.

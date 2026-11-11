@@ -25,17 +25,11 @@ Syntax
 
 For fixed-cell NVT dynamics, use::
 
-    ensemble nvt_tspin <T_1> <T_2> <T_coup> \
-             [lattice on|off] \
-             [mass_factor <value> | mass_factor <element> <value> ...] \
-             [seed <value>]
+    ensemble nvt_tspin <T_1> <T_2> <T_coup> [lattice on|off] [mass_factor <value> | mass_factor <element> <value> ...] [seed <value>]
 
 For pressure-controlled NPT dynamics, use::
 
-    ensemble npt_tspin temp <T_1> <T_2> <pressure_terms> \
-             [tperiod <tau_temp>] [pperiod <tau_press>] \
-             [mass_factor <value> | mass_factor <element> <value> ...] \
-             [seed <value>]
+    ensemble npt_tspin temp <T_1> <T_2> <pressure_terms> [tperiod <tau_temp>] [pperiod <tau_press>] [mass_factor <value> | mass_factor <element> <value> ...] [seed <value>]
 
 The ``npt_tspin`` options through ``pperiod`` have the same syntax, meaning,
 and defaults as ``npt_mttk``. The pressure terms can be ``iso``, ``aniso``,
@@ -52,19 +46,16 @@ Run fixed-cell spin--lattice dynamics at 300 K::
 Keep atomic positions and lattice velocities fixed and propagate only the
 spin coordinates::
 
-    ensemble nvt_tspin 300 300 100 lattice off \
-             mass_factor 0.001 seed 12345
+    ensemble nvt_tspin 300 300 100 lattice off mass_factor 0.001 seed 12345
 
 For a Fe--Ge structure, propagate Fe spins with a coefficient of ``0.001``
 and keep Ge spins fixed::
 
-    ensemble nvt_tspin 300 300 100 \
-             mass_factor Fe 0.001 Ge 0 seed 12345
+    ensemble nvt_tspin 300 300 100 mass_factor Fe 0.001 Ge 0 seed 12345
 
 Run isotropic pressure-controlled spin--lattice dynamics at 300 K and 0 GPa::
 
-    ensemble npt_tspin temp 300 300 iso 0 0 \
-             tperiod 100 pperiod 1000 mass_factor 0.001 seed 12345
+    ensemble npt_tspin temp 300 300 iso 0 0 tperiod 100 pperiod 1000 mass_factor 0.001 seed 12345
 
 In both examples, ``mass_factor`` is a spin-mass coefficient. It does not
 replace or change the lattice atomic masses.
@@ -110,16 +101,14 @@ Parameters
   absent. The default is ``12345``. The seed is ignored when initialized spin
   velocities are supplied.
 
-Spin integration and ``spin_type``
---------------------------------------
+Spin degrees of freedom
+-----------------------
 
-TSPIN integrates only atom types selected by the model's ``spin_type``.
-Other types have their input spin and spin velocity set to zero, including
-when reading restart files, and are excluded from spin kinetic energy and
-thermostat degrees of freedom. All types still participate in lattice dynamics and geometric environments.
-
-A zero ``mass_factor`` can additionally freeze a selected magnetic type at its
-current spin. A positive factor cannot activate a type excluded by the model.
+Only elements listed in the model's ``spin_type`` have spin degrees of freedom.
+Other elements contribute to the geometric environment, but their effective
+moments and spin velocities are zero and they are excluded from the spin
+thermostat. ``mass_factor <element> 0`` additionally freezes a magnetic
+coordinate and excludes it from the thermostat.
 
 State initialization and restart
 --------------------------------
@@ -127,22 +116,15 @@ State initialization and restart
 Each atom must have a ``spin:R:3`` vector. TSPIN propagates the full Cartesian
 vector and does not normalize its length.
 
-For types enabled by ``spin_type``, if ``spin_vel:R:3`` is absent,
-GPUMD generates spin velocities from ``seed``
+If ``spin_vel:R:3`` is absent, GPUMD generates spin velocities from ``seed``
 and rescales them separately for each atom type to ``T_1``. If
-``spin_vel:R:3`` is present, GPUMD uses the supplied magnetic-type values and ignores
+``spin_vel:R:3`` is present, GPUMD uses every supplied value and ignores
 ``seed``. For an element whose mass factor is zero, any supplied spin velocity
 is replaced by zero. Initialized spin velocities are reused by later ``run``
 commands.
 They are also written by ``dump_restart`` and reused when its ``restart.xyz``
-is loaded as ``model.xyz``. Excluded nonmagnetic types require zero input
-spin velocity; a nonzero value is rejected before integration.
-
-The TSPIN spin thermostat chain is initialized for each new ``run`` and is not
-saved in the restart file. Coordinate/velocity restart therefore does not imply
-an identical trajectory to one uninterrupted run. This is separate from the
-Spin lattice NHC/MTTK checkpoint state. Spin velocities, and spin coordinates
-without a Spin lattice checkpoint, are written with six significant digits.
+is loaded as ``model.xyz``. Thermostat and barostat internal variables are
+initialized anew; see :ref:`Spin restart <spin_restart>`.
 
 Pressure coupling in ``npt_tspin``
 ----------------------------------

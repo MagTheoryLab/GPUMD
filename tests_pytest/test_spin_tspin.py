@@ -12,7 +12,10 @@ import numpy as np
 import pytest
 from spin_runtime_helpers import base_model as _model_with_zero_lattice_velocity
 
-from spin_fixtures import load_fixture, selective_type_model
+from spin_fixtures import load_fixture
+
+def selective_type_model():
+    return (FIXTURE / "nep_spin_o3c2_uniform.nep").read_text()
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nep_spin3"
@@ -23,10 +26,9 @@ TIME_UNIT_CONVERSION = 1.018051e1
 MASK64 = (1 << 64) - 1
 
 
-def _prepare_case(case_dir, run_input, model_text=None, selected_only=False):
+def _prepare_case(case_dir, run_input, model_text=None):
     case_dir.mkdir()
-    model = selective_type_model()
-    (case_dir / "nep.txt").write_text(model if selected_only else model.replace("spin_type Fe\n", ""))
+    (case_dir / "nep.txt").write_text(selective_type_model().replace("spin_type Fe\n", "spin_type Fe Ge\n"))
     (case_dir / "model.xyz").write_text(
         model_text if model_text is not None else _model_with_zero_lattice_velocity())
     (case_dir / "run.in").write_text(run_input)
@@ -85,16 +87,15 @@ def _gaussian(seed, atom_index, component):
     return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * PI * u2)
 
 
-def _initial_spin_velocity(seed, mass, temperature, mass_factor, active):
+def _initial_spin_velocity(seed, mass, temperature, mass_factor):
     number_of_atoms = len(mass)
     velocity = np.array([
         [0.5 * _gaussian(seed, atom + 1, component) for component in range(3)]
         for atom in range(number_of_atoms)
     ])
-    velocity[~active] = 0
     twice_kinetic_energy = np.sum(
         mass[:, None] * mass_factor * velocity * velocity)
-    target = 3.0 * np.count_nonzero(active) * K_B * temperature
+    target = 3.0 * number_of_atoms * K_B * temperature
     return velocity * math.sqrt(target / twice_kinetic_energy)
 
 
@@ -152,18 +153,11 @@ def _nhc(position, velocity, mass, twice_kinetic_energy,
 
 
 @pytest.mark.parametrize("pressure_control", [False, True], ids=["nvt", "npt"])
-@pytest.mark.parametrize("selected_only", [False, True])
 def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
-        tmp_path, pressure_control, selected_only):
+        tmp_path, pressure_control):
     # Obtain the initial magnetic force from a fixed-spin run. This keeps the
     # integrator oracle independent of the NEP_Spin derivative implementation.
     static_model = _model_with_zero_lattice_velocity()
-    if selected_only:
-        rows = static_model.splitlines()
-        for i in (3, 5):
-            fields = rows[i].split(); fields[0] = "Ge"; fields[-3:] = ["0", "0", "0"]
-            rows[i] = " ".join(fields)
-        static_model = "\n".join(rows) + "\n"
     lines = static_model.splitlines()
     lines[1] = lines[1].replace(":spin:R:3", ":spin:R:3:spin_vel:R:3")
     for index in range(2, len(lines)):
@@ -175,7 +169,7 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
         "time_step 0\n"
         "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
         "run 1\n",
-        "\n".join(lines) + "\n", selected_only=selected_only)
+        "\n".join(lines) + "\n")
     assert static_result.returncode == 0, static_result.stdout + static_result.stderr
     initial = _read_spin_frame(tmp_path / "static" / "state.xyz")
 
@@ -197,15 +191,14 @@ def test_tspin_one_step_matches_public_formula_and_gpumd_nhc_oracle(
         + ensemble
         + f"time_step {time_step_fs}\n"
         "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
-        "run 1\n", static_model, selected_only=selected_only)
+        "run 1\n")
     assert result.returncode == 0, result.stdout + result.stderr
     actual = _read_spin_frame(tmp_path / "tspin" / "state.xyz")
 
     dt = time_step_fs / TIME_UNIT_CONVERSION
-    active = np.array([line.split()[0] == "Fe" or not selected_only for line in static_model.splitlines()[2:]])
-    number_of_atoms = np.count_nonzero(active)
+    number_of_atoms = len(actual["mass"])
     velocity = _initial_spin_velocity(
-        seed, actual["mass"], temperature, mass_factor, active)
+        seed, actual["mass"], temperature, mass_factor)
     position_nhc = np.zeros(4)
     velocity_nhc = np.array([1.0, -1.0, 1.0, -1.0])
     thermal_energy = K_B * temperature
@@ -276,7 +269,7 @@ def test_element_mass_factor_requires_every_present_element(tmp_path):
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3 pbc="T T T"\n'
         'Fe 0 0 0 0 0 0 1 0.2 -0.1\n'
-        'Ge 3 0 0 0 0 0 0 0 0\n')
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7\n')
     (directory / "run.in").write_text(
         "potential nep.txt\n"
         "ensemble nvt_tspin 300 300 100 mass_factor Fe 0.001\n"
@@ -350,10 +343,38 @@ def test_nvt_tspin_lattice_off_only_integrates_spins(tmp_path):
     assert np.max(np.abs(rows[:, 6:9] - np.array(initial_spin))) > 1.0e-12
 
 
+def test_tspin_keeps_nonmagnetic_elements_masked(tmp_path):
+    directory = tmp_path / "potential_mask"
+    directory.mkdir()
+    (directory / "nep.txt").write_text(selective_type_model())
+    (directory / "model.xyz").write_text(
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
+        'pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+    (directory / "run.in").write_text(
+        "potential nep.txt\n"
+        "ensemble nvt_tspin 300 300 100 mass_factor 1.5 seed 97531\n"
+        "time_step 0.1\n"
+        "dump_xyz 1 state.xyz mass spin mforce spin_velocity\n"
+        "run 1\n")
+    result = subprocess.run(
+        [str(GPUMD)], cwd=directory,
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    actual = _read_spin_frame(directory / "state.xyz")
+    initial_excluded_spin = np.array([0.4, -0.3, 0.7])
+    assert np.max(np.abs(actual["mforce"][1])) <= 1.0e-12
+    np.testing.assert_array_equal(actual["spin"][1], 0.0)
+    np.testing.assert_array_equal(actual["spin_velocity"][1], 0.0)
+
+
 def test_element_mass_factor_zero_freezes_only_selected_spins(tmp_path):
     directory = tmp_path / "element_mass"
     directory.mkdir()
-    (directory / "nep.txt").write_text(selective_type_model().replace("spin_type Fe\n", ""))
+    (directory / "nep.txt").write_text(selective_type_model().replace("spin_type Fe\n", "spin_type Fe Ge\n"))
     (directory / "model.xyz").write_text(
         '2\nLattice="16 0 0 0 16 0 0 0 16" '
         'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
@@ -484,3 +505,48 @@ def test_ordinary_nhc_keeps_spins_fixed(tmp_path):
         "dump_xyz 10 state.xyz mass spin mforce\nrun 10\n", model)
     assert result.returncode == 0, result.stdout + result.stderr
     np.testing.assert_array_equal(_read_spin_frame(tmp_path / "fixed/state.xyz")["spin"], initial)
+
+
+@pytest.mark.parametrize("ensemble", [
+    "nvt_tspin 300 300 100 lattice off",
+    "nvt_tspin 300 300 100",
+    "npt_tspin temp 300 300 iso 0 0 tperiod 100 pperiod 1000",
+], ids=["fixed-lattice", "nvt", "npt"])
+def test_tspin_next_run_is_independent_of_restart_output(tmp_path, ensemble):
+    model = (
+        '2\nLattice="16 0 0 0 16 0 0 0 16" '
+        'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3 '
+        'pbc="T T T"\n'
+        'Fe 0 0 0 0 0 0 1 0.2 -0.1 0.08 -0.03 0.04\n'
+        'Ge 3 0 0 0 0 0 0.4 -0.3 0.7 0.15 -0.05 0.1\n')
+    trajectory = None
+    for name, restart in (("off", ""), ("last", "dump_restart 7\n"),
+                          ("earlier", "dump_restart 3\n")):
+        case = tmp_path / name
+        # dump_xyz uses its own host buffer; it must not refresh Atom's cached
+        # spin velocity and thereby hide a stale-host-state initialization bug.
+        result = _prepare_case(
+            case,
+            "potential nep.txt\ntime_step 0.1\n"
+            f"ensemble {ensemble} mass_factor 1.5 seed 731\n"
+            "dump_xyz 7 boundary.xyz precision double mass spin mforce spin_velocity\n"
+            + restart + "run 7\n"
+            # Also exercise freezing a previously active type at the run boundary.
+            f"ensemble {ensemble} mass_factor Fe 0 Ge 1.5 seed 731\n"
+            "dump_xyz 1 second.xyz precision double mass spin mforce spin_velocity\n"
+            "run 5\n", model)
+        assert result.returncode == 0, result.stdout + result.stderr
+        boundary = _read_spin_frame(case / "boundary.xyz")
+        final = _read_spin_frame(case / "second.xyz")
+        np.testing.assert_array_equal(final["spin"][0], boundary["spin"][0])
+        np.testing.assert_array_equal(final["spin_velocity"][0], 0.0)
+        text = (case / "second.xyz").read_text()
+        lines = text.splitlines()
+        assert len(lines) == 5 * 4  # Five frames, each with two atoms.
+        values = [float(value) for i, line in enumerate(lines) if i % 4 >= 2
+                  for value in line.split()[1:]]
+        assert np.isfinite(values).all()
+        if trajectory is None:
+            trajectory = text
+        else:
+            assert text == trajectory, name

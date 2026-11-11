@@ -358,8 +358,7 @@ void NEP_Spin_Model::prepare_training()
   std::mt19937 reference_rng(12345678);
   std::vector<float> mu(para.number_of_variables), sigma(para.number_of_variables);
   initialize_search(reference_rng, mu, sigma);
-  // Scale radial coefficients only: constant/scaled projection matrices would
-  // change the relative scaling of the different magnetic contraction orders.
+  // Match the radial scaling used by the initial search population.
   const int radial_end = para.number_of_variables - para.number_of_variables_spin_projection;
   for (int n = para.number_of_variables_ann; n < radial_end; ++n)
     mu[n] *= para.initial_para;

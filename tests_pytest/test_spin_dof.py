@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from spin_fixtures import selective_type_model, load_fixture, write_xyz
+from spin_fixtures import load_fixture, write_xyz
 from validate_spin_multigpu import frame
 
 GPUMD = Path(os.environ.get('GPUMD_COMMAND', Path(__file__).parents[1] / 'src/gpumd'))
@@ -14,7 +14,7 @@ GPUMD = Path(os.environ.get('GPUMD_COMMAND', Path(__file__).parents[1] / 'src/gp
 
 def execute(directory, ensemble, steps, restart=None, raw_inactive=False):
     directory.mkdir()
-    (directory / 'nep.txt').write_text(selective_type_model())
+    (directory / 'nep.txt').write_text(load_fixture('o3c2_uniform')[0])
     if restart:
         shutil.copyfile(restart, directory / 'model.xyz')
     else:

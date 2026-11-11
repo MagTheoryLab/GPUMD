@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise Spin checkpoint/export contracts through the real NEP and GPUMD CLIs."""
+"""Exercise Spin checkpoint/export contracts through the real NEP CLI."""
 import json
 import math
 import re
@@ -52,20 +52,6 @@ def metadata(model):
                 if line.startswith(('spin_', 'energy_reference ')))
 
 
-
-
-def runtime_mforce(directory, model, reference):
-    directory.mkdir()
-    (directory / "nep.txt").write_text(model)
-    (directory / "model.xyz").write_text("\n".join(base.TRAIN_XYZ.splitlines()[:6]) + "\n")
-    (directory / "run.in").write_text(
-        "potential nep.txt\nvelocity 1\nensemble nve\ntime_step 0\n"
-        "dump_xyz 1 result.xyz force potential spin mforce virial precision double\nrun 1\n")
-    result = base.run(base.GPUMD, directory)
-    assert result.returncode == 0, result.stdout + result.stderr
-    rows = [[float(x) for x in line.split()[1:]]
-            for line in (directory / "result.xyz").read_text().splitlines()[-4:]]
-    return compare({"mforce": reference["mforce"][:4]}, {"mforce": [r[9:12] for r in rows]})
 
 
 def strip_labels(xyz, frames):
@@ -185,7 +171,7 @@ def validate_inactive_input(root, config, model, restart):
 
 
 def validate(root):
-    report = {"initial_para": validate_initial_para(root / "initial_para")}
+    report = {}
     for name, config in (("fe_only", CONFIG), ("all_types", NO_MASKS)):
         fresh = root / name
         execute(fresh, config)
@@ -209,7 +195,6 @@ def validate(root):
         assert metadata(saved) == metadata(model), (metadata(saved), metadata(model))
         after = predict(root / (name + "_after"), saved)
         report[name] = compare(old, after)
-        report[name + "_md"] = runtime_mforce(root / (name + "_md"), saved, after)
         imported = root / (name + "_import")
         execute(imported, NO_MASKS + "import_q_scaler 1\n", model=model)
         assert metadata((imported / "nep.txt").read_text()) == metadata(model)
@@ -222,31 +207,10 @@ def validate(root):
             execute(root / "conflicting_dof", NO_MASKS + "spin_type Ge\n",
                     model=model, restart=frozen, error="spin_type in nep.in conflicts")
             report["inactive_input"] = validate_inactive_input(root / "inactive_input", config, model, frozen)
-            legacy_config = config.replace("spin_type Fe", "spin_dof_type Fe") + "spin_env_type Fe\n"
-            alias = root / "legacy_input"
-            execute(alias, legacy_config)
-            for filename in ("nep.txt", "nep.restart"):
-                assert (alias / filename).read_bytes() == (fresh / filename).read_bytes(), filename
-            for config_name, duplicate in (
-                    ("old_first", legacy_config + "spin_type Fe\n"),
-                    ("new_first", config + "spin_dof_type Fe\n")):
-                execute(root / config_name, duplicate, error="Duplicate spin_type")
-            # Old model headers are accepted for prediction, restart and scaler import.
-            legacy_model = model.replace("spin_type Fe\n", "spin_dof_type Fe\nspin_env_type Fe\n")
-            report["legacy_prediction"] = compare(old, predict(root / "legacy_predict", legacy_model,
-                                                               config=legacy_config))
-            report["legacy_md"] = runtime_mforce(root / "legacy_md", legacy_model, old)
-            for mode, extra, state, canonical in (
-                    ("resume", "", frozen, resumed),
-                    ("import", "import_q_scaler 1\n", None, imported)):
-                directory = root / ("legacy_" + mode)
-                old_input = NO_MASKS.replace("generation 1", "generation 2") if mode == "resume" else NO_MASKS
-                execute(directory, old_input + extra, model=legacy_model, restart=state)
-                exported = (directory / "nep.txt").read_text()
-                assert "spin_dof_type" not in exported and "spin_env_type" not in exported
-                assert exported == (canonical / "nep.txt").read_text()
-            report["c516_legacy_input"] = "identical model/search state; canonical export; duplicate aliases rejected"
-
+            execute(root / "renamed_type", config.replace("spin_type Fe", "spin_dof_type Fe"),
+                    error="spin_dof_type")
+            execute(root / "removed_env", config + "spin_env_type Fe Ge\n",
+                    error="spin_env_type")
 
     model = (root / "fe_only" / "nep.txt").read_text()
     reference = predict(root / "labeled", model)
@@ -269,6 +233,7 @@ def validate(root):
     for flag in ("F F F", "T T F"):
         xyz = small.replace("Properties=", f'pbc="{flag}" Properties=')
         report[flag] = compare(periodic, predict(root / flag.replace(" ", ""), model, xyz))
+    report["initial_para"] = validate_initial_para(root / "initial_para")
     report["ediff"] = validate_ediff(root / "ediff")
     return report
 

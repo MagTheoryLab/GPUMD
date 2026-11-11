@@ -13,16 +13,47 @@
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+/*----------------------------------------------------------------------------80
+Force kernels and geometric helpers for NEP-spin in small periodic cells.
+
+Contributors:
+Chengbing Chen, 1747193328@qq.com
+
+References:
+Zheyong Fan et al., Neuroevolution machine learning potentials:
+Combining high accuracy and low cost in atomistic simulations and application to
+heat transport, Phys. Rev. B. 104, 104309 (2021).
+------------------------------------------------------------------------------*/
+
 #pragma once
 
-#include "force/nep_small_box.cuh"
+#include "nep_spin.cuh"
+#include "utilities/gpu_macro.cuh"
+#include "utilities/nep_utilities.cuh"
+
+#ifdef USE_KEPLER
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 600)
+static __device__ __inline__ double atomicAdd(double* address, double val)
+{
+  unsigned long long* address_as_ull = (unsigned long long*)address;
+  unsigned long long old = *address_as_ull, assumed;
+  do {
+    assumed = old;
+    old =
+      atomicCAS(address_as_ull, assumed, __double_as_longlong(val + __longlong_as_double(assumed)));
+
+  } while (assumed != old);
+  return __longlong_as_double(old);
+}
+#endif
+#endif
 
 // Spin retains double displacement and force accumulation in small periodic cells.
-// Ordinary NEP uses its unchanged small-box kernels.
-namespace nep_spin_small_box {
+namespace
+{
 template <typename Real>
 static __device__ __forceinline__ void
-complex_product(const Real a, const Real b, Real& real_part, Real& imag_part)
+spin_complex_product(const Real a, const Real b, Real& real_part, Real& imag_part)
 {
   const Real real_temp = real_part;
   real_part = a * real_temp - b * imag_part;
@@ -30,7 +61,7 @@ complex_product(const Real a, const Real b, Real& real_part, Real& imag_part)
 }
 
 template <typename Real>
-static __device__ __forceinline__ void get_f12_4body(
+static __device__ __forceinline__ void spin_get_f12_4body(
   const Real d12,
   const Real d12inv,
   const Real fn,
@@ -46,7 +77,7 @@ static __device__ __forceinline__ void get_f12_4body(
 
   // derivative wrt s[0]
   Real tmp0 = C4B[0] * 3.0f * s[0] * s[0] + C4B[1] * (s[1] * s[1] + s[2] * s[2]) +
-               C4B[2] * (s[3] * s[3] + s[4] * s[4]);
+              C4B[2] * (s[3] * s[3] + s[4] * s[4]);
   Real tmp1 = tmp0 * y20 * fnp_factor;
   Real tmp2 = tmp0 * fn_factor;
   f12[0] += tmp1 * r12[0] - tmp2 * 2.0f * r12[0];
@@ -87,7 +118,7 @@ static __device__ __forceinline__ void get_f12_4body(
 }
 
 template <int L, int num_abc = NUM_OF_ABC, typename Real>
-static __device__ __forceinline__ void calculate_s_one(
+static __device__ __forceinline__ void spin_calculate_s_one(
   const int n, const int n_max_angular_plus_1, const float* Fp, const float* sum_fxyz, Real* s)
 {
   const int L_minus_1 = L - 1;
@@ -102,7 +133,7 @@ static __device__ __forceinline__ void calculate_s_one(
 }
 
 template <int L, typename Real>
-static __device__ __forceinline__ void accumulate_f12_one(
+static __device__ __forceinline__ void spin_accumulate_f12_one(
   const Real d12inv, const Real fn, const Real fnp, const Real* s, const Real* r12, Real* f12)
 {
   const Real dx[3] = {
@@ -183,10 +214,10 @@ static __device__ __forceinline__ void accumulate_f12_one(
       for (int d = 0; d < 3; ++d) {
         Real real_part_dx = dx[d];
         Real imag_part_dy = dy[d];
-        complex_product(real_part_n1, imag_part_n1, real_part_dx, imag_part_dy);
+        spin_complex_product(real_part_n1, imag_part_n1, real_part_dx, imag_part_dy);
         f12[d] += (s[2 * n1 - 1] * real_part_dx + s[2 * n1 - 0] * imag_part_dy) * z_factor * fn;
       }
-      complex_product(r12[0], r12[1], real_part, imag_part);
+      spin_complex_product(r12[0], r12[1], real_part, imag_part);
       const Real xy_temp = s[2 * n1 - 1] * real_part + s[2 * n1 - 0] * imag_part;
       for (int d = 0; d < 3; ++d) {
         f12[d] += xy_temp * (z_factor * fnp * r12[d] + fn * dz_factor * dz[d]);
@@ -209,33 +240,25 @@ static __device__ __forceinline__ void accumulate_one_angular_channel_in_double(
 {
   double s[2 * L + 1];
   double contribution[3] = {0.0, 0.0, 0.0};
-  calculate_s_one<L>(n, n_max_angular_plus_1, Fp, sum_fxyz, s);
-  accumulate_f12_one<L>(d12inv, fn, fnp, s, r12unit, contribution);
+  spin_calculate_s_one<L>(n, n_max_angular_plus_1, Fp, sum_fxyz, s);
+  spin_accumulate_f12_one<L>(d12inv, fn, fnp, s, r12unit, contribution);
   for (int d = 0; d < 3; ++d) {
     f12[d] += static_cast<double>(contribution[d]);
   }
 }
 static __device__ __forceinline__ void find_fn_and_fnp_in_double(
-  const int n_max,
-  const double rc,
-  const double distance,
-  double* fn,
-  double* fnp)
+  const int n_max, const double rc, const double distance, double* fn, double* fnp)
 {
   const double rcinv = 1.0 / rc;
   const double scaled = distance * rcinv;
-  const double fc =
-    distance < rc ? 0.5 * cos(3.14159265358979323846 * scaled) + 0.5 : 0.0;
+  const double fc = distance < rc ? 0.5 * cos(3.14159265358979323846 * scaled) + 0.5 : 0.0;
   const double fcp =
-    distance < rc
-      ? -1.57079632679489661923 * sin(3.14159265358979323846 * scaled) * rcinv
-      : 0.0;
+    distance < rc ? -1.57079632679489661923 * sin(3.14159265358979323846 * scaled) * rcinv : 0.0;
   const double x = 2.0 * (scaled - 1.0) * (scaled - 1.0) - 1.0;
   fn[0] = fc;
   fnp[0] = fcp;
   fn[1] = (x + 1.0) * 0.5 * fc;
-  fnp[1] =
-    2.0 * (scaled - 1.0) * rcinv * fc + (x + 1.0) * 0.5 * fcp;
+  fnp[1] = 2.0 * (scaled - 1.0) * rcinv * fc + (x + 1.0) * 0.5 * fcp;
   double u0 = 1.0;
   double u1 = 2.0 * x;
   double t0 = 1.0;
@@ -249,8 +272,7 @@ static __device__ __forceinline__ void find_fn_and_fnp_in_double(
     u0 = u1;
     u1 = u2;
     const double basis = (t2 + 1.0) * 0.5;
-    fnp[m] =
-      derivative_chebyshev * 2.0 * (scaled - 1.0) * rcinv * fc + basis * fcp;
+    fnp[m] = derivative_chebyshev * 2.0 * (scaled - 1.0) * rcinv * fc + basis * fcp;
     fn[m] = basis * fc;
   }
 }
@@ -273,16 +295,13 @@ static __device__ __forceinline__ void accumulate_f12_small_box_in_double(
   const float* sum_fxyz,
   double* f12)
 {
-  const bool only_supported_extra =
-    !has_q_1111 && !has_q_112 && !has_q_123 && !has_q_233 && !has_q_134 &&
-    num_L == L_max + static_cast<int>(has_q_222);
+  const bool only_supported_extra = !has_q_1111 && !has_q_112 && !has_q_123 && !has_q_233 &&
+                                    !has_q_134 && num_L == L_max + static_cast<int>(has_q_222);
   if (!only_supported_extra) {
     float fallback[3] = {0.0f};
     const float d12_float = static_cast<float>(d12);
     const float r12_float[3] = {
-      static_cast<float>(r12[0]),
-      static_cast<float>(r12[1]),
-      static_cast<float>(r12[2])};
+      static_cast<float>(r12[0]), static_cast<float>(r12[1]), static_cast<float>(r12[2])};
     accumulate_f12(
       L_max,
       has_q_222,
@@ -307,8 +326,7 @@ static __device__ __forceinline__ void accumulate_f12_small_box_in_double(
     return;
   }
   const double d12inv = 1.0 / d12;
-  const double r12unit[3] = {
-    r12[0] * d12inv, r12[1] * d12inv, r12[2] * d12inv};
+  const double r12unit[3] = {r12[0] * d12inv, r12[1] * d12inv, r12[2] * d12inv};
   if (L_max >= 1)
     accumulate_one_angular_channel_in_double<1>(
       n, n_max_angular_plus_1, d12inv, fn, fnp, Fp, sum_fxyz, r12unit, f12);
@@ -337,8 +355,7 @@ static __device__ __forceinline__ void accumulate_f12_small_box_in_double(
     double radial_fn = fn * d12inv;
     double radial_fnp = fnp * d12inv - fn * d12inv * d12inv;
     const double fn2 = radial_fn * d12inv;
-    const double fnp2 =
-      radial_fnp * d12inv - radial_fn * d12inv * d12inv;
+    const double fnp2 = radial_fnp * d12inv - radial_fn * d12inv * d12inv;
     const double s2[5] = {
       sum_fxyz[n * NUM_OF_ABC + 3],
       sum_fxyz[n * NUM_OF_ABC + 4],
@@ -346,7 +363,7 @@ static __device__ __forceinline__ void accumulate_f12_small_box_in_double(
       sum_fxyz[n * NUM_OF_ABC + 6],
       sum_fxyz[n * NUM_OF_ABC + 7]};
     double contribution[3] = {0.0, 0.0, 0.0};
-    get_f12_4body(
+    spin_get_f12_4body(
       d12,
       d12inv,
       fn2,
@@ -360,9 +377,9 @@ static __device__ __forceinline__ void accumulate_f12_small_box_in_double(
     }
   }
 }
-static __global__ void find_force_radial_small_box(
-  NEP::ParaMB paramb,
-  NEP::ANN annmb,
+static __global__ void spin_find_force_radial_small_box(
+  NEP_Spin::ParaMB paramb,
+  NEP_Spin::ANN annmb,
   const int N,
   const int N1,
   const int N2,
@@ -390,26 +407,20 @@ static __global__ void find_force_radial_small_box(
         static_cast<double>(g_y12[index]),
         static_cast<double>(g_z12[index])};
       const double d12_double = sqrt(
-        r12_double[0] * r12_double[0] +
-        r12_double[1] * r12_double[1] +
+        r12_double[0] * r12_double[0] + r12_double[1] * r12_double[1] +
         r12_double[2] * r12_double[2]);
       double f12_double[3] = {0.0, 0.0, 0.0};
       float rc = (paramb.rc_radial[t1] + paramb.rc_radial[t2]) * 0.5f;
       double fn12_double[MAX_NUM_N] = {0.0};
       double fnp12_double[MAX_NUM_N] = {0.0};
       find_fn_and_fnp_in_double(
-        paramb.basis_size_radial,
-        static_cast<double>(rc),
-        d12_double,
-        fn12_double,
-        fnp12_double);
+        paramb.basis_size_radial, static_cast<double>(rc), d12_double, fn12_double, fnp12_double);
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         double gnp12_double = 0.0;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
           int c_index = get_c_index(
             t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
-          gnp12_double +=
-            fnp12_double[k] * static_cast<double>(annmb.c_type_pair[c_index]);
+          gnp12_double += fnp12_double[k] * static_cast<double>(annmb.c_type_pair[c_index]);
         }
         const double tmp12_double =
           static_cast<double>(g_Fp[n1 + n * N]) * gnp12_double / d12_double;
@@ -457,9 +468,9 @@ static __global__ void find_force_radial_small_box(
     }
   }
 }
-static __global__ void find_force_angular_small_box(
-  NEP::ParaMB paramb,
-  NEP::ANN annmb,
+static __global__ void spin_find_force_angular_small_box(
+  NEP_Spin::ParaMB paramb,
+  NEP_Spin::ANN annmb,
   const int N,
   const int N1,
   const int N2,
@@ -501,17 +512,12 @@ static __global__ void find_force_angular_small_box(
       int t2 = g_type[n2];
       float rc = (paramb.rc_angular[t1] + paramb.rc_angular[t2]) * 0.5f;
       const double d12_double = sqrt(
-        r12_double[0] * r12_double[0] +
-        r12_double[1] * r12_double[1] +
+        r12_double[0] * r12_double[0] + r12_double[1] * r12_double[1] +
         r12_double[2] * r12_double[2]);
       double fn12_double[MAX_NUM_N] = {0.0};
       double fnp12_double[MAX_NUM_N] = {0.0};
       find_fn_and_fnp_in_double(
-        paramb.basis_size_angular,
-        static_cast<double>(rc),
-        d12_double,
-        fn12_double,
-        fnp12_double);
+        paramb.basis_size_angular, static_cast<double>(rc), d12_double, fn12_double, fnp12_double);
       for (int n = 0; n <= paramb.n_max_angular; ++n) {
         double gn12_double = 0.0;
         double gnp12_double = 0.0;
@@ -523,10 +529,8 @@ static __global__ void find_force_angular_small_box(
             paramb.n_max_angular,
             paramb.basis_size_angular,
             paramb.num_c_radial);
-          gn12_double +=
-            fn12_double[k] * static_cast<double>(annmb.c_type_pair[c_index]);
-          gnp12_double +=
-            fnp12_double[k] * static_cast<double>(annmb.c_type_pair[c_index]);
+          gn12_double += fn12_double[k] * static_cast<double>(annmb.c_type_pair[c_index]);
+          gnp12_double += fnp12_double[k] * static_cast<double>(annmb.c_type_pair[c_index]);
         }
         accumulate_f12_small_box_in_double(
           paramb.L_max,
@@ -587,4 +591,4 @@ static __global__ void find_force_angular_small_box(
     }
   }
 }
-} // namespace nep_spin_small_box
+} // namespace

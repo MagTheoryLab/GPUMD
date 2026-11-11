@@ -359,8 +359,6 @@ moment sums within the spin cutoff. The reader sets excluded types' effective
 spins to zero and ignores their magnetic-force labels, so their contributions
 to moments containing neighbor spins vanish while geometric contributions remain.
 Original energy and atomic-force labels are retained; input files are unchanged.
-The same selection excludes these atoms from MD spin updates, thermal noise and
-spin temperature degrees of freedom; their atomic motion remains active.
 
 .. _nep_spin_dimensions:
 
@@ -428,11 +426,9 @@ constant or initially unresolved magnetic channel.
 Fresh training computes scaling from ordinary training structures using a
 fixed, non-degenerate reference parameter vector, independent of the SNES
 search mean and RNG. Nonconstant spin projection matrices keep descriptor
-channels distinct. :ref:`initial_para <kw_initial_para>` scales the reference
-radial coefficients without changing these mixing matrices; its default of 1
-leaves the reference unchanged. Response-only frames do not enter this
-calculation. Prediction, restart, and explicit scaler import reuse the stored
-normalization instead.
+channels distinct. Response-only frames do not enter this calculation.
+Prediction, restart, and explicit scaler import reuse the stored normalization
+instead.
 
 .. _nep_spin_restart:
 
@@ -504,59 +500,6 @@ The spin torque used for training diagnostics is
 
 ZBL contributes to energy, atomic force, and virial but not to magnetic force
 or torque because it is spin independent.
-
-Pressure-controlled spin dynamics
-=================================
-
-``npt_tspin`` combines TSPIN with the same Nosé--Hoover-chain and
-Parrinello--Rahman/MTTK cell dynamics used by :attr:`npt_mttk`. Its extended
-energy has the schematic form
-
-.. math::
-
-   \mathcal{H}_\mathrm{ext}
-   = K_R + K_S + U(\boldsymbol R,\boldsymbol S)
-   + P_\mathrm{ext}V
-   + \mathcal{H}_{\mathrm{NH},R}
-   + \mathcal{H}_{\mathrm{NH},S}
-   + \mathcal{H}_{\mathrm{NH},h},
-
-where :math:`K_R` is lattice kinetic energy,
-:math:`K_S=\sum_i|\boldsymbol\pi_i^S|^2/(2\mu_i)` is spin-coordinate kinetic
-energy, and :math:`h` denotes the cell degrees of freedom. The spin equations
-are
-
-.. math::
-
-   \dot{\boldsymbol s}_i
-   = \frac{\boldsymbol\pi_i^S}{\mu_i},
-   \qquad
-   \dot{\boldsymbol\pi}_i^S
-   = \boldsymbol M_i-\xi_S\boldsymbol\pi_i^S.
-
-Cartesian spins are internal coordinates: changing :math:`h` remaps atomic
-positions, but neither rescales nor rotates :math:`\boldsymbol s_i`. Therefore
-the barostat pressure contains lattice kinetic stress and the full potential
-virial,
-
-.. math::
-
-   P_{\alpha\beta}
-   = \frac{1}{V}\left[
-       \sum_i m_i v_{i\alpha}v_{i\beta}
-       + W_{\alpha\beta}(\boldsymbol R,\boldsymbol S)
-     \right],
-
-but no :math:`K_S` term. Spin still affects the cell because the analytical
-virial :math:`W` differentiates the complete Spin-potential energy with
-respect to cell deformation. Separate Nosé--Hoover chains control lattice and
-spin kinetic energies at the same target-temperature ramp; the pressure chain
-controls the cell momenta.
-
-The complete user-facing syntax, initialization rules, restart behavior, and
-output example are documented under :ref:`npt_tspin <kw_npt_tspin>`. This
-implementation does not define ``npt_ber_tspin`` or ``npt_scr_tspin``; the
-only pressure-controlled TSPIN path is the MTTK composition described above.
 
 Spin loss terms
 ===============
@@ -650,27 +593,51 @@ Model formats and input
      - Training mode
      - Description
    * - ``nep`` / ``model nep_spin``
-     - ``spin_version 1``
+     - ``model nep_spin``
      - Current block format with ``spin_version 1``; optional :ref:`zbl <kw_zbl>` field.
 
 See :ref:`spin_version <kw_spin_version>` and the neighboring ``spin_*`` keyword
 pages for descriptor configuration. See :ref:`train_test_xyz` for ordinary
 training labels and :ref:`response_xyz` for grouped-response input.
-Runtime ``model.xyz`` files require one
-``spin:R:3`` vector per atom. Cartesian spin dynamics with separate lattice
-and spin thermostats is available through :attr:`nvt_tspin`;
-pressure-controlled TSPIN dynamics uses :attr:`npt_tspin`. Fixed-magnitude
-stochastic LLG dynamics is available through :ref:`nvt_sib <kw_nvt_sib>` and
-:ref:`npt_sib <kw_npt_sib>`. Variable-magnitude, first-order Langevin dynamics
-is available through the independent :ref:`GLSD ensembles <kw_ensemble_glsd>`.
 
+.. _nep_spin_runtime:
 
-Training specialization
------------------------
+Fixed-spin molecular dynamics
+-----------------------------
 
-With ``nep_compile 1``, training specializes both the structural NEP kernels
-and the magnetic density, descriptor contraction and force kernels for the
-selected Spin layout. The magnetic kernels share their formulas with the
-native path. If runtime compilation is unavailable, native kernels remain
-available. Compilation adds startup time, so very short runs may be slower;
-``nep_compile 0`` disables specialization. Prediction uses the native path.
+Load the exported model with ``potential nep.txt`` and provide Cartesian
+magnetic moments through ``spin:R:3`` in :ref:`model.xyz <model_xyz>`.
+The ``nve`` and ``nvt_nhc`` ensembles evolve positions and velocities while
+keeping the magnetic moments fixed. Only one potential is allowed, and all
+three cell directions must be periodic.
+
+Atoms whose elements are absent from ``spin_type`` have zero effective spin.
+Their input spin values are ignored; they still contribute geometric
+environments. Their magnetic forces remain zero, including in an applied
+external field. The reader does not normalize the active spins.
+
+For example::
+
+   potential nep.txt
+   velocity 300
+   ensemble nve
+   time_step 1
+   dump_xyz 100 trajectory.xyz spin mforce
+   dump_restart 1000
+   run 1000
+
+Use ``dump_xyz`` with ``spin`` and ``mforce`` to write the moments and magnetic
+forces. ``dump_restart`` preserves the fixed spins in ``restart.xyz``;
+copy this file to ``model.xyz`` and use the same potential to resume.
+``replicate`` copies the spin vectors with their atoms.
+
+The :ref:`add_mfield keyword <kw_add_mfield>` applies a magnetic induction in
+tesla to a group or fractional-coordinate region. Magnetic force is
+:math:`-\partial E/\partial \mathbf{s}` in eV/Bohr magneton; it is evaluated
+although spins are fixed. For spin dynamics, see :ref:`SIB <kw_ensemble_sib>`,
+:ref:`TSPIN <kw_ensemble_tspin>`, and :ref:`GLSD <kw_ensemble_glsd>`.
+
+Multi-GPU execution uses every visible GPU in a single process. Use
+``potential nep.txt x`` (or ``y``/``z``) to select the spatial partition
+direction. Small cells may require replicated geometry and offer little
+speedup. GPU 0 retains the global arrays.

@@ -106,15 +106,8 @@ bool Spin_Parameters::parse_keyword(const char** param, int num_param)
     parse_spin_l_max(param, num_param);
   } else if (strcmp(param[0], "spin_cutoff") == 0) {
     parse_spin_cutoff(param, num_param);
-  } else if (strcmp(param[0], "spin_type") == 0 || strcmp(param[0], "spin_dof_type") == 0) {
-    // Temporary c516 input alias; state and model output use spin_type only.
+  } else if (strcmp(param[0], "spin_type") == 0) {
     parse_spin_type(param, num_param);
-    if (strcmp(param[0], "spin_dof_type") == 0) {
-      printf("    spin_dof_type is accepted as spin_type (c516 compatibility).\n");
-    }
-  } else if (strcmp(param[0], "spin_env_type") == 0) {
-    // Temporary c516 compatibility: every type now contributes geometry.
-    printf("    spin_env_type is ignored; all types contribute geometric environments.\n");
   } else {
     return NEP_Energy_Parameters::parse_keyword(param, num_param);
   }

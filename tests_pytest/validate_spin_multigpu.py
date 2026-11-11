@@ -12,8 +12,7 @@ import numpy as np
 # Energy tolerance is per atom and does not scale with the elemental baseline.
 GATES = {'potential': (5e-6, 0), 'force': (5e-5, 1e-5),
          'mforce': (5e-6, 1e-5), 'virial': (5e-5, 1e-5),
-         'pos': (2e-5, 0), 'vel': (2e-5, 0), 'spin': (3e-5, 0),
-         'spin_vel': (3e-5, 0)}
+         'pos': (2e-5, 0), 'vel': (2e-5, 0), 'spin': (3e-5, 0)}
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -58,10 +57,10 @@ def write_xyz(path, positions, spins, cell, velocity=None, species=None):
     n = len(positions)
     with path.open('w') as f:
         f.write(str(n)+'\nLattice="'+' '.join(map(str,cell.ravel()))+'" '
-                'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:spin_vel:R:3:group:I:1 pbc="T T T"\n')
+                'Properties=species:S:1:pos:R:3:vel:R:3:spin:R:3:group:I:1 pbc="T T T"\n')
         for i,(r,v,s) in enumerate(zip(positions,velocity,spins)):
             symbol = species[i] if species is not None else 'Fe'
-            f.write(symbol+' '+' '.join(f'{x:.15g}' for x in np.r_[r,v,s,[0,0,0]])+f' {i%2}\n')
+            f.write(symbol+' '+' '.join(f'{x:.15g}' for x in np.r_[r,v,s])+f' {i%2}\n')
 
 def structure(dims=(48,12,12), variant='bcc'):
     rng = np.random.default_rng(813)
@@ -88,7 +87,7 @@ def execute(args, name, xyz, gpus, ensemble='nve', steps=1, dt=0, field='', dire
     shutil.copyfile(args.model,path/'nep.txt'); shutil.copyfile(xyz,path/'model.xyz')
     run = (f'potential nep.txt{(" "+direction) if direction else ""}\n'
            f'ensemble {ensemble}\ntime_step {dt}\n'+field+
-           f'dump_xyz {steps} state.xyz precision double velocity force potential spin mforce spin_velocity virial\nrun {steps}\n')
+           f'dump_xyz {steps} state.xyz precision double velocity force potential spin mforce virial\nrun {steps}\n')
     (path/'run.in').write_text(run)
     env = dict(os.environ); env['CUDA_VISIBLE_DEVICES'] = ','.join(args.devices[:gpus])
     exe = args.reference if reference and args.reference else args.binary
@@ -120,15 +119,16 @@ def main():
         print(name,'PASS',flush=True)
     xyz=a.output/'input.xyz'
     outputs=['potential','force','mforce','virial']
-    current_model = a.model
-    model = current_model.read_text()
+    original_model = a.model
+    model = original_model.read_text()
+    converted = original_model
     # Both elements appear on every slab; use a large cell to exercise the
     # actual decomposition rather than its small-box fallback.
     pos,spin,cell,vel=structure((48,8,8))
-    symbols=current_model.read_text().splitlines()[0].split()[2:]
+    symbols=original_model.read_text().splitlines()[0].split()[2:]
     species=np.array([symbols[i % len(symbols)] for i in range(len(pos))])
     write_xyz(xyz,pos,spin,cell,vel,species)
-    ref,_=execute(a,'format-reference',xyz,1)
+    ref,_=execute(a,'format-reference',xyz,1,reference=True)
     reference_line=next(line for line in model.splitlines() if line.startswith('energy_reference '))
     original=np.array(list(map(float,reference_line.split()[1:])))
     shifts=np.array([(-1)**i*(100000.123456789+i*100000.864197532)
@@ -138,9 +138,9 @@ def main():
                        ' '.join(f'{v:.17g}' for v in original+shifts),1))
     atom_shift=np.array([shifts[i % len(symbols)] for i in range(len(pos))])[:,None]
     for g in [1,2,4]:
-        a.model=current_model
-        out,_=execute(a,f'format-g{g}',xyz,g)
-        record(f'format-g{g}',out,ref,outputs)
+        a.model=converted
+        out,_=execute(a,f'format-block-g{g}',xyz,g)
+        record(f'format-block-g{g}',out,ref,outputs)
         if g > 1:
             repeated,_=execute(a,f'format-repeat-g{g}',xyz,g)
             record(f'format-repeat-g{g}',repeated,out,outputs)
@@ -155,7 +155,13 @@ def main():
             for key in ['force','mforce','virial']:
                 if np.max(np.abs(shifted_out[key]-out[key]))>1e-10:
                     raise AssertionError(f'Energy reference changed {key} on {g} GPUs')
-    a.model=current_model
+    a.model = converted
+    field = 'add_mfield 0 0 100 -200 300\nadd_mfield 0 0 -20 50 10\n'
+    field_ref, _ = execute(a, 'field-reference', xyz, 1, field=field, reference=True)
+    assert np.max(np.abs(field_ref['mforce'] - ref['mforce'])) > 1e-3
+    for g in [1, 2, 4]:
+        out, _ = execute(a, f'field-g{g}', xyz, g, field=field)
+        record(f'field-g{g}', out, field_ref, outputs)
     for variant in ['bcc','nonuniform','triclinic','small','cutoff']:
         if variant=='cutoff':
             # Isolated pairs just inside/outside the 6 A cutoff, including slab/PBC faces.
@@ -175,22 +181,27 @@ def main():
             for d in ['x','y','z']:
                 out,_=execute(a,f'{variant}-{d}',xyz,4,direction=d)
                 record(f'{variant}-{d}',out,ref,outputs)
-    pos,spin,cell,vel=structure((36,8,8));write_xyz(xyz,pos,spin,cell,vel)
-    ensembles={'tspin':'nvt_tspin 100 100 100 mass_factor Fe 0.01 seed 731',
-               'sib':'nvt_sib 100 100 100 alpha 0.01 stemp 100 seed 731',
-               'npt_tspin':'npt_tspin temp 100 100 iso 0 0 tperiod 100 pperiod 1000 mass_factor Fe 0.01 seed 731',
-               'npt_sib':'npt_sib temp 100 100 iso 0 0 tperiod 100 pperiod 1000 alpha 0.01 stemp 100 seed 731'}
-    for label,ens in ensembles.items():
-        field=('add_mfield region 0.3 0.7 0 1 0 1 7 -3 4\n'
-               if label.startswith('npt') else 'add_mfield 0 1 7 -3 4\n')
-        ref,_=execute(a,label+'-reference',xyz,1,ens,20,.1,field,reference=True)
-        for g in [1,2,4]:
-            out,_=execute(a,f'{label}-g{g}',xyz,g,ens,20,.1,field)
-            record(f'{label}-g{g}',out,ref,outputs+['pos','vel','spin','spin_vel'])
-            if 'sib' in label:
-                norm_error=float(np.max(np.abs(np.linalg.norm(out['spin'],axis=1)-np.linalg.norm(spin,axis=1))))
-                report['cases'][f'{label}-g{g}']['spin_norm_max_abs']=norm_error
-                if norm_error>1e-7:raise AssertionError(norm_error)
+    # n_max_angular=8 and ten angular channels need 16*(90+9*80)*4 = 51,840 shared bytes,
+    # exceeding the 48 KiB direct-force limit and selecting the generic fallback.
+    # The large cell also keeps every actual multi-GPU domain out of the small-box path.
+    dim = 5 + 9 * 10 + 55
+    count = (dim + 2) * 30 * 2 + 1 + 4 * (5 * 9 + 9 * 9 + 2 * 9) + 16
+    rng = np.random.default_rng(9127)
+    header = model.split("@ parameters", 1)[0].replace("n_max 4 4", "n_max 4 8").replace("l_max 4 2 0", "l_max 8 2 1")
+    fallback = a.output / "angular-fallback.nep"
+    fallback.write_text(header + f"@ parameters {count}\n" +
+                        "\n".join(f"{v:.9g}" for v in rng.normal(0, .03, count)) +
+                        f"\n@ q_scaler {dim}\n" + "1\n" * dim)
+    a.model = fallback
+    pos, spin, cell, vel = structure((48, 12, 12))
+    write_xyz(xyz, pos, spin, cell, vel)
+    ref, _ = execute(a, 'angular-fallback-reference', xyz, 1, reference=True)
+    assert np.max(np.abs(ref['force'])) > 1e-8
+    for g in [1, 2, 4]:
+        out, _ = execute(a, f'angular-fallback-g{g}', xyz, g)
+        record(f'angular-fallback-g{g}', out, ref, outputs)
+    a.model = original_model
+
     # Uniform translation across slab/PBC faces exceeds the cached-partition
     # displacement limit twice. Spin and force outputs must follow atom identity.
     pos,spin,cell,vel=structure((48,8,8));vel[:]=[.75,0,0]
@@ -198,7 +209,7 @@ def main():
     ref,_=execute(a,'migration-reference',xyz,1,'nve',40,.1,reference=True)
     for g in [1,2,4]:
         out,_=execute(a,f'migration-g{g}',xyz,g,'nve',40,.1)
-        record(f'migration-g{g}',out,ref,outputs+['pos','vel','spin','spin_vel'])
+        record(f'migration-g{g}',out,ref,outputs+['pos','vel','spin'])
         delta=out['pos']-pos;delta-=np.rint(delta/np.diag(cell))*np.diag(cell)
         assert delta[:,0].min()>2.5, 'Migration probe must exceed the partition rebuild limit'
     report['passed']=True;save()

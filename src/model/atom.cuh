@@ -14,10 +14,8 @@
 */
 
 #pragma once
-#include "integrate/spin/restart.cuh"
 #include "utilities/gpu_vector.cuh"
 #include <string>
-#include <cstdint>
 #include <vector>
 
 class Box;
@@ -49,10 +47,6 @@ public:
   GPU_Vector<double> heat_per_atom;      // per-atom heat current (5 components)
   GPU_Vector<double> virial_per_atom;    // per-atom virial (9 components)
   GPU_Vector<double> potential_per_atom; // per-atom potential energy (1 component)
-  std::uint64_t spin_glsd_step = 0, spin_glsd_seed = 0; // next GLSD noise counter
-  Spin_Lattice_Restart spin_lattice_restart;
-  std::vector<int> cpu_spin_dof;
-  GPU_Vector<int> spin_dof; // Per-atom independent spin coordinates, from the model.
   bool has_spin = false;
   bool spin_velocity_initialized = false;
   // for beads in PIMD

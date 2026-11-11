@@ -22,21 +22,15 @@ Syntax
 
 For spin-only dynamics with a fixed lattice, use::
 
-    ensemble nve_sib [alpha <value>] [gamma <value>] \
-             [stemp <-1|value>] [seed <value>]
+    ensemble nve_sib [alpha <value>] [gamma <value>] [stemp <-1|value>] [seed <value>]
 
 For fixed-cell dynamics, use::
 
-    ensemble nvt_sib <T_1> <T_2> <T_coup> \
-             [lattice on|off] [alpha <value>] \
-             [gamma <value>] [stemp <-1|0|value>] [seed <value>]
+    ensemble nvt_sib <T_1> <T_2> <T_coup> [lattice on|off] [alpha <value>] [gamma <value>] [stemp <-1|0|value>] [seed <value>]
 
 For pressure-controlled dynamics, use::
 
-    ensemble npt_sib temp <T_1> <T_2> <pressure_terms> \
-             [tperiod <tau_temp>] [pperiod <tau_press>] \
-             [alpha <value>] [gamma <value>] \
-             [stemp <-1|0|value>] [seed <value>]
+    ensemble npt_sib temp <T_1> <T_2> <pressure_terms> [tperiod <tau_temp>] [pperiod <tau_press>] [alpha <value>] [gamma <value>] [stemp <-1|0|value>] [seed <value>]
 
 The MTTK portion of ``npt_sib`` has the same syntax as
 :ref:`npt_mttk <kw_ensemble_mttk>`. SIB options must follow all MTTK options.
@@ -59,8 +53,7 @@ ratio::
 
 Run isotropic pressure-controlled spin--lattice dynamics::
 
-    ensemble npt_sib temp 300 300 iso 0 0 \
-             tperiod 100 pperiod 1000 alpha 0.1 seed 12345
+    ensemble npt_sib temp 300 300 iso 0 0 tperiod 100 pperiod 1000 alpha 0.1 seed 12345
 
 Parameters
 ----------
@@ -143,9 +136,9 @@ positive seed. Target temperatures are only required by the NVT/NPT forms. A
 zero spin vector remains zero. ``nve_sib`` always fixes the lattice and does
 not accept ``lattice``; ``npt_sib`` always includes
 lattice and cell dynamics and therefore does not accept ``lattice off``.
-Only types selected by the model's ``spin_type`` undergo spin integration
-and noise. Excluded types have their input spin and restart spin velocity set
-to zero; their atomic motion remains active.
+SIB propagates nonzero moments of elements listed in ``spin_type``. Moments
+of other elements are masked to zero, receive no magnetic noise, and remain
+zero. The initial magnitude of each active moment is conserved.
 
 For variable-magnitude dynamics use the independent
 :ref:`GLSD ensembles <kw_ensemble_glsd>`. SIB does not accept ``lsf``, ``damping`` or

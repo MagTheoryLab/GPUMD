@@ -56,11 +56,8 @@ Syntax and parameters
 ::
 
     ensemble nve_glsd damping <value> [gamma <value>] [stemp <-1|value>] [seed <value>]
-    ensemble nvt_glsd <T_1> <T_2> <T_coup> [lattice on|off] \
-             damping <value> [gamma <value>] [stemp <-1|0|value>] [seed <value>]
-    ensemble npt_glsd temp <T_1> <T_2> <pressure_terms> \
-             [tperiod <tau_temp>] [pperiod <tau_press>] \
-             damping <value> [gamma <value>] [stemp <-1|0|value>] [seed <value>]
+    ensemble nvt_glsd <T_1> <T_2> <T_coup> [lattice on|off] damping <value> [gamma <value>] [stemp <-1|0|value>] [seed <value>]
+    ensemble npt_glsd temp <T_1> <T_2> <pressure_terms> [tperiod <tau_temp>] [pperiod <tau_press>] damping <value> [gamma <value>] [stemp <-1|0|value>] [seed <value>]
 
 ``damping``
   Required, finite, non-negative and dimensionless. It is
@@ -103,10 +100,8 @@ The NVT temperature and lattice coupling parameters have the same meaning as
 :ref:`NHC <kw_ensemble_standard>`. ``T_coup`` is required even with
 ``lattice off``, when it has no effect on spins. The NPT prefix has the syntax
 of :ref:`MTTK <kw_ensemble_mttk>`; all GLSD options follow the MTTK options.
-GLSD rejects ``alpha``, ``lsf`` and the earlier unreleased ``mobility``
-keyword. SIB rejects ``damping``, ``mobility`` and ``lsf``. Selecting the
-ensemble name selects the physical model. Do not rename an old mobility
-value without converting it.
+GLSD uses dimensionless ``damping``; SIB uses Gilbert ``alpha``.
+These keywords select different dissipative equations and are not interchangeable.
 
 Choosing damping
 ----------------
@@ -247,31 +242,10 @@ the lattice kinetic temperature, not the paper's Eq. (34) spin temperature.
 Converting an earlier input
 ---------------------------
 
-For the earlier unreleased ``mobility L`` interface, retain the same gamma
-:math:`g` and replace it by ``damping`` equal to
-:math:`\eta=L/(g^2\hbar)`. At default gamma this is :math:`L\hbar/4`.
-GPUMD retains its existing rounded constant
-:math:`\hbar=0.06465412\times10.18051/1000
-=0.0006582119152012` eV ps, so the default-gamma conversions are:
-
-.. list-table::
-   :header-rows: 1
-
-   * - Earlier mobility
-     - New damping (approximately)
-   * - 10
-     - 0.001645529788003
-   * - 60.7707
-     - 0.01
-   * - 77.8486
-     - 0.0128102
-
-Use the full conversion expression when matching an old trajectory; rounded
-examples need not reproduce it exactly. A non-default gamma requires the
-full formula. Startup output reports dimensionless damping and converted
-mobility. Existing GLSD restart files keep their counter and seed; continue
-with the equivalent damping, the same gamma and other settings. The file
-format is unchanged.
+The mobility corresponding to a dimensionless damping is
+:math:`\lambda=\eta g^2\hbar`. GPUMD uses
+:math:`\hbar=0.06465412\times10.18051/1000` eV ps.
+Startup output reports both damping and converted mobility.
 
 Equation and integration
 ------------------------
@@ -388,20 +362,13 @@ requesting ``spin_velocity`` output then fails explicitly. Switching later to
 TSPIN lets that integrator initialize its own velocity. No spin kinetic energy
 is included in the lattice temperature.
 
-``dump_restart`` writes full-precision moments plus ``spin_glsd_step`` and
-``spin_glsd_seed`` in ``restart.xyz`` for this mode. To continue, copy it to
-``model.xyz`` and repeat the ensemble parameters, field, timestep, seed and
-atom order. The seed must match. The counter also continues across successive
-GLSD ``run`` blocks. Old XYZ files without these fields start at counter zero.
-Selecting another integrator clears this GLSD counter. Restart preserves the
-noise stream. With lattice motion enabled, ``nvt_glsd`` also saves the NHC
-chain masses, positions and momenta; ``npt_glsd`` saves the MTTK thermostat
-and barostat. Both retain the original temperature/pressure protocol phase
-and global time; see the :ref:`continuation procedure <kw_dump_restart>`.
-Repeat the original ensemble endpoints and run the remaining steps. NHC
-masses keep their original starting-temperature convention. ``lattice off``
-has no atomic thermostat to checkpoint. Other stateful modifiers and analysis
-histories are outside this thermostat checkpoint contract.
+``dump_restart`` saves the cell and per-atom state, including magnetic moments.
+Copy ``restart.xyz`` to ``model.xyz`` to start a new simulation from that state.
+Thermostats, barostats and the noise counter are initialized for each new run;
+``seed`` selects its random sequence. Reusing a seed restarts the same sequence.
+Neither the original ramp progress nor the random stream is restored, so a
+stochastic restart need not follow an uninterrupted trajectory.
+See :ref:`Spin restart <spin_restart>` for the input procedure.
 
 Integration and Gaussian generation run on GPU 0, keyed by seed, original
 atom index, step and component. Multi-GPU NEP distributes predictor/endpoint
@@ -411,7 +378,6 @@ ghost magnetic forces. Identical input order and seed therefore give identical
 random increments on one and four GPUs. Neighbor ordering and floating-point
 reductions can still differ; compare deterministic short-time errors and
 stochastic distributions, not long noisy trajectories bitwise.
-The model's ``spin_type`` defines which atoms have spin coordinates.
-Cartesian noise and drift act only on these atoms, including selected atoms
-whose current moment is zero. Excluded atoms have their input spin and restart
-spin velocity set to zero and remain zero under GLSD, including in an external field.
+Only elements listed in ``spin_type`` evolve and receive Cartesian thermal
+noise, including active atoms whose current moment is zero. Other elements
+retain zero effective moments.

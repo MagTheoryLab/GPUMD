@@ -21,42 +21,41 @@ The driver class calculating force and related quantities.
 #ifdef USE_NNAP
 #include "nnap.cuh"
 #endif
-#include "adp.cuh"
-#include "eam.cuh"
-#include "eam_alloy.cuh"
+#include "force/eam/adp.cuh"
+#include "force/eam/eam.cuh"
+#include "force/eam/eam_alloy.cuh"
 #include "fcp.cuh"
 #include "force.cuh"
+#include "model/atom.cuh"
 #ifdef GPUMD_WPE_ENABLED
 #include "wpe_adapter.cuh"
 #endif
-#include "ilp_nep.cuh"
-#include "ilp_tmd_sw.cuh"
-#include "ilp_tersoff.cuh"
+#include "force/ilp/ilp_nep.cuh"
+#include "force/ilp/ilp_tmd_sw.cuh"
+#include "force/ilp/ilp_tersoff.cuh"
 #include "lj.cuh"
-#include "nep.cuh"
-#include "nep_spin/nep_spin.cuh"
-#include "nep_spin/spin_dof.cuh"
-#include "utilities/nep_spin_model_file.cuh"
-#include "nep_spin/nep_spin_multigpu.cuh"
-#include "nep_multigpu.cuh"
-#include "nep_charge.cuh"
+#include "force/nep/nep.cuh"
+#include "force/nep/nep_multigpu.cuh"
+#include "force/nep_charge/nep_charge.cuh"
 #include "nep_charge_vdw/nep_charge_vdw.cuh"
 #include "potential.cuh"
-#include "tersoff1988.cuh"
-#include "tersoff1989.cuh"
-#include "tersoff_mini.cuh"
+#include "force/tersoff/tersoff1988.cuh"
+#include "force/tersoff/tersoff1989.cuh"
+#include "force/tersoff/tersoff_mini.cuh"
 #include "utilities/common.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
-#include "utilities/nep_model_file.cuh"
-#include "utilities/nep_model_input.cuh"
+#include "utilities/nep_io/nep_file.cuh"
+#include "nep_spin/runtime.cuh"
 #include "utilities/read_file.cuh"
 #include "utilities/run_input.cuh"
 #include <cstring>
-#include <sstream>
+#include <fstream>
 #include <vector>
 
 Force::Force(void) {}
+
+Force::~Force() = default;
 
 void Force::check_types(const std::string& file_potential)
 {
@@ -115,44 +114,23 @@ std::unique_ptr<Potential> Force::create_potential(
     potential.reset(new FCP(fid_potential, num_types, number_of_atoms, box));
     is_fcp = true;
   } else if (strcmp(potential_name, "nep_vdw") == 0 ||
-             strcmp(potential_name, "qnep2_vdw") == 0) {
+             strcmp(potential_name, "qnep3_vdw") == 0) {
     potential.reset(new NEP_Charge_VDW(tokens[1].c_str(), number_of_atoms, run_input));
     is_nep = true;
   } else if (strcmp(potential_name, "nep_spin") == 0) {
     if (!potentials.empty()) {
       PRINT_INPUT_ERROR("NEP_Spin must be the only potential in a run.");
     }
-    int direction = -1;
-    if (num_param == 3) {
-      if (tokens[2] == "x") direction = 0;
-      else if (tokens[2] == "y") direction = 1;
-      else if (tokens[2] == "z") direction = 2;
-      else PRINT_INPUT_ERROR("partition direction for multi-GPU NEP can only be x or y or z.");
-    }
-    int num_gpus = 0;
-    CHECK(gpuGetDeviceCount(&num_gpus));
-    if (num_gpus == 1) potential.reset(new NEP_Spin(tokens[1].c_str(), number_of_atoms));
-    else potential.reset(new NEP_Spin_MultiGPU(num_gpus, tokens[1].c_str(), number_of_atoms, direction));
-    spin_types_ = num_gpus == 1 ?
-      static_cast<NEP_Spin*>(potential.get())->model().spin_type_active :
-      static_cast<NEP_Spin_MultiGPU*>(potential.get())->model().spin_type_active;
-    spin_types_gpu_.resize(spin_types_.size());
-    spin_types_gpu_.copy_from_host(spin_types_.data());
+    spin_runtime_.reset(new Spin_Runtime(run_input));
+    potential = spin_runtime_->create_potential(tokens, number_of_atoms);
     is_nep = true;
-    has_spin_potential_ = true;
   } else if (
-    strcmp(potential_name, "nep4_charge1") == 0 ||
-    strcmp(potential_name, "nep4_charge2") == 0 ||
-    strcmp(potential_name, "nep4_charge3") == 0 ||
-    strcmp(potential_name, "nep4_zbl_charge1") == 0 ||
-    strcmp(potential_name, "nep4_zbl_charge2") == 0 ||
-    strcmp(potential_name, "nep4_zbl_charge3") == 0) {
+    strcmp(potential_name, "qnep1") == 0 || strcmp(potential_name, "qnep2") == 0 ||
+    strcmp(potential_name, "qnep3") == 0) {
     potential.reset(new NEP_Charge(tokens[1].c_str(), number_of_atoms, run_input));
     is_nep = true;
   } else if (
-    strcmp(potential_name, "nep4") == 0 || strcmp(potential_name, "nep4_zbl") == 0 ||
-    strcmp(potential_name, "nep4_temperature") == 0 ||
-    strcmp(potential_name, "nep4_zbl_temperature") == 0) {
+    strcmp(potential_name, "nep") == 0 || strcmp(potential_name, "nep_temperature") == 0) {
     int num_gpus;
     CHECK(gpuGetDeviceCount(&num_gpus));
 #ifdef ZHEYONG
@@ -227,9 +205,10 @@ std::unique_ptr<Potential> Force::create_potential(
 void Force::parse_potential(
   const std::vector<std::string>& tokens,
   const Box& box,
-  const int number_of_atoms,
+  Atom& atom,
   const RunInput& run_input)
 {
+  const int number_of_atoms = atom.type.size();
 #ifdef GPUMD_WPE_ENABLED
   if (tokens.size() != 2u) {
     PRINT_INPUT_ERROR(
@@ -255,31 +234,22 @@ void Force::parse_potential(
 
   FILE* fid_potential = my_fopen(tokens[1].c_str(), "r");
   char potential_name[100];
-  int count = fscanf(fid_potential, "%s", potential_name);
+  int count = fscanf(fid_potential, "%99s", potential_name);
   if (count != 1) {
     PRINT_INPUT_ERROR("reading error for potential file.");
   }
   int num_types = get_number_of_types(fid_potential);
-  if (NEP_Model_Input::is_new_format(potential_name) && is_nep_spin_model_file(tokens[1])) {
-    std::strcpy(potential_name, "nep_spin");
-  } else if (NEP_Model_Input::is_new_format(potential_name)) {
-    NEP_Model_File model;
+  if (NEP_File::is_nep_header(potential_name)) {
     std::ifstream input(tokens[1]);
+    std::string model;
     std::string error;
-    if (!model.read(input, error)) {
+    if (!NEP_File::read_model_name(input, model, error)) {
       PRINT_INPUT_ERROR(error.c_str());
     }
-    // New MD models can read the native format; retain the adapter for existing models.
-    std::string tag = model.name;
-    if (tag != "nep_vdw" && tag != "qnep2_vdw") {
-      std::string md_input;
-      if (!model.get_md_input(md_input, error)) {
-        PRINT_INPUT_ERROR(error.c_str());
-      }
-      std::istringstream header(md_input);
-      header >> tag;
+    if (model.size() >= sizeof(potential_name)) {
+      PRINT_INPUT_ERROR("NEP model name is too long.");
     }
-    std::strcpy(potential_name, tag.c_str());
+    std::strcpy(potential_name, model.c_str());
   }
   bool is_nep = false;
   std::unique_ptr<Potential> potential = create_potential(
@@ -304,8 +274,11 @@ void Force::parse_potential(
   // Move the pointer into the list of potentials
   potentials.push_back(std::move(potential));
   // Check if a non-NEP potential has previously been defined
-  if (has_spin_potential_ && potentials.size() != 1) {
+  if (spin_runtime_ && potentials.size() != 1) {
     PRINT_INPUT_ERROR("NEP_Spin must be the only potential in a run.");
+  }
+  if (spin_runtime_) {
+    spin_runtime_->initialize(atom);
   }
   has_non_nep = has_non_nep || !is_nep;
   if (potentials.size() > 1 && has_non_nep) {
@@ -645,52 +618,42 @@ void Force::compute(
 
 }
 
-void Force::initialize_spin_dofs(Atom& atom)
+void Force::compute(Box& box, Atom& atom, const std::vector<Group>& group)
 {
-  if (has_spin_potential_) spin_dof::initialize(atom, spin_types_);
-}
-
-void Force::compute_spin(
-  Box& box,
-  GPU_Vector<double>& position_per_atom,
-  GPU_Vector<int>& type,
-  std::vector<Group>& group,
-  GPU_Vector<double>& potential_per_atom,
-  GPU_Vector<double>& force_per_atom,
-  GPU_Vector<double>& virial_per_atom,
-  GPU_Vector<double>& spin_per_atom,
-  GPU_Vector<double>& mforce_per_atom,
-  int* position_image)
-{
-  if (!has_spin_potential_ || potentials.size() != 1) {
-    PRINT_INPUT_ERROR("Spin-aware force dispatch requires one NEP_Spin potential.");
+  int* position_image = atom.position_image.size() > 0 ? atom.position_image.data() : nullptr;
+  if (!spin_runtime_) {
+    compute(
+      box,
+      atom.position_per_atom,
+      atom.type,
+      group,
+      atom.potential_per_atom,
+      atom.force_per_atom,
+      atom.virial_per_atom,
+      atom.velocity_per_atom,
+      atom.mass,
+      position_image);
+    return;
   }
 
-  const int number_of_atoms = type.size();
+  if (potentials.size() != 1) {
+    PRINT_INPUT_ERROR("Spin-aware force dispatch requires one NEP_Spin potential.");
+  }
+  const int number_of_atoms = atom.type.size();
   if (
-    spin_per_atom.size() != static_cast<std::size_t>(number_of_atoms) * 3 ||
-    mforce_per_atom.size() != static_cast<std::size_t>(number_of_atoms) * 3) {
+    atom.spin_per_atom.size() != static_cast<std::size_t>(number_of_atoms) * 3 ||
+    atom.mforce_per_atom.size() != static_cast<std::size_t>(number_of_atoms) * 3) {
     PRINT_INPUT_ERROR("NEP_Spin requires three spin and mforce components per atom.");
   }
   prepare_compute(
-    number_of_atoms, box, position_per_atom, potential_per_atom,
-    force_per_atom, virial_per_atom, position_image);
-  mforce_per_atom.fill(0.0);
-  GPU_CHECK_KERNEL
-
-  potentials[0]->compute(
+    number_of_atoms,
     box,
-    type,
-    position_per_atom,
-    spin_per_atom,
-    potential_per_atom,
-    force_per_atom,
-    virial_per_atom,
-    mforce_per_atom);
-  magnetic_field_.compute(
-    box, position_per_atom, group, spin_per_atom, potential_per_atom, mforce_per_atom);
-  // External fields also respect the model's independent spin coordinates.
-  spin_dof::mask_force<<<(number_of_atoms + 127) / 128, 128>>>(
-    number_of_atoms, type.data(), spin_types_gpu_.data(), mforce_per_atom.data());
+    atom.position_per_atom,
+    atom.potential_per_atom,
+    atom.force_per_atom,
+    atom.virial_per_atom,
+    position_image);
+  atom.mforce_per_atom.fill(0.0);
   GPU_CHECK_KERNEL
+  spin_runtime_->compute(*potentials[0], box, atom);
 }

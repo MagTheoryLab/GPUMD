@@ -17,7 +17,7 @@ def codec(tmp_path_factory):
         pytest.skip('C++ compiler unavailable')
     root = tmp_path_factory.mktemp('spin-codec')
     main = root / 'main.cpp'
-    main.write_text('''#include "utilities/nep_spin_model_file.cuh"
+    main.write_text('''#include "utilities/nep_io/nep_spin_model_file.cuh"
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -26,6 +26,9 @@ int main(int argc, char** argv) {
   NEP_Spin_Model_File model;
   std::string error;
   if (!model.read(input, error)) { std::cerr << error; return 1; }
+  if (!NEP_Spin_Model_File::is_spin_model(argv[1])) {
+    std::cerr << "Spin model was not recognized"; return 2;
+  }
   std::cout << std::setprecision(17);
   auto dump = [](const char* name, const auto& values) {
     std::cout << name;
@@ -44,8 +47,8 @@ int main(int argc, char** argv) {
 ''')
     binary = root / 'codec'
     subprocess.run([compiler, '-std=c++14', '-pedantic-errors', '-I' + str(ROOT / 'src'), '-x', 'c++',
-        str(main), str(ROOT / 'src/utilities/nep_spin_model_file.cu'),
-        str(ROOT / 'src/utilities/nep_file.cu'), '-o', str(binary)], check=True)
+        str(main), str(ROOT / 'src/utilities/nep_io/nep_spin_model_file.cu'),
+        str(ROOT / 'src/utilities/nep_io/nep_file.cu'), '-o', str(binary)], check=True)
     return binary
 
 
@@ -82,8 +85,6 @@ def test_defaults_and_universal_zbl(codec, tmp_path):
     parsed = parse(codec, tmp_path / 'model.nep', model)
     assert parsed['spin_type'] == [1, 1]
     assert parsed['zbl'] == [1, 1, 2, 0.75]
-    ignored_env = model.replace('model nep_spin\n', 'model nep_spin\nspin_env_type Fe\n')
-    assert parse(codec, tmp_path / 'ignored-env.nep', ignored_env) == parsed
 
 
 @pytest.mark.parametrize('edit', [
@@ -101,7 +102,8 @@ def test_defaults_and_universal_zbl(codec, tmp_path):
     lambda s: s.replace('spin_compress 2', 'spin_compress 9'),
     lambda s: s.replace('spin_cutoff 6.0', 'spin_cutoff 0'),
     lambda s: s.replace('spin_type Fe', 'spin_type Fe Fe'),
-    lambda s: s.replace('spin_type Fe', 'spin_type Fe\nspin_dof_type Fe'),
+    lambda s: s.replace('spin_type Fe', 'spin_dof_type Fe'),
+    lambda s: s.replace('spin_type Fe', 'spin_type Fe\nspin_env_type Fe Ge'),
     lambda s: s.replace('ann 30 0', 'ann 30 1'),
     lambda s: s.replace('@ parameters ', '@ q_scaler ', 1),
     lambda s: s[:s.index('@ q_scaler')] + '@ q_scaler 1\n1\n',
@@ -145,10 +147,10 @@ def test_spin_cutoff_bound(codec, tmp_path, cutoff, spin_first):
         assert 'spin_cutoff must not exceed the NEP radial cutoff' in result.stderr
 
 
-@pytest.mark.parametrize('selection', ['spin_type', 'spin_dof_type'])
-@pytest.mark.parametrize('environment', ['', 'spin_env_type Fe\n', 'spin_env_type Fe Ge\n'])
-def test_c516_input_alias(codec, tmp_path, selection, environment):
+@pytest.mark.parametrize('record', ['MODEL NEP_SPIN', 'model nep_spin#comment', None])
+def test_model_selection_uses_file_parser(codec, tmp_path, record):
     model, _ = load_fixture('o3c2_uniform')
-    expected = parse(codec, tmp_path / 'new.nep', model)
-    legacy = model.replace('spin_type Fe\n', selection + ' Fe\n' + environment)
-    assert parse(codec, tmp_path / 'legacy.nep', legacy) == expected
+    changed = model.replace('model nep_spin\n', record + '\n' if record else '')
+    if record is None:
+        changed += '\nmodel nep_spin\n'
+    assert parse(codec, tmp_path / 'model.nep', changed)['spin_type'] == [1, 0]

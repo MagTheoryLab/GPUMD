@@ -1,4 +1,25 @@
-/* Single-process spatial decomposition for NEP-Spin. LGPL-3.0-or-later. */
+/*
+    Copyright 2017 Zheyong Fan and GPUMD development team
+    This file is part of GPUMD.
+    GPUMD is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+    GPUMD is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+    You should have received a copy of the GNU Lesser General Public License
+    along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+/*----------------------------------------------------------------------------80
+Multi-GPU NEP-spin potential interface and domain state.
+
+Contributors:
+Chengbing Chen, 1747193328@qq.com
+------------------------------------------------------------------------------*/
+
 #pragma once
 #include "nep_spin.cuh"
 #include <memory>
@@ -8,15 +29,40 @@ class NEP_Spin_MultiGPU : public Potential
 public:
   NEP_Spin_MultiGPU(int devices, const char* model, int atoms, int direction);
   ~NEP_Spin_MultiGPU() override;
-  const NEP_Spin::Model& model() const { return domains_.front()->potential->model(); }
   using Potential::compute;
-  void compute(Box&, const GPU_Vector<int>&, const GPU_Vector<double>&,
-    GPU_Vector<double>&, GPU_Vector<double>&, GPU_Vector<double>&) override
-  { PRINT_INPUT_ERROR("NEP_Spin requires spin inputs."); }
-  void compute(Box&, const GPU_Vector<int>&, const GPU_Vector<double>&,
-    const GPU_Vector<double>&, GPU_Vector<double>&, GPU_Vector<double>&,
-    GPU_Vector<double>&, GPU_Vector<double>&) override;
+  void compute(
+    Box&,
+    const GPU_Vector<int>&,
+    const GPU_Vector<double>&,
+    GPU_Vector<double>&,
+    GPU_Vector<double>&,
+    GPU_Vector<double>&) override
+  {
+    PRINT_INPUT_ERROR("NEP_Spin requires spin inputs.");
+  }
+  void compute(
+    Box&,
+    const GPU_Vector<int>&,
+    const GPU_Vector<double>&,
+    const GPU_Vector<double>&,
+    GPU_Vector<double>&,
+    GPU_Vector<double>&,
+    GPU_Vector<double>&,
+    GPU_Vector<double>&);
+  // The caller owns the buffers until the next compute completes. Only that
+  // evaluation is captured; later endpoint evaluations leave the buffers intact.
+  void request_force_snapshot(GPU_Vector<double>& force, GPU_Vector<double>& mforce)
+  {
+    force_snapshot_ = &force;
+    mforce_snapshot_ = &mforce;
+  }
+
+  const std::vector<int>& spin_types() const { return domains_[0]->potential->spin_types(); }
+
 private:
+  GPU_Vector<double>* force_snapshot_ = nullptr;
+  GPU_Vector<double>* mforce_snapshot_ = nullptr;
+  void save_force_snapshot(const GPU_Vector<double>&, const GPU_Vector<double>&);
   struct Domain {
     std::unique_ptr<NEP_Spin> potential;
     GPU_Vector<int> type;
