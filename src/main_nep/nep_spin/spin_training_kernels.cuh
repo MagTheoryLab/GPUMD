@@ -24,10 +24,17 @@ __global__ void add_spin_training_outputs(
     force[index] += static_cast<float>(spin_force[index]);
     mforce[index] = static_cast<float>(spin_mforce[index]);
   }
-  constexpr int source_component[6] = {0, 1, 2, 3, 5, 7};
-  for (int component = 0; component < 6; ++component) {
+  for (int component = 0; component < 3; ++component) {
     virial[component * atom_count + atom] +=
-      static_cast<float>(spin_virial[source_component[component] * atom_count + atom]);
+      static_cast<float>(spin_virial[component * atom_count + atom]);
+  }
+  // Fixed spins with SOC allow a torque. Symmetric strain couples to (W + W^T)/2.
+  constexpr int upper[3] = {3, 5, 4}; // xy, yz, xz
+  constexpr int lower[3] = {6, 8, 7}; // yx, zy, zx
+  for (int shear = 0; shear < 3; ++shear) {
+    const double symmetric = 0.5 * (spin_virial[upper[shear] * atom_count + atom] +
+                                    spin_virial[lower[shear] * atom_count + atom]);
+    virial[(shear + 3) * atom_count + atom] += static_cast<float>(symmetric);
   }
 }
 

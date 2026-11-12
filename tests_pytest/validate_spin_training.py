@@ -328,6 +328,17 @@ def validate_training_and_prediction(
     for name, width in (("energy", 2), ("force", 6), ("mforce", 6), ("virial", 12)):
         rows = columns(prediction / (name + "_train.out"), width)
         assert rows and all(math.isfinite(x) for x in flatten(rows)), name
+    if not small_cell:
+        # These isolated four-atom clusters have no bonds across periodic boundaries.
+        # Their symmetric virial is the moment of their Cartesian forces, even with SOC.
+        forces = columns(prediction / "force_train.out", 3)
+        for frame, row in enumerate(columns(prediction / "virial_train.out", 6)):
+            coords = [list(map(float, line.split()[1:4]))
+                      for line in xyz.splitlines()[6 * frame + 2:6 * frame + 6]]
+            atoms = list(zip(coords, forces[4 * frame:4 * frame + 4]))
+            expected = [sum(r[i] * f[j] + r[j] * f[i] for r, f in atoms) / 8
+                        for i, j in ((0, 0), (1, 1), (2, 2), (0, 1), (1, 2), (2, 0))]
+            assert maximum_error(row, expected) < parity_tolerance(row, expected)
     if check_restart:
         # Zero search variance freezes the saved parameter vector. A restart must
         # round-trip structural and magnetic coefficients without reordering them
@@ -500,7 +511,12 @@ def validate_shared_nep_io(root):
     """Guard the ordinary NEP callers of the shared writer and restart reader."""
     config = "\n".join(line for line in NEP_IN.splitlines()
         if not line.startswith(("spin_", "lambda_m", "lambda_tau"))) + "\n"
-    write_case(root, config)
+    # In this four-atom frame the symmetric off-diagonals per atom are 1, 2, 3.
+    xyz = TRAIN_XYZ.replace('virial="0 0 0 0 0 0 0 0 0"',
+                            'virial="0 2 8 6 0 5 16 11 0"', 1)
+    stress = " ".join(str(-v / 24**3) for v in (0, 2, 8, 6, 0, 5, 16, 11, 0))
+    xyz = xyz.replace('virial="0 0 0 0 0 0 0 0 0"', f'stress="{stress}"', 1)
+    write_case(root, config, xyz)
     result = run(NEP, root)
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
@@ -515,6 +531,8 @@ def validate_shared_nep_io(root):
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
     predictions = [(root / (name + "_train.out")).read_text() for name in ("energy", "force", "virial")]
+    for row in columns(root / "virial_train.out", 12)[:2]:
+        assert row[6:] == [0, 0, 0, 1, 2, 3]
     (root / "nep.in").write_text(config + "prediction 1\n")
     result = run(NEP, root)
     if result.returncode:

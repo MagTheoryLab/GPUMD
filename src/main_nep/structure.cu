@@ -190,6 +190,26 @@ void NEP_Data_Reader::read_energy(
   }
 }
 
+// The six mechanical labels are conjugate to symmetric strain.
+static void read_symmetric_tensor(
+  const XYZ_Record& record, size_t first, size_t key_length, double scale, float* result)
+{
+  double tensor[9];
+  for (int i = 0; i < 9; ++i) {
+    const auto& token = record.tokens.at(first + i);
+    const size_t start = i == 0 ? key_length + 1 : 0;
+    tensor[i] = get_double_from_token(
+      token.substr(start, token.size() - start - (i == 8)), record.filename.c_str(),
+      record.comment_line_number);
+  }
+  result[0] = tensor[0] * scale;
+  result[1] = tensor[4] * scale;
+  result[2] = tensor[8] * scale;
+  result[3] = (tensor[1] + tensor[3]) * (0.5 * scale);
+  result[4] = (tensor[5] + tensor[7]) * (0.5 * scale);
+  result[5] = (tensor[6] + tensor[2]) * (0.5 * scale);
+}
+
 void NEP_Data_Reader::read_structure(const XYZ_Record& record, Structure& structure)
 {
   read_geometry(record, structure);
@@ -202,16 +222,7 @@ void NEP_Data_Reader::read_structure(const XYZ_Record& record, Structure& struct
     const std::string virial_string = "virial=";
     if (tokens[n].substr(0, virial_string.length()) == virial_string) {
       structure.has_virial = true;
-      const int reduced_index[9] = {0, 3, 5, 3, 1, 4, 5, 4, 2};
-      for (int m = 0; m < 9; ++m) {
-        structure.virial[reduced_index[m]] = get_double_from_token(
-          tokens[n + m].substr(
-            (m == 0) ? (virial_string.length() + 1) : 0,
-            (m == 8) ? (tokens[n + m].length() - 1) : tokens[n + m].length()),
-          xyz_filename.c_str(),
-          line_number);
-        structure.virial[reduced_index[m]] /= structure.num_atom;
-      }
+      read_symmetric_tensor(record, n, virial_string.size(), 1.0 / structure.num_atom, structure.virial);
     }
   }
   // if stresses are available, read them and convert them to per atom virials
@@ -222,16 +233,8 @@ void NEP_Data_Reader::read_structure(const XYZ_Record& record, Structure& struct
     if (tokens[n].substr(0, stress_string.length()) == stress_string) {
       has_stress = true;
       float volume = abs(get_det(structure.box_original));
-      const int reduced_index[9] = {0, 3, 5, 3, 1, 4, 5, 4, 2};
-      for (int m = 0; m < 9; ++m) {
-        virials_from_stress[reduced_index[m]] = get_double_from_token(
-          tokens[n + m].substr(
-            (m == 0) ? (stress_string.length() + 1) : 0,
-            (m == 8) ? (tokens[n + m].length() - 1) : tokens[n + m].length()),
-          xyz_filename.c_str(),
-          line_number);
-        virials_from_stress[reduced_index[m]] *= -volume / structure.num_atom;
-      }
+      read_symmetric_tensor(
+        record, n, stress_string.size(), -volume / structure.num_atom, virials_from_stress.data());
     }
   }
   if (structure.has_virial && has_stress) {
