@@ -21,6 +21,7 @@ Contributors:
 */
 
 #include "spin_ensemble.cuh"
+#include "glsd.cuh"
 #include "utilities/gpu_macro.cuh"
 
 namespace
@@ -55,7 +56,8 @@ __global__ void restore_modifiers(
 } // namespace
 
 void Spin_Ensemble::refresh_endpoint(
-  Force& force, Box& box, Atom& atom, const std::vector<Group>& group, GPU_Vector<double>& thermo)
+  double dt, Force& force, Box& box, Atom& atom, const std::vector<Group>& group,
+  GPU_Vector<double>& thermo)
 {
   // Reuse each Action's already sampled increment. Replaying post_force would
   // resample mechanical noise. Magnetic Actions add a constant field on a group
@@ -65,16 +67,34 @@ void Spin_Ensemble::refresh_endpoint(
   GPU_CHECK_KERNEL
   form_delta<<<(3 * n + 127) / 128, 128>>>(3 * n, atom.mforce_per_atom.data(), base_mforce_.data());
   GPU_CHECK_KERNEL
-  force.compute(box, atom, group);
-  restore_modifiers<<<(n + 127) / 128, 128>>>(
-    n,
-    base_force_.data(),
-    base_mforce_.data(),
-    atom.spin_per_atom.data(),
-    atom.force_per_atom.data(),
-    atom.mforce_per_atom.data(),
-    atom.potential_per_atom.data());
-  GPU_CHECK_KERNEL
+  auto evaluate = [&]() {
+    force.compute(box, atom, group);
+    restore_modifiers<<<(n + 127) / 128, 128>>>(
+      n,
+      base_force_.data(),
+      base_mforce_.data(),
+      atom.spin_per_atom.data(),
+      atom.force_per_atom.data(),
+      atom.mforce_per_atom.data(),
+      atom.potential_per_atom.data());
+    GPU_CHECK_KERNEL
+  };
+  // A lattice barostat can change the geometry after the first field evaluation.
+  if (use_spin_glsd && lattice_)
+    evaluate();
+  for (int iteration = 0;; ++iteration) {
+    bool endpoint_ready = true;
+    if (use_spin_glsd) {
+      auto& glsd = static_cast<Spin_GLSD&>(*spin_integrator);
+      glsd.compute2(dt, atom);
+      endpoint_ready = glsd.converged() || iteration + 1 >= spin_glsd_midpoint_max_iter;
+      if (endpoint_ready)
+        glsd.finish_step(atom);
+    }
+    evaluate();
+    if (endpoint_ready)
+      break;
+  }
   find_thermo(
     box.get_volume(),
     group,

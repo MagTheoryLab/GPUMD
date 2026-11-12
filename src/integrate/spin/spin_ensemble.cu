@@ -79,6 +79,7 @@ void Spin_Ensemble::initialize_run(
       spin_dynamics_gamma,
       spin_glsd_mobility,
       spin_dynamics_temperature,
+      spin_glsd_midpoint_tol,
       spin_dynamics_seed,
       spin_types,
       atom));
@@ -106,6 +107,8 @@ void Spin_Ensemble::initialize_before_first_step(
 }
 void Spin_Ensemble::finalize_run(const Atom& atom, const Box& box)
 {
+  if (use_spin_glsd)
+    static_cast<Spin_GLSD&>(*spin_integrator).report_iterations();
   if (lattice_)
     lattice_->finalize_run(atom, box);
 }
@@ -162,10 +165,11 @@ void Spin_Ensemble::compute2(
       atom.virial_per_atom,
       thermo);
   }
-  spin_integrator->compute2(dt, atom);
+  if (!use_spin_glsd)
+    spin_integrator->compute2(dt, atom);
   if (!use_spin_tspin) {
     box.set_is_orthogonal();
     atom.update_unwrapped_position(box);
-    refresh_endpoint(force, box, atom, group, thermo);
+    refresh_endpoint(dt, force, box, atom, group, thermo);
   }
 }

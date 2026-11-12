@@ -23,7 +23,9 @@ def test_corrector_preserves_force_modifiers(tmp_path, ensemble, length):
     lines = structure().splitlines()
     lines[1] = lines[1].replace("20 0 0 0 20 0 0 0 20", f"{length} 0 0 0 {length} 0 0 0 {length}")
     lines[1] = lines[1].replace("spin_vel:R:3", "spin_vel:R:3:group:I:1")
-    lines[2:] = [line + " 0" for line in lines[2:]]
+    # Seed velocity initialization before Actions so their rand()-seeded streams match.
+    lines[1] = lines[1].replace(":vel:R:3", "")
+    lines[2:] = [" ".join(line.split()[:4] + line.split()[7:]) + " 0" for line in lines[2:]]
     model = "\n".join(lines) + "\n"
 
     def run(name, integrator, dt):
@@ -32,7 +34,7 @@ def test_corrector_preserves_force_modifiers(tmp_path, ensemble, length):
         (case / "nep.txt").write_text(analytic_model(False))
         (case / "model.xyz").write_text(model)
         (case / "run.in").write_text(
-            "potential nep.txt\n"
+            "potential nep.txt\nvelocity 1 seed 731\n"
             f"ensemble {integrator}\ntime_step {dt}\n"
             "add_random_force .05\nadd_force 0 0 .02 -.01 .03\n"
             "add_mfield 0 0 4 -2 3\nadd_mfield region 0 1 0 1 0 1 8 -5 28\n"
