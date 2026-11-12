@@ -321,6 +321,15 @@ NEP-spin uses the shared SNES lifecycle: generation zero prepares training scale
 and uses regularization-only fitness. Physical losses are evaluated from the
 next generation. All magnetic descriptor orders participate throughout training.
 
+Both native and runtime-compiled NEP-spin training evaluate ANN dot products,
+activations, energy sums, and descriptor-gradient accumulation in double
+precision. This limits cancellation errors in small magnetic energy differences
+while keeping the energy and its derivatives on the same arithmetic path.
+Parameters, descriptors, geometry, and force-kernel interfaces retain their
+single-precision storage; descriptor gradients are converted at that interface.
+This does not make the full training pipeline double precision and does not
+change the ordinary NEP or molecular-dynamics ANN paths.
+
 Model formats and input
 =======================
 

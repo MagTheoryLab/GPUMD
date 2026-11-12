@@ -84,6 +84,7 @@ void NEP_Spin_Model::initialize_compiled_kernel(const Spin_Parameters& para)
     auto config = make_nep_compile_config(para);
     config.model_name = "NEP-spin";
     config.source_file = "main_nep/nep/nep_specialized.cu";
+    config.extra_config = "#define NEP_SPIN_ANN_FP64\n";
     compiled_kernel_.reset(new NEP_Compiled_Evaluation(config));
     if (!compiled_kernel_->is_valid())
       compiled_kernel_.reset();
@@ -173,7 +174,7 @@ static __global__ void apply_ann_one_layer_warp(
   const float* b0 = w0 + num_neurons * dim;
   const float* w1 = b0 + num_neurons;
   float q[values_per_lane] = {};
-  float Fp[values_per_lane] = {};
+  double Fp[values_per_lane] = {};
   for (int k = 0; k < values_per_lane; ++k) {
     const int d = lane + k * warp_size;
     if (d < dim) {
@@ -181,20 +182,20 @@ static __global__ void apply_ann_one_layer_warp(
     }
   }
 
-  float energy = 0.0f;
+  double energy = 0.0f;
   for (int n = 0; n < num_neurons; ++n) {
-    float w0_times_q = 0.0f;
+    double w0_times_q = 0.0f;
     for (int k = 0; k < values_per_lane; ++k) {
       const int d = lane + k * warp_size;
       if (d < dim)
-        w0_times_q += w0[n * dim + d] * q[k];
+        w0_times_q += static_cast<double>(w0[n * dim + d]) * q[k];
     }
     for (int offset = warp_size / 2; offset > 0; offset /= 2) {
       w0_times_q += __shfl_down_sync(mask, w0_times_q, offset, warp_size);
     }
-    float derivative_scale = 0.0f;
+    double derivative_scale = 0.0f;
     if (lane == 0) {
-      const float x1 = tanh(w0_times_q - b0[n]);
+      const double x1 = tanh(w0_times_q - b0[n]);
       derivative_scale = w1[n] * (1.0f - x1 * x1);
       energy += w1[n] * x1;
     }

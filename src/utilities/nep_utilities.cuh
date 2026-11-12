@@ -182,6 +182,9 @@ complex_product(const float a, const float b, float& real_part, float& imag_part
   imag_part = a * imag_part + b * real_temp;
 }
 
+// Spin training uses double accumulators to resolve small magnetic energy differences.
+// Existing scalar NEP callers retain their float arithmetic through type deduction.
+template <typename Accumulator>
 static __device__ void apply_ann_one_layer(
   const int N_des,
   const int N_neu,
@@ -190,25 +193,26 @@ static __device__ void apply_ann_one_layer(
   const float* w1,
   const float* b1,
   float* q,
-  float& energy,
-  float* energy_derivative)
+  Accumulator& energy,
+  Accumulator* energy_derivative)
 {
   for (int n = 0; n < N_neu; ++n) {
-    float w0_times_q = 0.0f;
+    Accumulator w0_times_q = 0.0f;
     for (int d = 0; d < N_des; ++d) {
-      w0_times_q += w0[n * N_des + d] * q[d];
+      w0_times_q += static_cast<Accumulator>(w0[n * N_des + d]) * q[d];
     }
-    float x1 = tanh(w0_times_q - b0[n]);
-    float tanh_der = 1.0f - x1 * x1;
+    Accumulator x1 = tanh(w0_times_q - b0[n]);
+    Accumulator tanh_der = 1.0f - x1 * x1;
     energy += w1[n] * x1;
     for (int d = 0; d < N_des; ++d) {
-      float y1 = tanh_der * w0[n * N_des + d];
+      Accumulator y1 = tanh_der * w0[n * N_des + d];
       energy_derivative[d] += w1[n] * y1;
     }
   }
   energy -= b1[0];
 }
 
+template <typename Accumulator>
 static __device__ void apply_ann_two_layers(
   const int N_des,
   const int N_neu1,
@@ -220,22 +224,22 @@ static __device__ void apply_ann_two_layers(
   const float* w2,
   const float* b2,
   float* q,
-  float& energy,
-  float* energy_derivative)
+  Accumulator& energy,
+  Accumulator* energy_derivative)
 {
-  float x1[120], x2[120];
-  float y1[120], y2[120];
+  Accumulator x1[120], x2[120];
+  Accumulator y1[120], y2[120];
 
   for (int n = 0; n < N_neu1; ++n) {
-    float w0_times_q = 0.0f;
+    Accumulator w0_times_q = 0.0f;
     for (int d = 0; d < N_des; ++d) {
-      w0_times_q += w0[n * N_des + d] * q[d];
+      w0_times_q += static_cast<Accumulator>(w0[n * N_des + d]) * q[d];
     }
     x1[n] = tanh(w0_times_q - b0[n]);
   }
 
   for (int n = 0; n < N_neu2; ++n) {
-    float w1_times_x1 = 0.0f;
+    Accumulator w1_times_x1 = 0.0f;
     for (int m = 0; m < N_neu1; ++m) {
       w1_times_x1 += w1[n * N_neu1 + m] * x1[m];
     }
@@ -246,7 +250,7 @@ static __device__ void apply_ann_two_layers(
   energy -= b2[0];
 
   for (int m = 0; m < N_neu1; ++m) {
-    float sum = 0.0f;
+    Accumulator sum = 0.0f;
       for (int n = 0; n < N_neu2; ++n) {
       sum += w1[n * N_neu1 + m] * y2[n];
     }
