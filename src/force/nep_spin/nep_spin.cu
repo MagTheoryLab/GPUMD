@@ -99,9 +99,9 @@ __global__ void find_local_neighbors_spin(
 
   for (int slot = 0; slot < NN_global[n1]; ++slot) {
     const int n2 = NL_global[static_cast<std::size_t>(N) * slot + n1];
-    float x12 = x[n2] - x1;
-    float y12 = y[n2] - y1;
-    float z12 = z[n2] - z1;
+    double x12 = x[n2] - x1;
+    double y12 = y[n2] - y1;
+    double z12 = z[n2] - z1;
     apply_mic(box, x12, y12, z12);
     const float distance_square = x12 * x12 + y12 * y12 + z12 * z12;
 
@@ -539,11 +539,11 @@ __global__ void find_force_angular_warp(
   for (int i1 = edge_lane; i1 < NN_angular[n1]; i1 += edge_lanes) {
     const int index = i1 * N + n1;
     const int n2 = NL_angular[index];
-    float x12 = x[n2] - x1;
-    float y12 = y[n2] - y1;
-    float z12 = z[n2] - z1;
+    double x12 = x[n2] - x1;
+    double y12 = y[n2] - y1;
+    double z12 = z[n2] - z1;
     apply_mic(box, x12, y12, z12);
-    float r12[3] = {x12, y12, z12};
+    float r12[3] = {float(x12), float(y12), float(z12)};
     const float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
     float f12[3] = {0.0f};
     float fc12;
@@ -672,11 +672,11 @@ static __global__ void find_force_radial(
     for (int i1 = 0; i1 < g_NN[n1]; ++i1) {
       int n2 = g_NL[static_cast<size_t>(N) * i1 + n1];
       int t2 = g_type[n2];
-      float x12 = g_x[n2] - x1;
-      float y12 = g_y[n2] - y1;
-      float z12 = g_z[n2] - z1;
+      double x12 = g_x[n2] - x1;
+      double y12 = g_y[n2] - y1;
+      double z12 = g_z[n2] - z1;
       apply_mic(box, x12, y12, z12);
-      float r12[3] = {x12, y12, z12};
+      float r12[3] = {float(x12), float(y12), float(z12)};
       float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
       float d12inv = 1.0f / d12;
       float f12[3] = {0.0f};
@@ -779,11 +779,11 @@ static __global__ void find_partial_force_angular(
     for (int i1 = 0; i1 < g_NN_angular[n1]; ++i1) {
       int index = i1 * N + n1;
       int n2 = g_NL_angular[n1 + N * i1];
-      float x12 = g_x[n2] - x1;
-      float y12 = g_y[n2] - y1;
-      float z12 = g_z[n2] - z1;
+      double x12 = g_x[n2] - x1;
+      double y12 = g_y[n2] - y1;
+      double z12 = g_z[n2] - z1;
       apply_mic(box, x12, y12, z12);
-      float r12[3] = {x12, y12, z12};
+      float r12[3] = {float(x12), float(y12), float(z12)};
       float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
       float f12[3] = {0.0f};
       float fc12, fcp12;
@@ -875,10 +875,11 @@ __global__ void find_spin_zbl_force(
       displacement[1] = static_cast<float>(r12y[index]);
       displacement[2] = static_cast<float>(r12z[index]);
     } else {
-      displacement[0] = static_cast<float>(x[atom2] - x[atom1]);
-      displacement[1] = static_cast<float>(y[atom2] - y[atom1]);
-      displacement[2] = static_cast<float>(z[atom2] - z[atom1]);
-      apply_mic(box, displacement[0], displacement[1], displacement[2]);
+      double dx = x[atom2] - x[atom1], dy = y[atom2] - y[atom1], dz = z[atom2] - z[atom1];
+      apply_mic(box, dx, dy, dz);
+      displacement[0] = dx;
+      displacement[1] = dy;
+      displacement[2] = dz;
     }
     const float distance = sqrtf(
       displacement[0] * displacement[0] + displacement[1] * displacement[1] +

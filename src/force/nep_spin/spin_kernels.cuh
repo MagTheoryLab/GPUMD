@@ -92,8 +92,11 @@ template<class Real> __device__ inline void displacement(int n, int i, int j, in
   if (edges) {
     for (int d = 0; d < 3; ++d) r[d] = edges[size_t(d)*plane+slot];
   } else {
-    for (int d = 0; d < 3; ++d) r[d] = positions[d*n+j] - positions[d*n+i];
-    apply_mic(box, r[0], r[1], r[2]);
+    // Reduce the image in double before converting a large-cell displacement to Real.
+    double delta[3];
+    for (int d = 0; d < 3; ++d) delta[d] = positions[d*n+j] - positions[d*n+i];
+    apply_mic(box, delta[0], delta[1], delta[2]);
+    for (int d = 0; d < 3; ++d) r[d] = delta[d];
   }
 }
 // Contract the shared angular coefficients with the channel mix once per model evaluation.
