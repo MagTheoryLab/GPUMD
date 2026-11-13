@@ -26,12 +26,13 @@ def main():
             -.058922727, .017591940, .000237735, .012242427, -.000468419, -.000441563, .001200707],
     }
     report = {}
-    # L3/order2 and L4/order2 exceed the 512-term spin specialization limit.
-    for C,L,S,response,projection,dispatch in [
-        (2,1,4,14,62,'Spin layout JIT ready:'),
-        (1,4,1,15,35,'Spin layout JIT ready:'),
-        (3,3,2,46,180,'large coupling layout uses generic'),
-        (3,4,2,58,237,'large coupling layout uses generic'),
+    for C,L,S,response,projection in [
+        (2,1,4,14,62),
+        (1,4,1,15,35),
+        (1,3,2,16,60),
+        (3,3,2,46,180),
+        (3,4,2,58,237),
+        (2,4,4,40,428),
     ]:
         dim = 30+response
         count = 3*(32*dim+64)+1+810+projection
@@ -48,7 +49,7 @@ def main():
             text = INPUT.format(C=C,L=L,S=S) + f'prediction 1\noutput_descriptor 1\nnep_compile {jit}\n'
             execute(directory, text, xyz, model)
             if jit:
-                assert dispatch in (directory/'stdout.log').read_text()
+                assert 'Spin aggregate JIT ready:' in (directory/'stdout.log').read_text()
             dirs.append(directory)
         errors = {}
         for file in ('energy_train.out','force_train.out','mforce_train.out',
@@ -63,7 +64,7 @@ def main():
             actual = []
             for field, row, width in [('energy',frame,1), ('force',atom,3),
                                       ('mforce',atom,3), ('virial',frame,6)]:
-                lines = (dirs[0]/f'{field}_train.out').read_text().splitlines()
+                lines = (dirs[1]/f'{field}_train.out').read_text().splitlines()
                 actual.extend(map(float, lines[row].split()[:width]))
             errors['triclinic_FP64'] = maximum_error(actual, triclinic_reference[L])
             assert errors['triclinic_FP64'] < 2e-6, (L, actual)

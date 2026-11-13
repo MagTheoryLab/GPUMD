@@ -11,7 +11,7 @@
 #include "force/nep_spin/spin_kernels.cuh"
 #include "utilities/gpu_macro.cuh"
 
-extern "C" void nep_spin_launch_descriptor(
+extern "C" void nep_spin_launch_descriptor_v2(
   int atom_count,
   int struct_dim,
   const float* spin_cutoff_pair,
@@ -26,7 +26,9 @@ extern "C" void nep_spin_launch_descriptor(
   const float* descriptor_coefficients,
   const float* projection,
   float* moments,
-  float* descriptors)
+  float* descriptors,
+  double* wide_spin_descriptors,
+  const double* wide_radial)
 {
   nep_spin::CompiledLayout layout;
   if (layout.edge_cached && r12_plane_size > 0) {
@@ -38,11 +40,19 @@ extern "C" void nep_spin_launch_descriptor(
         type, NN_spin, NL_spin, r12_spin, spin_cutoff_pair, descriptor_coefficients, cache);
     GPU_CHECK_KERNEL
   }
+#ifdef NEP_SPIN_WIDE_FORWARD
+  auto* radial = wide_radial;
+  auto* q = wide_spin_descriptors;
+  struct_dim = 0;
+#else
+  auto* radial = descriptor_coefficients;
+  auto* q = descriptors;
+#endif
   nep_spin::descriptors<<<(atom_count*nep_spin::CompiledLayout::channels*nep_spin::CompiledLayout::tile+63)/64, 64>>>(
     layout, atom_count, struct_dim, NUM_TYPES_JIT,
     N_MAX_ANGULAR_JIT, BASIS_SIZE_ANGULAR_JIT, Box{}, type, spin_type_active,
     position, spin, NN_spin, NL_spin, r12_spin, r12_plane_size, spin_cutoff_pair,
-    descriptor_coefficients, projection, moments, descriptors);
+    radial, projection, moments, q);
   GPU_CHECK_KERNEL
 }
 

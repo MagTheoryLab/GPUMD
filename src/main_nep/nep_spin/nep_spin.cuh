@@ -71,23 +71,24 @@ private:
       : NEP_Energy_Reader(p, e), parameters(p), data(d)
     {
     }
-    void read_response(std::vector<Structure>&, std::vector<Spin_Data::Labels>&);
+    void read_response(std::vector<Structure>&, std::vector<Spin_Data::FrameInput>&);
 
   private:
     void prepare_train(std::vector<Structure>&, int, int&, std::vector<int>&) override;
     void prepare_test(const std::vector<Structure>&, bool) override;
     void prepare_dataset(Dataset&) override;
     const char* energy_difference_conflict(const Structure&, const Structure&) const override;
+    XYZ_Geometry* precise_geometry() override { return &labels.back().geometry; }
     void begin_reading() override { labels.clear(); }
     void read_structure(const XYZ_Record&, Structure&) override;
     struct Frame {
       const Structure& geometry;
-      Spin_Data::Labels& label;
+      Spin_Data::FrameInput& label;
     };
     void derive_spin_response_tangents(std::vector<Frame>&);
     Spin_Parameters& parameters;
     NEP_Batch_Data<Spin_Data>& data;
-    std::vector<Spin_Data::Labels> labels;
+    std::vector<Spin_Data::FrameInput> labels;
     std::set<std::string> train_groups, test_groups, test_frames;
   };
 
@@ -124,7 +125,9 @@ private:
     const float* descriptor_coefficients,
     const float* projection,
     float* moments,
-    float* descriptors);
+    float* descriptors,
+    double* wide_spin_descriptors,
+    const double* wide_radial);
   SpinDescriptorFunction spin_descriptor_jit_ = nullptr;
   using SpinForceFunction = void (*)(
     int atom_count,
@@ -164,6 +167,7 @@ private:
     GPU_Vector<int> spin_type_active;
     GPU_Vector<float> spin_cutoff_pair;
     GPU_Vector<float> spin_moments;
+    GPU_Vector<double> wide_spin_descriptors, wide_radial;
     GPU_Vector<float> radial_coefficients;
     GPU_Vector<double> force;
     GPU_Vector<double> mforce;

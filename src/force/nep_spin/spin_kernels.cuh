@@ -7,10 +7,10 @@
 
 namespace nep_spin {
 // The generic and compiled layouts use the same arithmetic and output ordering.
-template<int Capacity>
+template<int Capacity, int Spins = 35, int Harmonics = 25>
 struct RuntimeLayout : View {
   explicit RuntimeLayout(View v) : View(v) {}
-  enum : int { component_capacity = Capacity, spin_capacity = 35, harmonic_capacity = 25, tile = 1, edge_cached = 0 };
+  enum : int { component_capacity = Capacity, spin_capacity = Spins, harmonic_capacity = Harmonics, tile = 1, edge_cached = 0 };
   const float* edge_radial = nullptr;
   __device__ inline Primitive primitive(int i) const { return primitives[i]; }
   __device__ inline Sector sector(int i) const { return sectors[i]; }
@@ -20,23 +20,29 @@ struct RuntimeLayout : View {
 };
 using DynamicLayout = RuntimeLayout<100>;
 using WideLayout = RuntimeLayout<625>; // Maximum (L+1)^2 * (min(L,S)+1)^2.
-struct AggregateOrder2 : DynamicLayout {
-  explicit AggregateOrder2(View v) : DynamicLayout(v) {}
+// Fixed spin width lets the compiler unroll the neighbor contraction.
+template<int Spins, int Harmonics>
+struct FixedSpinLayout : RuntimeLayout<100, Spins, Harmonics> {
+  explicit FixedSpinLayout(View v) : RuntimeLayout<100, Spins, Harmonics>(v) {}
+  enum : int { spin_components = Spins };
 };
-template<class Layout> struct AggregateGeometry { enum { count = 0 }; };
-template<> struct AggregateGeometry<AggregateOrder2> { enum { count = 25 }; };
-// Degree 0, 1 and 2 primitives have 1, 3 and (1+5) components. Column zero
-// is unity and also holds the geometry-only sum for all center-spin terms.
-constexpr int order2_spin_size = 10;
+template<class Launch>
+inline void launch_runtime_layout(View v, Launch launch) {
+  if (v.components > 100) launch(WideLayout(v));
+  else if (v.lmax == 0 && v.spin_components == 1) launch(FixedSpinLayout<1, 1>(v));
+  else if (v.spin_components == 10) launch(FixedSpinLayout<10, 25>(v));
+  else launch(DynamicLayout(v));
+}
+// Primitive zero is unity and holds the geometry-only sum for center-spin terms.
 // Values and Cartesian derivatives are evaluated together, including at s=0.
-struct Value { float value, derivative[3]; };
-__device__ inline float power(float x, int n) {
-  float result = 1;
+template<class Real> struct SpinValue { Real value, derivative[3]; };
+template<class Real> __device__ inline Real power(Real x, int n) {
+  Real result = 1;
   for (int i = 0; i < n; ++i) result *= x;
   return result;
 }
-template<class Layout>
-__device__ __forceinline__ void spherical(Layout v, const float* x, Value* y) {
+template<class Layout, class Real>
+__device__ __forceinline__ void spherical(Layout v, const Real* x, SpinValue<Real>* y) {
   #pragma unroll
   for (int i = 0; i < Layout::harmonic_capacity; ++i) y[i] = {0, {0, 0, 0}};
   #pragma unroll
@@ -44,44 +50,44 @@ __device__ __forceinline__ void spherical(Layout v, const float* x, Value* y) {
     const Harmonic h = v.harmonic(i);
     if (h.component >= (v.lmax + 1) * (v.lmax + 1)) continue;
     const int p[3] = {h.x, h.y, h.z};
-    float val = h.value;
+    Real val = h.value;
     for (int d = 0; d < 3; ++d) val *= power(x[d], p[d]);
     y[h.component].value += val;
     for (int d = 0; d < 3; ++d) {
       if (!p[d]) continue;
-      float grad = h.value * p[d];
+      Real grad = h.value * p[d];
       for (int k = 0; k < 3; ++k) grad *= power(x[k], p[k] - (d == k));
       y[h.component].derivative[d] += grad;
     }
   }
 }
-template<class Layout>
-__device__ __forceinline__ void primitives_at(Layout v, const float* s, Value* phi) {
-  Value y[Layout::harmonic_capacity];
+template<class Layout, class Real>
+__device__ __forceinline__ void primitives_at(Layout v, const Real* s, SpinValue<Real>* phi) {
+  SpinValue<Real> y[Layout::harmonic_capacity];
   spherical(v, s, y);
-  const float s2 = s[0]*s[0] + s[1]*s[1] + s[2]*s[2];
+  const Real s2 = s[0]*s[0] + s[1]*s[1] + s[2]*s[2];
   #pragma unroll
   for (int p = 0; p < v.primitive_count; ++p) {
     const Primitive label = v.primitive(p);
     const int exponent = (label.degree - label.l) / 2;
-    const float factor = power(s2, exponent);
-    const float grad_factor = exponent ? 2 * exponent * power(s2, exponent-1) : 0;
+    const Real factor = power(s2, exponent);
+    const Real grad_factor = exponent ? 2 * exponent * power(s2, exponent-1) : 0;
     for (int m = 0; m < 2 * label.l + 1; ++m) {
-      const Value harmonic = y[label.l*label.l+m];
-      Value& value = phi[label.offset+m];
+      const SpinValue<Real> harmonic = y[label.l*label.l+m];
+      SpinValue<Real>& value = phi[label.offset+m];
       value.value = factor * harmonic.value;
       for (int d = 0; d < 3; ++d)
         value.derivative[d] = factor * harmonic.derivative[d] + grad_factor*s[d]*harmonic.value;
     }
   }
 }
-__device__ inline void read_spin(int n, int i, const int* type, const int* active,
-                                 const double* spins, float* s) {
+template<class Real> __device__ inline void read_spin(int n, int i, const int* type, const int* active,
+                                 const double* spins, Real* s) {
   for (int d = 0; d < 3; ++d) s[d] = active[type[i]] ? spins[d*n+i] : 0;
 }
-__device__ inline void displacement(int n, int i, int j, int slot, Box box,
+template<class Real> __device__ inline void displacement(int n, int i, int j, int slot, Box box,
                                     const double* positions, const double* edges, int plane,
-                                    float* r) {
+                                    Real* r) {
   if (edges) {
     for (int d = 0; d < 3; ++d) r[d] = edges[size_t(d)*plane+slot];
   } else {
@@ -91,15 +97,16 @@ __device__ inline void displacement(int n, int i, int j, int slot, Box box,
 }
 // Contract the shared angular coefficients with the channel mix once per model evaluation.
 // B[p,c,k] = sum_a angular[p,a,k] mix[a,c]; reuse B in forward and adjoint kernels.
+template<class Real>
 static __global__ void contract_radial(int count, int channels, int na, int basis,
-  const float* angular, const float* mix, float* result) {
+  const float* angular, const float* mix, Real* result) {
   const int i = blockIdx.x*blockDim.x+threadIdx.x;
   if (i >= count) return;
   const int k = i % (basis+1), c = (i/(basis+1)) % channels;
   const int pair = i / ((basis+1)*channels);
-  float value = 0;
+  Real value = 0;
   for (int a = 0; a <= na; ++a)
-    value += angular[(pair*(na+1)+a)*(basis+1)+k] * mix[a*channels+c];
+    value += Real(angular[(pair*(na+1)+a)*(basis+1)+k]) * mix[a*channels+c];
   result[i] = value;
 }
 // Materialize only the contracted value and derivative, not the much larger
@@ -133,32 +140,33 @@ static __global__ void cache_radial_edges(
     cache[size_t(2*c+1)*plane+slot] = derivative;
   }
 }
-template<class Layout>
+template<class Layout, class Real>
 __device__ inline void radial(Layout v, int slot, int plane, int c, int channels, int basis, int pair, float cutoff,
-                              float distance, const float* coefficients,
-                              float& weight, float& derivative) {
+                              Real distance, const Real* coefficients,
+                              Real& weight, Real& derivative) {
   if (Layout::edge_cached) {
     weight = v.edge_radial[size_t(2*c)*plane+slot];
     derivative = v.edge_radial[size_t(2*c+1)*plane+slot];
     return;
   }
-  float fc, fcp, fn[17], fnp[17];
-  find_fc_and_fcp(cutoff, 1/cutoff, distance, fc, fcp);
-  find_fn_and_fnp(basis, 1/cutoff, distance, fc, fcp, fn, fnp);
+  Real fc, fcp, fn[17], fnp[17];
+  const Real inv = Real(1)/cutoff;
+  find_fc_and_fcp(Real(cutoff), inv, distance, fc, fcp);
+  find_fn_and_fnp(basis, inv, distance, fc, fcp, fn, fnp);
   weight = derivative = 0;
   for (int k = 0; k <= basis; ++k) {
-    const float coefficient = coefficients[(pair*channels+c)*(basis+1)+k];
+    const Real coefficient = coefficients[(pair*channels+c)*(basis+1)+k];
     weight += fn[k]*coefficient;
     derivative += fnp[k]*coefficient;
   }
 }
 
-template<class Layout>
+template<class Layout, class Real = float, class Output = float>
 static __global__ void descriptors(
   Layout v, int n, int structural_dim, int types, int na, int basis, Box box,
   const int* type, const int* active, const double* positions, const double* spins,
   const int* nn, const int* nl, const double* edges, int plane, const float* cutoffs,
-  const float* coefficients, const float* parameters, float* moments, float* q) {
+  const Real* coefficients, const float* parameters, float* moments, Output* q) {
   const int work = (blockIdx.x*blockDim.x+threadIdx.x) / Layout::tile;
   const int lane = threadIdx.x % Layout::tile;
   const int i = work / v.channels, c = work % v.channels;
@@ -166,52 +174,40 @@ static __global__ void descriptors(
   // at a reduction can omit lanes still processing their last neighbor.
   const WarpMask mask = Layout::tile > 1 ? warp_ballot(i < n) : 0;
   if (i >= n) return;
-  float s[3], h[Layout::component_capacity] = {};
-  Value phi_i[Layout::spin_capacity];
+  Real s[3], h[Layout::component_capacity] = {};
+  SpinValue<Real> phi_i[Layout::spin_capacity];
   read_spin(n, i, type, active, spins, s);
   primitives_at(v, s, phi_i);
   const float* weights = parameters + (na+1)*v.channels;
   const float* center = weights + v.path_count*v.channels;
-  constexpr int geometry_capacity = AggregateGeometry<Layout>::count;
-  float density[geometry_capacity ? geometry_capacity : 1][order2_spin_size] = {};
+  Real density[Layout::harmonic_capacity][Layout::spin_capacity] = {};
   const int geometry_count = (v.lmax+1)*(v.lmax+1);
   for (int neighbor = lane; neighbor < nn[i]; neighbor += Layout::tile) {
     int slot = neighbor*n+i, j = nl[slot], pair = type[i]*types+type[j];
-    float r[3], u[3];
+    Real r[3], u[3];
     displacement(n, i, j, slot, box, positions, edges, plane, r);
-    float distance = sqrtf(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]);
+    Real distance = sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]);
     if (distance >= cutoffs[pair]) continue;
     for (int d = 0; d < 3; ++d) u[d] = r[d]/distance;
-    Value y[Layout::harmonic_capacity], phi_j[Layout::spin_capacity];
+    SpinValue<Real> y[Layout::harmonic_capacity], phi_j[Layout::spin_capacity];
     spherical(v, u, y);
     read_spin(n, j, type, active, spins, s);
     primitives_at(v, s, phi_j);
-    float weight, derivative;
+    Real weight, derivative;
     radial(v, slot, plane, c, v.channels, basis, pair, cutoffs[pair], distance, coefficients, weight, derivative);
-    if (geometry_capacity) {
-      for (int g = 0; g < geometry_count; ++g) {
-        const float weighted_y = weight*y[g].value;
-        density[g][0] += weighted_y;
-        #pragma unroll
-        for (int a = 1; a < order2_spin_size; ++a)
-          density[g][a] += weighted_y*phi_j[a].value;
-      }
-    } else {
+    for (int g = 0; g < geometry_count; ++g) {
+      const Real weighted_y = weight*y[g].value;
+      density[g][0] += weighted_y;
       #pragma unroll
-      for (int t = 0; t < v.term_count; ++t) {
-        const Term term = v.term(t);
-        float spin = (term.neighbor ? phi_j : phi_i)[term.spin].value;
-        h[term.output] += weight*weights[term.path*v.channels+c]*term.coefficient*y[term.geometry].value*spin;
-      }
+      for (int a = 1; a < v.spin_components; ++a)
+        density[g][a] += weighted_y*phi_j[a].value;
     }
   }
-  if (geometry_capacity) {
-    for (int t = 0; t < v.term_count; ++t) {
-      const Term term = v.term(t);
-      const float* sums = density[term.geometry];
-      const float product = term.neighbor ? sums[term.spin] : sums[0]*phi_i[term.spin].value;
-      h[term.output] += weights[term.path*v.channels+c]*term.coefficient*product;
-    }
+  for (int t = 0; t < v.term_count; ++t) {
+    const Term term = v.term(t);
+    const Real* sums = density[term.geometry];
+    const Real product = term.neighbor ? sums[term.spin] : sums[0]*phi_i[term.spin].value;
+    h[term.output] += weights[term.path*v.channels+c]*term.coefficient*product;
   }
   #pragma unroll
   for (int m = 0; m < v.components; ++m) {
@@ -236,7 +232,7 @@ static __global__ void descriptors(
   #pragma unroll
   for (int k = 0; k < v.sector_count; ++k) {
     Sector sector = v.sector(k);
-    float norm = 0;
+    Real norm = 0;
     for (int m = 0; m < sector.size; ++m) norm += h[sector.offset+m]*h[sector.offset+m];
     q[(structural_dim+sector.norm_column+c)*n+i] = norm/(sector.size);
     if (sector.scalar_column >= 0)
@@ -261,7 +257,7 @@ static __global__ void forces(
   float s[3], pull[Layout::component_capacity] = {}, center_pull[3] = {};
   double center_force[3] = {};
   double center_virial[CenterVirial ? 9 : 1] = {};
-  Value phi_i[Layout::spin_capacity];
+  SpinValue<float> phi_i[Layout::spin_capacity];
   read_spin(n, i, type, active, spins, s);
   primitives_at(v, s, phi_i);
   #pragma unroll
@@ -292,23 +288,19 @@ static __global__ void forces(
         }
     }
   }
-  constexpr int geometry_capacity = AggregateGeometry<Layout>::count;
-  constexpr int rows = geometry_capacity ? geometry_capacity : 1;
   const int geometry_count = (v.lmax+1)*(v.lmax+1);
-  float density_pull[rows][order2_spin_size] = {};
-  float center_gradient[rows][3] = {}, geometry_sum[rows] = {};
-  if (geometry_capacity) {
-    for (int t = 0; t < v.term_count; ++t) {
-      const Term term = v.term(t);
-      const float adjoint = pull[term.output]*weights[term.path*v.channels+c]*term.coefficient;
-      if (term.neighbor) {
-        density_pull[term.geometry][term.spin] += adjoint;
-      } else {
-        const Value spin = phi_i[term.spin];
-        density_pull[term.geometry][0] += adjoint*spin.value;
-        for (int d = 0; d < 3; ++d)
-          center_gradient[term.geometry][d] += adjoint*spin.derivative[d];
-      }
+  float density_pull[Layout::harmonic_capacity][Layout::spin_capacity] = {};
+  float center_gradient[Layout::harmonic_capacity][3] = {}, geometry_sum[Layout::harmonic_capacity] = {};
+  for (int t = 0; t < v.term_count; ++t) {
+    const Term term = v.term(t);
+    const float adjoint = pull[term.output]*weights[term.path*v.channels+c]*term.coefficient;
+    if (term.neighbor) {
+      density_pull[term.geometry][term.spin] += adjoint;
+    } else {
+      const SpinValue<float> spin = phi_i[term.spin];
+      density_pull[term.geometry][0] += adjoint*spin.value;
+      for (int d = 0; d < 3; ++d)
+        center_gradient[term.geometry][d] += adjoint*spin.derivative[d];
     }
   }
   for (int neighbor = lane; neighbor < nn[i]; neighbor += Layout::tile) {
@@ -318,45 +310,30 @@ static __global__ void forces(
     float distance = sqrtf(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]);
     if (distance >= cutoffs[pair]) continue;
     for (int d = 0; d < 3; ++d) u[d] = r[d]/distance;
-    Value y[Layout::harmonic_capacity], phi_j[Layout::spin_capacity];
+    SpinValue<float> y[Layout::harmonic_capacity], phi_j[Layout::spin_capacity];
     spherical(v, u, y);
     read_spin(n, j, type, active, spins, s);
     primitives_at(v, s, phi_j);
     float weight, derivative;
     radial(v, slot, plane, c, v.channels, basis, pair, cutoffs[pair], distance, coefficients, weight, derivative);
     float radial_pull = 0, angular_pull[3] = {}, neighbor_pull[3] = {};
-    if (geometry_capacity) {
-      float spin_pull[order2_spin_size] = {};
-      for (int g = 0; g < geometry_count; ++g) {
-        float y_pull = density_pull[g][0];
-        const float weighted_y = weight*y[g].value;
-        geometry_sum[g] += weighted_y;
-        #pragma unroll
-        for (int a = 1; a < order2_spin_size; ++a) {
-          y_pull += density_pull[g][a]*phi_j[a].value;
-          spin_pull[a] += weighted_y*density_pull[g][a];
-        }
-        radial_pull += y_pull*y[g].value;
-        for (int d = 0; d < 3; ++d)
-          angular_pull[d] += (weight*y_pull)*y[g].derivative[d];
-      }
-      for (int a = 1; a < order2_spin_size; ++a)
-        for (int d = 0; d < 3; ++d)
-          neighbor_pull[d] += spin_pull[a]*phi_j[a].derivative[d];
-    } else {
+    float spin_pull[Layout::spin_capacity] = {};
+    for (int g = 0; g < geometry_count; ++g) {
+      float y_pull = density_pull[g][0];
+      const float weighted_y = weight*y[g].value;
+      geometry_sum[g] += weighted_y;
       #pragma unroll
-      for (int t = 0; t < v.term_count; ++t) {
-        Term term = v.term(t);
-        const Value spin = (term.neighbor ? phi_j : phi_i)[term.spin];
-        const Value harmonic = y[term.geometry];
-        float adjoint = pull[term.output]*weights[term.path*v.channels+c]*term.coefficient;
-        radial_pull += adjoint*harmonic.value*spin.value;
-        for (int d = 0; d < 3; ++d) {
-          angular_pull[d] += adjoint*weight*harmonic.derivative[d]*spin.value;
-          (term.neighbor ? neighbor_pull : center_pull)[d] += adjoint*weight*harmonic.value*spin.derivative[d];
-        }
+      for (int a = 1; a < v.spin_components; ++a) {
+        y_pull += density_pull[g][a]*phi_j[a].value;
+        spin_pull[a] += weighted_y*density_pull[g][a];
       }
+      radial_pull += y_pull*y[g].value;
+      for (int d = 0; d < 3; ++d)
+        angular_pull[d] += (weight*y_pull)*y[g].derivative[d];
     }
+    for (int a = 1; a < v.spin_components; ++a)
+      for (int d = 0; d < 3; ++d)
+        neighbor_pull[d] += spin_pull[a]*phi_j[a].derivative[d];
     float longitudinal = 0;
     for (int d = 0; d < 3; ++d) longitudinal += angular_pull[d]*u[d];
     float grad[3];
@@ -376,11 +353,9 @@ static __global__ void forces(
       else atomicAdd(virial+k*n+(neighbor_virial ? j : i), value);
     }
   }
-  if (geometry_capacity) {
-    for (int g = 0; g < geometry_count; ++g)
-      for (int d = 0; d < 3; ++d)
-        center_pull[d] += geometry_sum[g]*center_gradient[g][d];
-  }
+  for (int g = 0; g < geometry_count; ++g)
+    for (int d = 0; d < 3; ++d)
+      center_pull[d] += geometry_sum[g]*center_gradient[g][d];
   #pragma unroll
   for (int d = 0; d < 3; ++d) {
     #pragma unroll

@@ -464,7 +464,7 @@ def validate_native_compiled_checkpoint(root):
                 raise RuntimeError(result.stdout + result.stderr)
             if compiled and (
                     "Compile specialized Spin training kernels" not in result.stdout or
-                    "Spin layout JIT ready:" not in result.stdout or
+                    "Spin aggregate JIT ready:" not in result.stdout or
                     "specialization disabled" in (result.stdout + result.stderr).lower()):
                 raise AssertionError("Spin JIT did not compile successfully")
             cases.append(case)

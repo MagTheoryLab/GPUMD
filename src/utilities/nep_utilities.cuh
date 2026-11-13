@@ -385,6 +385,19 @@ find_fc_and_fcp(float rc, float rcinv, float d12, float& fc, float& fcp)
   }
 }
 
+static __device__ __host__ __forceinline__ void
+find_fc_and_fcp(double rc, double rcinv, double d12, double& fc, double& fcp)
+{
+  if (d12 < rc) {
+    const double pi = 3.14159265358979323846;
+    const double phase = pi * d12 * rcinv;
+    fc = 0.5 * (1.0 + cos(phase));
+    fcp = -0.5 * pi * rcinv * sin(phase);
+  } else {
+    fc = fcp = 0.0;
+  }
+}
+
 static __device__ __forceinline__ void
 find_fc_and_fcp_zbl(float r1, float r2, float d12, float& fc, float& fcp)
 {
@@ -543,37 +556,38 @@ find_fn(const int n_max, const float rcinv, const float d12, const float fc12, f
   }
 }
 
+template<typename Real>
 static __device__ __host__ __forceinline__ void find_fn_and_fnp(
   const int n_max,
-  const float rcinv,
-  const float d12,
-  const float fc12,
-  const float fcp12,
-  float* fn,
-  float* fnp)
+  const Real rcinv,
+  const Real d12,
+  const Real fc12,
+  const Real fcp12,
+  Real* fn,
+  Real* fnp)
 {
-  float d12_mul_rcinv = d12 * rcinv;
-  float x = 2.0f * (d12_mul_rcinv - 1.0f) * (d12_mul_rcinv - 1.0f) - 1.0f;
+  Real d12_mul_rcinv = d12 * rcinv;
+  Real x = 2.0f * (d12_mul_rcinv - 1.0f) * (d12_mul_rcinv - 1.0f) - 1.0f;
   fn[0] = fc12;
   fnp[0] = fcp12;
   if (n_max == 0) return;
   fn[1] = (x + 1.0f) * 0.5f * fc12;
   fnp[1] = 2.0f * (d12_mul_rcinv - 1.0f) * rcinv * fc12 + (x + 1.0f) * 0.5f * fcp12;
-  float u0 = 1.0f;
-  float u1 = 2.0f * x;
-  float u2;
-  float fn_m_minus_2 = 1.0f;
-  float fn_m_minus_1 = x;
+  Real u0 = 1.0f;
+  Real u1 = 2.0f * x;
+  Real u2;
+  Real fn_m_minus_2 = 1.0f;
+  Real fn_m_minus_1 = x;
   for (int m = 2; m <= n_max; ++m) {
-    float fn_tmp1 = 2.0f * x * fn_m_minus_1 - fn_m_minus_2;
+    Real fn_tmp1 = 2.0f * x * fn_m_minus_1 - fn_m_minus_2;
     fn_m_minus_2 = fn_m_minus_1;
     fn_m_minus_1 = fn_tmp1;
-    float fnp_tmp = m * u1;
+    Real fnp_tmp = m * u1;
     u2 = 2.0f * x * u1 - u0;
     u0 = u1;
     u1 = u2;
 
-    float fn_tmp2 = (fn_tmp1 + 1.0f) * 0.5f;
+    Real fn_tmp2 = (fn_tmp1 + 1.0f) * 0.5f;
     fnp[m] = (fnp_tmp * 2.0f * (d12 * rcinv - 1.0f) * rcinv) * fc12 + fn_tmp2 * fcp12;
     fn[m] = fn_tmp2 * fc12;
   }

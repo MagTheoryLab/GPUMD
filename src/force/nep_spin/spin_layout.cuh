@@ -7,6 +7,9 @@
 #include <vector>
 
 namespace nep_spin {
+inline bool needs_wide_forward(int soc, int lmax, int order) {
+  return !soc && lmax == 4 && order == 4;
+}
 struct Primitive { int degree, l, offset; };
 struct Sector { int l, parity, time, offset, norm_column, scalar_column, size; };
 struct Term { int geometry, spin, output, path, neighbor; float coefficient; };

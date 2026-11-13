@@ -82,7 +82,8 @@ static void change_box(const NEP_Parameters& para, Structure& structure)
   }
 }
 
-void NEP_Data_Reader::read_geometry(const XYZ_Record& record, Structure& structure) const
+void NEP_Data_Reader::read_geometry(
+  const XYZ_Record& record, Structure& structure, XYZ_Geometry* precise) const
 {
   structure.num_atom = record.num_atoms;
   structure.index_in_file = record.index;
@@ -108,12 +109,14 @@ void NEP_Data_Reader::read_geometry(const XYZ_Record& record, Structure& structu
       has_lattice_in_exyz = true;
       const int transpose_index[9] = {0, 3, 6, 1, 4, 7, 2, 5, 8};
       for (int m = 0; m < 9; ++m) {
-        structure.box_original[transpose_index[m]] = get_double_from_token(
+        const double value = get_double_from_token(
           tokens[n + m].substr(
             (m == 0) ? (lattice_string.length() + 1) : 0,
             (m == 8) ? (tokens[n + m].length() - 1) : tokens[n + m].length()),
           xyz_filename.c_str(),
           line_number);
+        structure.box_original[transpose_index[m]] = value;
+        if (precise) precise->cell[transpose_index[m]] = value;
       }
       change_box(para, structure);
     }
@@ -130,6 +133,7 @@ void NEP_Data_Reader::read_geometry(const XYZ_Record& record, Structure& structu
   if (pos_offset < 0) {
     PRINT_INPUT_ERROR("'pos' is missing in properties.");
   }
+  if (precise) precise->position.resize(structure.num_atom);
   structure.type.resize(structure.num_atom);
   structure.x.resize(structure.num_atom);
   structure.y.resize(structure.num_atom);
@@ -141,12 +145,14 @@ void NEP_Data_Reader::read_geometry(const XYZ_Record& record, Structure& structu
     const auto& tokens = record.atoms[na];
     line_number = record.comment_line_number + na + 1;
     std::string atom_symbol(tokens[species_offset]);
-    structure.x[na] =
-      get_double_from_token(tokens[0 + pos_offset], xyz_filename.c_str(), line_number);
-    structure.y[na] =
-      get_double_from_token(tokens[1 + pos_offset], xyz_filename.c_str(), line_number);
-    structure.z[na] =
-      get_double_from_token(tokens[2 + pos_offset], xyz_filename.c_str(), line_number);
+    const std::array<double, 3> position = {
+      get_double_from_token(tokens[pos_offset], xyz_filename.c_str(), line_number),
+      get_double_from_token(tokens[pos_offset + 1], xyz_filename.c_str(), line_number),
+      get_double_from_token(tokens[pos_offset + 2], xyz_filename.c_str(), line_number)};
+    structure.x[na] = position[0];
+    structure.y[na] = position[1];
+    structure.z[na] = position[2];
+    if (precise) precise->position[na] = position;
     bool is_allowed_element = false;
     for (int n = 0; n < para.elements.size(); ++n) {
       if (atom_symbol == para.elements[n]) {
@@ -212,7 +218,7 @@ static void read_symmetric_tensor(
 
 void NEP_Data_Reader::read_structure(const XYZ_Record& record, Structure& structure)
 {
-  read_geometry(record, structure);
+  read_geometry(record, structure, precise_geometry());
   read_energy(record, structure, true);
   const auto& tokens = record.tokens;
   const auto& xyz_filename = record.filename;

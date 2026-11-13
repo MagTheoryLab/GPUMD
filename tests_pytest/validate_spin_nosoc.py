@@ -218,13 +218,42 @@ def generate(directory):
         model=oracle.model();(directory/(name+'.nep')).write_text(model)
         record=dict(C=C,L=L,S=S,neurons=oracle.H,dimension=oracle.dim,scaler=oracle.scaler.tolist(),active=list(active),cases=cases,
                     model_sha256=hashlib.sha256(model.encode()).hexdigest(),fd_step_check=float(fd_error))
+        if (C,L,S) == (1,4,4):
+            # High spin magnitudes in small sheared cells amplify descriptor rounding.
+            record['wide_training_cases'] = []
+            record['wide_training_cases'].append(oracle.case(
+                'high-spin-33',
+                np.array([[0.1037333, 0.2290752, 0.4014025],
+                          [2.3180941, 2.149327, 2.0514403],
+                          [1.0535344, 2.3821418, 3.9667498],
+                          [2.1680347, 3.902569, 0.5884638]]),
+                np.array([[-0.7106552, 3.0362012, 2.0539245],
+                          [-1.2779339, 3.5429107, -2.76223],
+                          [0.7855874, 3.6730429, -0.2681852],
+                          [0.3585205, 2.9178912, 2.1735258]]),
+                np.array([[3.384, 0.0, 0.0],
+                          [0.564, 4.042, 0.0],
+                          [0.47, 0.188, 4.512]]), step=1e-7))
+            record['wide_training_cases'].append(oracle.case(
+                'high-spin-53',
+                np.array([[0.4081361, 0.1920992, 0.3661417],
+                          [2.6938751, 2.5005866, 2.5114778],
+                          [1.3622696, 2.7153532, 5.0320948],
+                          [2.940769, 4.7056167, 0.8035769]]),
+                np.array([[3.0464194, -2.2098789, 1.8175436],
+                          [-3.7627352, 0.5329079, -0.4606473],
+                          [-3.6242841, -0.315025, -1.398689],
+                          [0.7481424, -0.9098108, -2.7873275]]),
+                np.array([[3.96, 0.0, 0.0],
+                          [0.66, 4.73, 0.0],
+                          [0.55, 0.22, 5.28]]), step=1e-7))
         (directory/(name+'.json')).write_text(json.dumps(record,indent=2,allow_nan=False)+'\n')
         print(name,oracle.dim,len(cases),'FD consistency',fd_error,flush=True)
 
 
 def validate(fixtures, workdir):
     from validate_spin_model import execute, training_xyz
-    from spin_force_helpers import run_case, max_error
+    from spin_force_helpers import run_case, max_error, flatten
     from validate_spin_training import columns, run, NEP
     workdir.mkdir(parents=True,exist_ok=True)
     report={}
@@ -256,8 +285,8 @@ seed 3401
         results={}
         for jit in (0,1):
             p=workdir/f'{name}-jit{jit}';execute(p,text+f'prediction 1\noutput_descriptor 2\nnep_compile {jit}\n',xyz,model)
-            if jit and ref['L']<=3:
-                assert 'Spin layout JIT ready:' in (p/'stdout.log').read_text()
+            if jit:
+                assert 'Spin aggregate JIT ready:' in (p/'stdout.log').read_text()
             energy=columns(p/'energy_train.out',1);force=columns(p/'force_train.out',3);mforce=columns(p/'mforce_train.out',3);virial=columns(p/'virial_train.out',6)
             q=columns(p/'descriptor.out',ref['dimension'])
             assert len(q)==len(force)==len(mforce)==4*len(ref['cases'])
@@ -274,6 +303,24 @@ seed 3401
                     if not ref['active'][['Fe','Bi','O'].index(t)]:assert mforce[4*k+atom]==[0.,0.,0.]
             assert all(math.isfinite(x) and x<1e-4 for x in errors.values()),(name,jit,errors)
             results[f'training_jit{jit}']=errors
+        if (ref['C'], ref['L'], ref['S']) == (1, 4, 4):
+            for case in ref.get('wide_training_cases', []):
+                md = run_case(workdir, name+'-md-'+case['name'], case, model)
+                for field in ('energy', 'force', 'mforce', 'virial'):
+                    norm = len(case['types']) if field in ('energy', 'virial') else 1
+                    actual, expected = flatten(md[field]), flatten(case[field])
+                    assert len(actual) == len(expected)
+                    assert all(abs(a-b)/norm <= 5e-5 + 5e-6*abs(b)/norm
+                               for a,b in zip(actual, expected)), (case['name'], field)
+                for jit in (0, 1):
+                    p = workdir / f"{name}-{case['name']}-jit{jit}"
+                    execute(p, text + f'prediction 1\nnep_compile {jit}\n', training_xyz(case), model)
+                    for field in ('force', 'mforce'):
+                        predicted = columns(p / f'{field}_train.out', 3)
+                        assert len(predicted) == len(case[field])
+                        for row, target in zip(predicted, case[field]):
+                            assert all(abs(a-b) <= 5e-5 + 5e-6*abs(b) for a,b in zip(row,target)), (
+                                case['name'], jit, field, row, target)
         # Independent MD path, including its force/virial accumulation and reader.
         for case in ref['cases']:
             got=run_case(workdir,name+'-md-'+case['name'],case,model)

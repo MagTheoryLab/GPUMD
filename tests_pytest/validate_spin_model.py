@@ -95,7 +95,7 @@ def main():
         prediction=args.workdir/(name+'-prediction')
         execute(prediction,text+'prediction 1\n',xyz,model)
         if args.require_jit and L <= 2:
-            assert 'Spin layout JIT ready:' in (prediction/'stdout.log').read_text(), name
+            assert 'Spin aggregate JIT ready:' in (prediction/'stdout.log').read_text(), name
         expected=list(ref['cases'].values())
         e=columns(prediction/'energy_train.out',2)
         errors['training_prediction_energy']=max_error([v[0] for v in e],[v['energy']/4 for v in expected])

@@ -112,7 +112,7 @@ def main():
                     run_nep(case, env)
                     if compiled:
                         output = (case / 'run.log').read_text()
-                        assert 'Spin layout JIT ready:' in output, output
+                        assert 'Spin aggregate JIT ready:' in output, output
                         assert 'specialization disabled' not in output.lower(), output
                     parameters, references = read_restart(case / 'nep.restart')
                     loss = [[float(v) for v in row.split()]

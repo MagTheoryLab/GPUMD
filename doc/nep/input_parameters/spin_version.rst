@@ -58,9 +58,16 @@ Compiled kernels
 
 Training and prediction precontract radial coefficients for each parameter
 vector. The descriptor and force kernels reuse these coefficients in all layouts.
-With ``nep_compile 1``, layouts with up to 512 sparse coupling terms are
-eligible for spin kernel specialization. Larger layouts, unavailable runtime
-compilation, and ``nep_compile 0`` use the generic spin kernels.
+Training, prediction and molecular dynamics accumulate neighbor contributions
+before coupling the spin and geometric components. With ``nep_compile 1``,
+training and prediction compile the coupling table for the selected layout.
+For non-SOC models with angular rank
+four and spin order four, the spin descriptor and its scaling use double
+precision through the ANN input. Compilation happens
+at model initialization for the selected layout and the training process
+reuses the compiled kernels across generations.
+When specialization is disabled or unavailable, training uses the corresponding
+precompiled kernel.
 In molecular dynamics, ``gpumd`` uses precompiled kernels for
 ``spin_compress 3``, ``spin_l_max 2``, ``spin_order 2`` and generic kernels
 for other layouts.
