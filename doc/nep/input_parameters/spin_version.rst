@@ -48,7 +48,8 @@ parameters. All types are energy centers; only Fe has independent spins::
   generation       100000
 
 Defaults are ``spin_compress 3``, ``spin_l_max 2``, ``spin_order 2`` and
-``spin_soc 1``. ``spin_basis_size`` follows the angular ``basis_size``.
+``spin_soc 1``. In this example, ``basis_size 8 8`` gives the spin
+descriptor nine radial basis functions.
 For ``spin_soc 0``, this example has 61 total coordinates and 6568 parameters.
 See :ref:`nep_spin` for the construction, scaling and checkpoint layout.
 

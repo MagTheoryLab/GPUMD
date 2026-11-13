@@ -58,7 +58,7 @@ void Spin_Parameters::report_model_inputs() const
     spin_order,
     spin_compress,
     spin_soc);
-  printf("    spin_basis_size = %d, spin_l_max = %d.\n", spin_basis_size, spin_l_max);
+  printf("    spin_l_max = %d.\n", spin_l_max);
   if (split_mforce_loss) {
     printf(
       "    lambda_m_parallel = %g, lambda_m_perp = %g (independent RMSE terms).\n",

@@ -208,6 +208,32 @@ def validate_parser(root):
     return results
 
 
+def validate_legacy_spin_basis(root):
+    root.mkdir()
+    config = NEP_IN.replace("basis_size 0 0", "basis_size 2 8") + "seed 3401\nnep_compile 0\n"
+    checkpoint = None
+    for name, text in (
+        ("omitted", config),
+        ("before", "spin_basis_size 8\n" + config),
+        ("after", config + "spin_basis_size 8\n"),
+        ("conflict", config + "spin_basis_size 2\n"),
+    ):
+        case = root / name
+        write_case(case, text)
+        result = run(NEP, case)
+        if name == "conflict":
+            assert result.returncode and "spin_basis_size must be equal" in result.stderr
+            continue
+        assert result.returncode == 0, result.stdout + result.stderr
+        model = (case / "nep.txt").read_bytes()
+        assert b"\nspin_basis_size 8\n" in model
+        if checkpoint is None:
+            checkpoint = model
+        else:
+            assert model == checkpoint
+    return "omitted and matching legacy inputs write identical models; conflicting input rejected"
+
+
 def validate_response_training(root):
     nep_in = NEP_IN.replace(
         "lambda_tau 0.5",
@@ -567,6 +593,7 @@ def main():
             "flexible_zbl_rejected": validate_flexible_zbl_rejected(root / "flexible-zbl"),
             "ordinary_nep_io": validate_shared_nep_io(root / "ordinary-nep"),
             "parser_negative_exit_codes": validate_parser(root / "parser"),
+            "legacy_spin_basis": validate_legacy_spin_basis(root / "legacy-basis"),
             "response_training": validate_response_training(root / "response"),
             "training_prediction": validate_training_and_prediction(root / "correctness"),
             "rank_one_training_prediction": validate_training_and_prediction(

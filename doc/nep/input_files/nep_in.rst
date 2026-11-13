@@ -56,8 +56,6 @@ Keywords
      - select the spin descriptor version for ``model nep_spin``
    * - :ref:`spin_cutoff <kw_spin_cutoff>`
      - one spin cutoff or one cutoff per element, bounded by the NEP radial cutoff
-   * - :ref:`spin_basis_size <kw_spin_basis_size>`
-     - magnetic radial basis index followed by a reserved second value fixed at zero
    * - :ref:`spin_l_max <kw_spin_l_max>`
      - maximum spatial tensor rank used by the spin descriptor
    * - :ref:`spin_compress <kw_spin_compress>`
@@ -75,7 +73,7 @@ Keywords
    * - :ref:`n_max <kw_n_max>`
      - size of radial (:math:`n_\mathrm{max}^\mathrm{R}`) and angular (:math:`n_\mathrm{max}^\mathrm{A}`) basis
    * - :ref:`basis_size <kw_basis_size>`
-     - number of radial (:math:`N_\mathrm{bas}^\mathrm{R}`) and angular (:math:`N_\mathrm{bas}^\mathrm{A}`) basis functions
+     - maximum radial (:math:`N_\mathrm{bas}^\mathrm{R}`) and angular (:math:`N_\mathrm{bas}^\mathrm{A}`) basis indices
    * - :ref:`l_max <kw_l_max>`
      - expansion order for angular terms
    * - :ref:`neuron <kw_neuron>`
