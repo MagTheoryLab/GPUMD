@@ -41,6 +41,7 @@
 
 // device manipulation
 #define gpuSetDevice hipSetDevice
+#define gpuGetDevice hipGetDevice
 #define gpuGetDeviceCount hipGetDeviceCount
 #define gpuDeviceProp hipDeviceProp_t
 #define gpuGetDeviceProperties hipGetDeviceProperties
@@ -129,6 +130,7 @@
 
 // device manipulation
 #define gpuSetDevice cudaSetDevice
+#define gpuGetDevice cudaGetDevice
 #define gpuGetDeviceCount cudaGetDeviceCount
 #define gpuDeviceProp cudaDeviceProp
 #define gpuGetDeviceProperties cudaGetDeviceProperties

@@ -1158,19 +1158,24 @@ NEP_Spin::NEP_Spin(const char* file_potential, const int num_atoms) : num_atoms_
   data_.spin_cutoff_pair.resize(spin_cutoff_pair.size());
   data_.spin_cutoff_pair.copy_from_host(spin_cutoff_pair.data(), spin_cutoff_pair.size());
 
-  printf(
-    "Use NEP-spin potential with %d atom type%s.\n",
-    model_.num_types,
-    model_.num_types == 1 ? "" : "s");
-  printf(
-    "    structural/spin descriptor dimensions = %d/%d.\n",
-    model_.struct_descriptor_dim,
-    model_.spin_descriptor_dim);
-  printf(
-    "    radial/angular/spin cutoffs = %g/%g/%g A.\n",
-    model_.cutoff_radial,
-    model_.cutoff_angular,
-    model_.spin_cutoff);
+  int device;
+  CHECK(gpuGetDevice(&device));
+  // Every multi-GPU domain loads the same model.
+  if (device == 0) {
+    printf(
+      "Use NEP-spin potential with %d atom type%s.\n",
+      model_.num_types,
+      model_.num_types == 1 ? "" : "s");
+    printf(
+      "    structural/spin descriptor dimensions = %d/%d.\n",
+      model_.struct_descriptor_dim,
+      model_.spin_descriptor_dim);
+    printf(
+      "    radial/angular/spin cutoffs = %g/%g/%g A.\n",
+      model_.cutoff_radial,
+      model_.cutoff_angular,
+      model_.spin_cutoff);
+  }
 }
 
 void NEP_Spin::resize_domain(int num_atoms)
