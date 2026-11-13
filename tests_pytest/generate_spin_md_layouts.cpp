@@ -9,9 +9,9 @@ int main() {
                "#pragma once\n#include \"spin_layout.cuh\"\n";
   for (int soc = 0; soc <= 1; ++soc) {
     const nep_spin::Layout layout(3, 2, 2, soc);
-    std::string text = nep_spin::compile_layout(layout,
+    std::string text = nep_spin::compile_layout(layout, soc,
                                                 soc ? "md_terms_soc" : "md_terms_no_soc");
-    // Only the unrolled MD adjoint needs literal terms; the forward keeps its device table.
+    // The shared polynomial adjoint needs literal terms; forward keeps its device table.
     std::ostringstream getter;
     getter << std::scientific << std::setprecision(17)
            << "__device__ __forceinline__ Term quadratic_term(int i) const { switch(i) {\n";

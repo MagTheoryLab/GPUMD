@@ -428,7 +428,7 @@ def validate_native_compiled_checkpoint(root):
             expanded.append(" ".join(fields))
     xyz = "\n".join(expanded) + "\n"
     report = {}
-    layouts = ((1, 3, 2, 1), (2, 3, 2, 1), (3, 3, 2, 1), (8, 1, 2, 1),
+    layouts = ((1, 3, 2, 1), (2, 3, 2, 1), (3, 3, 2, 1), (3, 2, 2, 0), (8, 1, 2, 1),
                (2, 2, 1, 0), (2, 3, 0, 0), (2, 2, 2, 1))
     for channels, order, lmax, soc in layouts:
         layout = f"o{order}c{channels}l{lmax}s{soc}"
@@ -466,7 +466,8 @@ def validate_native_compiled_checkpoint(root):
                     "Compile specialized Spin training kernels" not in result.stdout or
                     "Spin aggregate JIT ready:" not in result.stdout or
                     "specialization disabled" in (result.stdout + result.stderr).lower()):
-                raise AssertionError("Spin JIT did not compile successfully")
+                raise AssertionError("Spin JIT did not compile successfully\n" +
+                                     result.stdout + result.stderr)
             cases.append(case)
         errors = {}
         for name, width in (("energy", 1), ("force", 3), ("virial", 6), ("mforce", 3)):

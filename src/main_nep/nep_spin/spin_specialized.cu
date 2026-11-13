@@ -9,7 +9,19 @@
 #include "nep_special_config.cuh"
 #include "nep_spin.cuh"
 #include "force/nep_spin/spin_kernels.cuh"
+#include "force/nep_spin/spin_md_layouts.cuh"
 #include "utilities/gpu_macro.cuh"
+#include <type_traits>
+
+namespace {
+constexpr bool quadratic_training = nep_spin::CompiledLayout::channels == 3 &&
+  nep_spin::CompiledLayout::lmax == 2 && nep_spin::CompiledLayout::order == 2;
+using QuadraticForceLayout = typename std::conditional<nep_spin::CompiledLayout::soc,
+  nep_spin::MDLayoutSOC<4, true>,
+  nep_spin::MDLayoutNoSOC<4, true>>::type;
+using ForceLayout = typename std::conditional<quadratic_training,
+  QuadraticForceLayout, nep_spin::CompiledLayout>::type;
+}
 
 extern "C" void nep_spin_launch_descriptor_v2(
   int atom_count,
@@ -77,7 +89,7 @@ extern "C" void nep_spin_launch_force_v2(
   double* virial,
   const double* wide_radial)
 {
-  nep_spin::CompiledLayout layout;
+  ForceLayout layout;
   if (layout.edge_cached)
     layout.edge_radial = descriptor_coefficients +
       NUM_TYPES_JIT*NUM_TYPES_JIT*layout.channels*(BASIS_SIZE_ANGULAR_JIT+1);
@@ -86,7 +98,9 @@ extern "C" void nep_spin_launch_force_v2(
 #else
   const auto* radial = descriptor_coefficients;
 #endif
-  nep_spin::forces<<<(atom_count*nep_spin::CompiledLayout::channels*nep_spin::CompiledLayout::tile+63)/64, 64>>>(
+  // Retain training's neighbor-owned virial while sharing the MD polynomial adjoint.
+  nep_spin::forces<ForceLayout, false, quadratic_training, quadratic_training>
+    <<<(atom_count*(quadratic_training ? 1 : ForceLayout::channels)*ForceLayout::tile+63)/64, 64>>>(
     layout, atom_count, struct_dim, NUM_TYPES_JIT,
     N_MAX_ANGULAR_JIT, BASIS_SIZE_ANGULAR_JIT, Box{}, type, spin_type_active,
     position, spin, NN_spin, NL_spin, r12_spin, r12_plane_size, spin_cutoff_pair,

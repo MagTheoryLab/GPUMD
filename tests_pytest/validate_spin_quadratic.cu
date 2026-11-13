@@ -1,5 +1,5 @@
 /* This file is part of GPUMD. SPDX-License-Identifier: LGPL-3.0-or-later */
-// Compare the MD polynomial path with the generic adjoint, including tail tiles.
+// Compare the shared polynomial path with the generic adjoint, including tail tiles.
 #include "force/nep_spin/spin_kernels.cuh"
 #include "force/nep_spin/spin_md_layouts.cuh"
 #include <cmath>
@@ -16,7 +16,7 @@ template<class T> T* allocate(int n) {
   return p;
 }
 
-template<class Layout>
+template<class Layout, bool CenterVirial = true, bool FuseChannels = false>
 void check(int n) {
   Layout v;
   constexpr int dim = 96, types = 3, na = 4, basis = 8, neighbors = 6;
@@ -46,20 +46,22 @@ void check(int n) {
   QUAD_CHECK(cudaMemset(reference, 0, 15*n*sizeof(double)));
   QUAD_CHECK(cudaMemset(candidate, 0, 15*n*sizeof(double)));
   const int blocks = (n*v.channels*Layout::tile+63)/64;
-  nep_spin::forces<Layout, true, false><<<blocks, 64>>>(v, n, 30, types, na, basis,
+  nep_spin::forces<Layout, CenterVirial, false><<<blocks, 64>>>(v, n, 30, types, na, basis,
     Box{}, type, active, nullptr, spin, nn, nl, edges, plane, cutoff, radial,
-    p, moments, fp, reference, reference+3*n, reference+6*n, false);
+    p, moments, fp, reference, reference+3*n, reference+6*n, !CenterVirial);
   QUAD_CHECK(cudaGetLastError());
-  nep_spin::forces<Layout, true, true><<<blocks, 64>>>(v, n, 30, types, na, basis,
+  nep_spin::forces<Layout, CenterVirial, true, FuseChannels>
+    <<<(n*(FuseChannels ? 1 : v.channels)*Layout::tile+63)/64, 64>>>(v, n, 30, types, na, basis,
     Box{}, type, active, nullptr, spin, nn, nl, edges, plane, cutoff, radial,
-    p, moments, fp, candidate, candidate+3*n, candidate+6*n, false);
+    p, moments, fp, candidate, candidate+3*n, candidate+6*n, !CenterVirial);
   QUAD_CHECK(cudaGetLastError());
   QUAD_CHECK(cudaDeviceSynchronize());
   double maximum = 0;
   for (int i = 0; i < 15*n; ++i) {
     const double error = std::fabs(candidate[i]-reference[i]);
     maximum = std::fmax(maximum, error);
-    if (!std::isfinite(candidate[i]) || error > 5e-5+5e-6*std::fabs(reference[i])) {
+    const double absolute = i >= 3*n && i < 6*n ? 5e-6 : 5e-5;
+    if (!std::isfinite(candidate[i]) || error > absolute+1e-5*std::fabs(reference[i])) {
       std::fprintf(stderr, "FAIL tile=%d n=%d index=%d ref=%.17g got=%.17g\n",
         Layout::tile, n, i, reference[i], candidate[i]);
       std::exit(2);
@@ -73,7 +75,8 @@ void check(int n) {
   QUAD_CHECK(cudaFree(spin)); QUAD_CHECK(cudaFree(edges)); QUAD_CHECK(cudaFree(cutoff)); QUAD_CHECK(cudaFree(radial));
   QUAD_CHECK(cudaFree(p)); QUAD_CHECK(cudaFree(moments)); QUAD_CHECK(cudaFree(fp));
   QUAD_CHECK(cudaFree(reference)); QUAD_CHECK(cudaFree(candidate));
-  std::printf("PASS tile=%d components=%d n=%d max_abs=%.3e\n", Layout::tile, v.components, n, maximum);
+  std::printf("PASS tile=%d components=%d center_virial=%d fused=%d n=%d max_abs=%.3e\n",
+    Layout::tile, v.components, int(CenterVirial), int(FuseChannels), n, maximum);
 }
 
 int main() {
@@ -82,5 +85,13 @@ int main() {
     check<nep_spin::MDLayoutNoSOC<2>>(n);
     check<nep_spin::MDLayoutSOC<4>>(n);
     check<nep_spin::MDLayoutNoSOC<4>>(n);
+    check<nep_spin::MDLayoutSOC<2>, false>(n);
+    check<nep_spin::MDLayoutNoSOC<2>, false>(n);
+    check<nep_spin::MDLayoutSOC<4>, false>(n);
+    check<nep_spin::MDLayoutNoSOC<4>, false>(n);
+    check<nep_spin::MDLayoutSOC<2>, false, true>(n);
+    check<nep_spin::MDLayoutNoSOC<2>, false, true>(n);
+    check<nep_spin::MDLayoutSOC<4>, false, true>(n);
+    check<nep_spin::MDLayoutNoSOC<4>, false, true>(n);
   }
 }

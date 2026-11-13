@@ -197,7 +197,7 @@ void NEP_Spin_Model::initialize_spin_compiled(const Spin_Parameters& para)
   auto config = make_nep_compile_config(para);
   config.model_name = "Spin";
   config.source_file = "main_nep/nep_spin/spin_specialized.cu";
-  config.extra_config = nep_spin::compile_layout(layout);
+  config.extra_config = nep_spin::compile_layout(layout, para.spin_soc);
   if (nep_spin::needs_wide_forward(para.spin_soc, layout.lmax, layout.order))
     config.extra_config += "#define NEP_SPIN_WIDE_FORWARD\n";
   compiled_spin_.reset(new NEP_Compile(config));

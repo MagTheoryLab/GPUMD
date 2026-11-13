@@ -7,7 +7,7 @@
 namespace nep_spin {
 // Bake the existing layout tables into getters, so unrolled accesses are constants.
 // This generates metadata only; all forward and adjoint arithmetic stays in the shared kernel.
-inline std::string compile_layout(const Layout& v, const char* table = "aggregate_terms") {
+inline std::string compile_layout(const Layout& v, int soc, const char* table = "aggregate_terms") {
   std::ostringstream out;
   out << std::scientific << std::setprecision(17);
   auto term = [&](const Term& p) {
@@ -31,6 +31,7 @@ inline std::string compile_layout(const Layout& v, const char* table = "aggregat
   out << "const float* edge_radial = nullptr;\n";
   count("tile", v.lmax == 2 && v.order == 2 ? 2 : 1);
   count("channels", v.channels); count("lmax", v.lmax);
+  count("order", v.order); count("soc", soc);
   count("primitive_count", v.primitives.size()); count("sector_count", v.sectors.size());
   count("term_count", v.terms.size()); count("center_count", v.centers.size());
   count("path_count", v.path_count); count("components", v.components);
