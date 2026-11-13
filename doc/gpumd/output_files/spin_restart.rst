@@ -17,8 +17,9 @@ new atomic velocities if you want to reuse the saved values. For example::
 The file contains positions, masses, atomic velocities, groups and magnetic
 moments. When TSPIN spin velocities are initialized, it also contains
 ``spin_vel:R:3``. TSPIN reuses these velocities; when they are absent, it
-initializes them from the input temperature and seed. SIB and GLSD have no
-independent spin velocity.
+initializes them from the input temperature and seed. Starting SIB or GLSD
+discards previous TSPIN velocities. A restart written during either ensemble
+omits ``spin_vel``, and a subsequent TSPIN run initializes fresh velocities.
 
 As with ordinary GPUMD restart, this is a physical-state snapshot.
 NHC/MTTK internal variables, the execution clock, temperature/pressure ramp

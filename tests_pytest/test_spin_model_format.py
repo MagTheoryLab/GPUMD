@@ -136,6 +136,18 @@ def test_model_validation(codec,tmp_path,old,new):
     assert result.returncode == 1 and result.stderr
 
 
+@pytest.mark.parametrize("angular,minimum", [
+    ("2 0 0 0 1 0 0", 3), ("2 0 0 0 0 1 0", 3), ("3 0 0 0 0 0 1", 4),
+])
+def test_structural_rank_for_mixed_invariants(codec, tmp_path, angular, minimum):
+    model = (Path(__file__).parent / 'fixtures/nep_spin/c3l2s2.nep').read_text()
+    path = tmp_path / "rank.nep"
+    path.write_text(model.replace("l_max 4 2 0\n", f"l_max {angular}\n"))
+    result = subprocess.run([codec, path], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert f"structural l_max >= {minimum}" in result.stderr
+
+
 def test_defaults_and_zbl(codec,tmp_path):
     model=(Path(__file__).parent/'fixtures/nep_spin/c3l2s2.nep').read_text()
     model=model.replace('spin_type Fe\n','').replace('model nep_spin\n','model nep_spin\nzbl 1 2 0.75\n')

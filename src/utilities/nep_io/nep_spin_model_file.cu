@@ -92,6 +92,8 @@ bool NEP_Spin_Model_File::read(std::istream& input, std::string& error)
       return false;
   if (l_max[1] == 1)
     return fail(error, "l_max q_222 must be 0 or 2.");
+  if (const char* message = angular_rank_error(l_max[0], l_max[4], l_max[5], l_max[6]))
+    return fail(error, message);
   f = field("ann", 2, 2);
   int second_layer;
   if (!integer(f, 0, 1, 120, num_neurons) || !integer(f, 1, 0, 0, second_layer))

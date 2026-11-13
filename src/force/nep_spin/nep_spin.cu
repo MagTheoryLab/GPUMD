@@ -1066,9 +1066,9 @@ void NEP_Spin::launch_spin_descriptors(
       else launch(nep_spin::MDLayoutNoSOC<4>());
     }
   } else if (data.spin_layout.view.components <= 100)
-    launch(nep_spin::RuntimeLayout<100, true>(data.spin_layout.view));
+    launch(nep_spin::DynamicLayout(data.spin_layout.view));
   else
-    launch(nep_spin::RuntimeLayout<625, true>(data.spin_layout.view));
+    launch(nep_spin::WideLayout(data.spin_layout.view));
   GPU_CHECK_KERNEL
 }
 
@@ -1110,9 +1110,9 @@ void NEP_Spin::launch_spin_forces(
       else launch(nep_spin::MDLayoutNoSOC<4>());
     }
   } else if (data.spin_layout.view.components <= 100)
-    launch(nep_spin::RuntimeLayout<100, true>(data.spin_layout.view));
+    launch(nep_spin::DynamicLayout(data.spin_layout.view));
   else
-    launch(nep_spin::RuntimeLayout<625, true>(data.spin_layout.view));
+    launch(nep_spin::WideLayout(data.spin_layout.view));
   GPU_CHECK_KERNEL
 }
 

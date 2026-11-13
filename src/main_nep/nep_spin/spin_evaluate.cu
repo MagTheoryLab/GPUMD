@@ -37,9 +37,7 @@ void NEP_Spin_Model::initialize_spin(Spin_Parameters& para, int N, int device_co
     data.spin_cutoff_pair.resize(spin_cutoff_pair.size());
     data.spin_cutoff_pair.copy_from_host(spin_cutoff_pair.data(), spin_cutoff_pair.size());
     data.spin_layout.initialize(para.spin_compress, para.spin_l_max, para.spin_order, para.spin_soc);
-    data.spin_moments.resize(N * data.spin_layout.view.channels * data.spin_layout.view.components);
-    if (spin_descriptor_jit_)
-      data.radial_coefficients.resize(num_types_ * num_types_ * spin_compress_ * (para.basis_size_angular+1));
+    data.spin_moments.resize(size_t(N) * data.spin_layout.view.channels * data.spin_layout.view.components);
 
     data.force.resize(3 * N);
     data.mforce.resize(3 * N);
@@ -53,19 +51,15 @@ void NEP_Spin_Model::find_additional_descriptors(Spin_Parameters& para, Dataset&
   auto& magnetic_data = magnetic(dataset);
   const int plane_size = dataset.N * magnetic_data.max_NN_spin;
   const float* projection = annmb[device_id].c + spin_projection_offset_;
-  if (spin_descriptor_jit_) {
-    const int count = num_types_ * num_types_ * spin_compress_ * (para.basis_size_angular+1);
-    const size_t edge_count = para.spin_l_max == 2 && para.spin_order == 2 ?
-      size_t(2) * spin_compress_ * plane_size : 0;
-    if (data.radial_coefficients.size() < static_cast<size_t>(count) + edge_count)
-      data.radial_coefficients.resize(static_cast<size_t>(count) + edge_count);
-    nep_spin::contract_radial<<<(count+127)/128, 128>>>(
-      count, spin_compress_, para.n_max_angular, para.basis_size_angular,
-      annmb[device_id].c + num_types_ * num_types_ *
-        (para.n_max_radial+1) * (para.basis_size_radial+1),
-      projection, data.radial_coefficients.data());
-    GPU_CHECK_KERNEL
-  }
+  const int count = num_types_ * num_types_ * spin_compress_ * (para.basis_size_angular + 1);
+  const size_t edge_count = spin_descriptor_jit_ && para.spin_l_max == 2 && para.spin_order == 2 ?
+    size_t(2) * spin_compress_ * plane_size : 0;
+  if (data.radial_coefficients.size() < size_t(count) + edge_count)
+    data.radial_coefficients.resize(size_t(count) + edge_count);
+  nep_spin::contract_radial<<<(count + 127) / 128, 128>>>(
+    count, spin_compress_, para.n_max_angular, para.basis_size_angular,
+    annmb[device_id].c + paramb.num_c_radial, projection, data.radial_coefficients.data());
+  GPU_CHECK_KERNEL
   if (!spin_descriptor_jit_) {
     auto launch = [&](auto layout) {
       nep_spin::descriptors<<<(dataset.N * spin_compress_ + 63) / 64, 64>>>(
@@ -73,8 +67,7 @@ void NEP_Spin_Model::find_additional_descriptors(Spin_Parameters& para, Dataset&
         para.basis_size_angular, Box{}, dataset.type.data(), data.spin_type_active.data(),
         magnetic_data.r_spin.data(), magnetic_data.spin.data(), magnetic_data.NN_spin.data(),
         magnetic_data.NL_spin.data(), magnetic_data.r12_spin.data(), plane_size,
-        data.spin_cutoff_pair.data(), annmb[device_id].c +
-          num_types_ * num_types_ * (para.n_max_radial + 1) * (para.basis_size_radial + 1),
+        data.spin_cutoff_pair.data(), data.radial_coefficients.data(),
         projection, data.spin_moments.data(), nep_data[device_id].descriptors.data());
     };
     if (data.spin_layout.view.components <= 100)
@@ -129,8 +122,7 @@ void NEP_Spin_Model::find_additional_force(Spin_Parameters& para, Dataset& datas
         para.basis_size_angular, Box{}, dataset.type.data(), data.spin_type_active.data(),
         magnetic_data.r_spin.data(), magnetic_data.spin.data(), magnetic_data.NN_spin.data(),
         magnetic_data.NL_spin.data(), magnetic_data.r12_spin.data(), plane_size,
-        data.spin_cutoff_pair.data(), annmb[device_id].c +
-          num_types_ * num_types_ * (para.n_max_radial + 1) * (para.basis_size_radial + 1),
+        data.spin_cutoff_pair.data(), data.radial_coefficients.data(),
         projection, data.spin_moments.data(), nep_data[device_id].Fp.data(), data.force.data(),
         data.mforce.data(), data.virial.data(), true);
     };

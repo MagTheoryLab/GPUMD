@@ -55,8 +55,11 @@ See :ref:`nep_spin` for the construction, scaling and checkpoint layout.
 Compiled kernels
 ----------------
 
-``nep_compile 1`` specializes the sparse coupling layout and precontracts
-radial coefficients for training and prediction. Coefficients are rebuilt for
-each parameter vector. Layouts with more than 512 coupling terms, or unavailable
-runtime compilation, use generic CUDA kernels. ``nep_compile 0`` selects the
-generic implementation. ``gpumd`` uses the generic evaluator.
+Training and prediction precontract radial coefficients for each parameter
+vector. The descriptor and force kernels reuse these coefficients in all layouts.
+With ``nep_compile 1``, layouts with up to 512 sparse coupling terms are
+eligible for spin kernel specialization. Larger layouts, unavailable runtime
+compilation, and ``nep_compile 0`` use the generic spin kernels.
+In molecular dynamics, ``gpumd`` uses precompiled kernels for
+``spin_compress 3``, ``spin_l_max 2``, ``spin_order 2`` and generic kernels
+for other layouts.

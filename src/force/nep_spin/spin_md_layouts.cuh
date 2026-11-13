@@ -3,7 +3,6 @@
 #pragma once
 #include "spin_layout.cuh"
 namespace nep_spin { template<int Tile = 1, bool EdgeCached = false> struct MDLayoutNoSOC {
-enum : int { contracted = 1 };
 enum : int { edge_cached = EdgeCached };
 const float* edge_radial = nullptr;
 enum : int { tile = Tile };
@@ -236,7 +235,6 @@ default: return {}; } }
 enum : int { harmonic_count = 12 };
 }; }
 namespace nep_spin { template<int Tile = 1, bool EdgeCached = false> struct MDLayoutSOC {
-enum : int { contracted = 1 };
 enum : int { edge_cached = EdgeCached };
 const float* edge_radial = nullptr;
 enum : int { tile = Tile };

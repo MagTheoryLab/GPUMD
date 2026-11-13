@@ -143,6 +143,8 @@ void Spin_Parameters::validate_spin_parameters()
     PRINT_INPUT_ERROR("Spin NEP fine_tune is not supported until the "
                       "species-transfer checkpoint reader is implemented.\n");
   }
+  if (const char* message = NEP_Spin_Model_File::angular_rank_error(L_max, has_q_123, has_q_233, has_q_134))
+    PRINT_INPUT_ERROR(message);
   if (spin_basis_size != basis_size_angular) {
     PRINT_INPUT_ERROR("spin_basis_size must be equal to the structural angular basis_size.\n");
   }

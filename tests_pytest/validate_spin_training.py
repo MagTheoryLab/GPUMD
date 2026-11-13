@@ -158,6 +158,15 @@ def validate_parser(root):
                 keyword + "\n" + NEP_IN if first else NEP_IN + keyword + "\n")
     cases["removed_mforce_mode"] = NEP_IN + "spin_mforce_mode full\n"
     results = {}
+    for flag, angular, minimum in (
+        ("q123", "2 0 0 0 1 0 0", 3), ("q233", "2 0 0 0 0 1 0", 3),
+        ("q134", "3 0 0 0 0 0 1", 4),
+    ):
+        case = root / flag
+        write_case(case, NEP_IN.replace("l_max 2 0 0", f"l_max {angular}"))
+        result = run(NEP, case)
+        assert result.returncode and f"structural l_max >= {minimum}" in result.stdout + result.stderr
+        results[flag] = result.returncode
     for name, text in cases.items():
         case = root / name
         write_case(case, text.replace("generation 1", "generation 0"))

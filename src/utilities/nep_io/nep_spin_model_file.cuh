@@ -23,6 +23,11 @@ struct NEP_Spin_Model_File {
   std::vector<double> energy_reference;
   std::vector<float> parameters, q_scaler;
 
+  static const char* angular_rank_error(int rank, int q123, int q233, int q134) {
+    if ((q123 || q233) && rank < 3) return "q_123 and q_233 require structural l_max >= 3.";
+    if (q134 && rank < 4) return "q_134 requires structural l_max >= 4.";
+    return nullptr;
+  }
   static bool is_spin_model(const std::string& filename);
   bool read(std::istream& input, std::string& error);
 };

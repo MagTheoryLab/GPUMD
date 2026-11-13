@@ -7,10 +7,10 @@
 
 namespace nep_spin {
 // The generic and compiled layouts use the same arithmetic and output ordering.
-template<int Capacity, bool Contracted = false>
+template<int Capacity>
 struct RuntimeLayout : View {
   explicit RuntimeLayout(View v) : View(v) {}
-  enum : int { component_capacity = Capacity, spin_capacity = 35, harmonic_capacity = 25, contracted = Contracted, tile = 1, edge_cached = 0 };
+  enum : int { component_capacity = Capacity, spin_capacity = 35, harmonic_capacity = 25, tile = 1, edge_cached = 0 };
   const float* edge_radial = nullptr;
   __device__ inline Primitive primitive(int i) const { return primitives[i]; }
   __device__ inline Sector sector(int i) const { return sectors[i]; }
@@ -75,7 +75,7 @@ __device__ inline void displacement(int n, int i, int j, int slot, Box box,
                                     const double* positions, const double* edges, int plane,
                                     float* r) {
   if (edges) {
-    for (int d = 0; d < 3; ++d) r[d] = edges[d*plane+slot];
+    for (int d = 0; d < 3; ++d) r[d] = edges[size_t(d)*plane+slot];
   } else {
     for (int d = 0; d < 3; ++d) r[d] = positions[d*n+j] - positions[d*n+i];
     apply_mic(box, r[0], r[1], r[2]);
@@ -121,40 +121,27 @@ static __global__ void cache_radial_edges(
       value += fn[k]*coefficient;
       derivative += fnp[k]*coefficient;
     }
-    cache[(2*c)*plane+slot] = value;
-    cache[(2*c+1)*plane+slot] = derivative;
+    cache[size_t(2*c)*plane+slot] = value;
+    cache[size_t(2*c+1)*plane+slot] = derivative;
   }
 }
 template<class Layout>
-__device__ inline void radial(Layout v, int slot, int plane, int c, int channels, int na, int basis, int pair, float cutoff,
-                              float distance, const float* angular, const float* mix,
+__device__ inline void radial(Layout v, int slot, int plane, int c, int channels, int basis, int pair, float cutoff,
+                              float distance, const float* coefficients,
                               float& weight, float& derivative) {
   if (Layout::edge_cached) {
-    weight = v.edge_radial[(2*c)*plane+slot];
-    derivative = v.edge_radial[(2*c+1)*plane+slot];
+    weight = v.edge_radial[size_t(2*c)*plane+slot];
+    derivative = v.edge_radial[size_t(2*c+1)*plane+slot];
     return;
   }
   float fc, fcp, fn[17], fnp[17];
   find_fc_and_fcp(cutoff, 1/cutoff, distance, fc, fcp);
   find_fn_and_fnp(basis, 1/cutoff, distance, fc, fcp, fn, fnp);
   weight = derivative = 0;
-  if (Layout::contracted) {
-    for (int k = 0; k <= basis; ++k) {
-      const float coefficient = angular[(pair*channels+c)*(basis+1)+k];
-      weight += fn[k]*coefficient;
-      derivative += fnp[k]*coefficient;
-    }
-    return;
-  }
-  for (int a = 0; a <= na; ++a) {
-    float value = 0, grad = 0;
-    for (int k = 0; k <= basis; ++k) {
-      float coefficient = angular[(pair*(na+1)+a)*(basis+1)+k];
-      value += fn[k]*coefficient;
-      grad += fnp[k]*coefficient;
-    }
-    weight += value * mix[a*channels+c];
-    derivative += grad * mix[a*channels+c];
+  for (int k = 0; k <= basis; ++k) {
+    const float coefficient = coefficients[(pair*channels+c)*(basis+1)+k];
+    weight += fn[k]*coefficient;
+    derivative += fnp[k]*coefficient;
   }
 }
 
@@ -163,7 +150,7 @@ static __global__ void descriptors(
   Layout v, int n, int structural_dim, int types, int na, int basis, Box box,
   const int* type, const int* active, const double* positions, const double* spins,
   const int* nn, const int* nl, const double* edges, int plane, const float* cutoffs,
-  const float* angular, const float* parameters, float* moments, float* q) {
+  const float* coefficients, const float* parameters, float* moments, float* q) {
   const int work = (blockIdx.x*blockDim.x+threadIdx.x) / Layout::tile;
   const int lane = threadIdx.x % Layout::tile;
   const int i = work / v.channels, c = work % v.channels;
@@ -189,7 +176,7 @@ static __global__ void descriptors(
     read_spin(n, j, type, active, spins, s);
     primitives_at(v, s, phi_j);
     float weight, derivative;
-    radial(v, slot, plane, c, v.channels, na, basis, pair, cutoffs[pair], distance, angular, parameters, weight, derivative);
+    radial(v, slot, plane, c, v.channels, basis, pair, cutoffs[pair], distance, coefficients, weight, derivative);
     #pragma unroll
     for (int t = 0; t < v.term_count; ++t) {
       const Term term = v.term(t);
@@ -210,7 +197,7 @@ static __global__ void descriptors(
     h[term.output] += center[term.weight*v.channels+c]*phi_i[term.primitive].value;
   }
   #pragma unroll
-  for (int m = 0; m < v.components; ++m) moments[(c*v.components+m)*n+i] = h[m];
+  for (int m = 0; m < v.components; ++m) moments[size_t(c*v.components+m)*n+i] = h[m];
   if (c == 0) {
     int column = structural_dim;
     #pragma unroll
@@ -233,7 +220,7 @@ static __global__ void forces(
   Layout v, int n, int structural_dim, int types, int na, int basis, Box box,
   const int* type, const int* active, const double* positions, const double* spins,
   const int* nn, const int* nl, const double* edges, int plane, const float* cutoffs,
-  const float* angular, const float* parameters, const float* moments, const float* fp,
+  const float* coefficients, const float* parameters, const float* moments, const float* fp,
   double* force, double* mforce, double* virial, bool neighbor_virial) {
   const int work = (blockIdx.x*blockDim.x+threadIdx.x) / Layout::tile;
   const int lane = threadIdx.x % Layout::tile;
@@ -253,7 +240,7 @@ static __global__ void forces(
     Sector sector = v.sector(k);
     float derivative = 2*fp[(structural_dim+sector.norm_column+c)*n+i]/(sector.size);
     for (int m = 0; m < sector.size; ++m)
-      pull[sector.offset+m] = derivative*moments[(c*v.components+sector.offset+m)*n+i];
+      pull[sector.offset+m] = derivative*moments[size_t(c*v.components+sector.offset+m)*n+i];
     if (sector.scalar_column >= 0) pull[sector.offset] += fp[(structural_dim+sector.scalar_column+c)*n+i];
   }
   const float* weights = parameters + (na+1)*v.channels;
@@ -288,7 +275,7 @@ static __global__ void forces(
     read_spin(n, j, type, active, spins, s);
     primitives_at(v, s, phi_j);
     float weight, derivative;
-    radial(v, slot, plane, c, v.channels, na, basis, pair, cutoffs[pair], distance, angular, parameters, weight, derivative);
+    radial(v, slot, plane, c, v.channels, basis, pair, cutoffs[pair], distance, coefficients, weight, derivative);
     float radial_pull = 0, angular_pull[3] = {}, neighbor_pull[3] = {};
     #pragma unroll
     for (int t = 0; t < v.term_count; ++t) {

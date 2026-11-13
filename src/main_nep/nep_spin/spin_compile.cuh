@@ -14,7 +14,6 @@ inline std::string compile_layout(const Layout& v) {
   auto count = [&](const char* name, int value) {
     out << "enum : int { " << name << " = " << value << " };\n";
   };
-  count("contracted", 1);
   count("edge_cached", v.lmax == 2 && v.order == 2 ? 1 : 0);
   out << "const float* edge_radial = nullptr;\n";
   // The L2/S2 layout benefits from four lanes per center/channel on both

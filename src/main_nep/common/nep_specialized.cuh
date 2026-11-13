@@ -272,6 +272,7 @@ static __device__ __forceinline__ void find_fn_and_fnp_radial_jit(
   float x = 2.0f * shifted * shifted - 1.0f;
   fn[0] = fc12;
   fnp[0] = fcp12;
+  if (n_max == 0) return;
   fn[1] = (x + 1.0f) * 0.5f * fc12;
   fnp[1] = 2.0f * shifted * rcinv * fc12 + (x + 1.0f) * 0.5f * fcp12;
   float u0 = 1.0f;

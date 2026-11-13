@@ -53,8 +53,8 @@ static __global__ void gpu_find_spin_neighbors(
                 const int index = n1 + N * count;
                 NL_spin[index] = n2;
                 r12_spin[index] = x12;
-                r12_spin[plane_size + index] = y12;
-                r12_spin[2 * plane_size + index] = z12;
+                r12_spin[size_t(plane_size) + index] = y12;
+                r12_spin[2 * size_t(plane_size) + index] = z12;
               }
               ++count;
             }
