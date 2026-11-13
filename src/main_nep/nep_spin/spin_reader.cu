@@ -62,14 +62,15 @@ static std::string frame_key(const Structure& geometry, const Spin_Data::FrameIn
   for (int t : geometry.type)
     key << t << ',';
   key << ';';
+  auto append = [&](double x) { key << (x == 0.0 ? 0.0 : x) << ','; };
   for (double x : label.geometry.cell)
-    key << x << ',';
+    append(x);
   for (const auto& position : label.geometry.position)
-    for (double x : position) key << x << ',';
+    for (double x : position) append(x);
   for (const auto* values : {&label.sx, &label.sy, &label.sz}) {
     key << ';';
     for (double x : *values)
-      key << x << ',';
+      append(x);
   }
   return key.str();
 }

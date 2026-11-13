@@ -1107,18 +1107,23 @@ void NEP_Spin::launch_spin_forces(
   int r12_plane_size)
 {
   const int plane = r12_plane_size ? r12_plane_size : static_cast<int>(data.NL_spin.size());
-  auto launch = [&](auto layout) {
+  auto launch = [&](auto layout, auto* radial) {
     if (decltype(layout)::edge_cached) layout.edge_radial = data.radial_edges.data();
     nep_spin::forces<decltype(layout), true><<<(type.size()*model.spin_compress*decltype(layout)::tile+63)/64, 64>>>(
       layout, static_cast<int>(type.size()), model.struct_descriptor_dim,
       model.num_types, model.n_max_angular, model.basis_size_angular, box,
       type.data(), data.spin_type_active.data(), position.data(), spin.data(),
       data.NN_spin.data(), data.NL_spin.data(), slot_r12, plane,
-      data.spin_cutoff_pair.data(), data.radial_coefficients.data(),
+      data.spin_cutoff_pair.data(), radial,
       data.parameters.data() + model.model_parameter_count - model.spin_projection_parameter_count,
       data.spin_moments.data(), data.Fp.data(), force.data(), mforce.data(), virial.data(), false);
   };
-  launch_md_layout(data.spin_layout.view, model.spin_soc, model.basis_size_angular, launch);
+  if (data.wide_radial.size())
+    launch(nep_spin::WideLayout(data.spin_layout.view), data.wide_radial.data());
+  else
+    launch_md_layout(data.spin_layout.view, model.spin_soc, model.basis_size_angular, [&](auto layout) {
+      launch(layout, data.radial_coefficients.data());
+    });
   GPU_CHECK_KERNEL
 }
 
@@ -1318,7 +1323,6 @@ void NEP_Spin::read_model(const char* file_potential)
   // MD keeps model parameters fixed: contract once, then reuse on every step.
   const int radial_count = model_.num_types * model_.num_types * model_.spin_compress *
                            (model_.basis_size_angular + 1);
-  data_.radial_coefficients.resize(radial_count);
   auto contract = [&](auto* output) {
     nep_spin::contract_radial<<<(radial_count + 127) / 128, 128>>>(
       radial_count, model_.spin_compress, model_.n_max_angular, model_.basis_size_angular,
@@ -1326,10 +1330,12 @@ void NEP_Spin::read_model(const char* file_potential)
       data_.parameters.data() + model_.model_parameter_count - model_.spin_projection_parameter_count, output);
     GPU_CHECK_KERNEL
   };
-  contract(data_.radial_coefficients.data());
   if (nep_spin::needs_wide_forward(model_.spin_soc, file.spin_l_max, model_.spin_order)) {
     data_.wide_radial.resize(radial_count);
     contract(data_.wide_radial.data());
+  } else {
+    data_.radial_coefficients.resize(radial_count);
+    contract(data_.radial_coefficients.data());
   }
   data_.spin_type_active.resize(model_.spin_type_active.size());
   data_.spin_type_active.copy_from_host(model_.spin_type_active.data());
@@ -1643,7 +1649,7 @@ void NEP_Spin::compute(
         potential.data());
       GPU_CHECK_KERNEL
     }
-    save_force_snapshot(force, mforce);
+    save_force_snapshot(force, mforce, potential, virial);
     return;
   }
 
@@ -1831,16 +1837,5 @@ void NEP_Spin::compute(
       potential.data());
     GPU_CHECK_KERNEL
   }
-  save_force_snapshot(force, mforce);
-}
-
-void NEP_Spin::save_force_snapshot(
-  const GPU_Vector<double>& force, const GPU_Vector<double>& mforce)
-{
-  if (force_snapshot_) {
-    force_snapshot_->copy_from_device(force.data());
-    mforce_snapshot_->copy_from_device(mforce.data());
-    force_snapshot_ = nullptr;
-    mforce_snapshot_ = nullptr;
-  }
+  save_force_snapshot(force, mforce, potential, virial);
 }

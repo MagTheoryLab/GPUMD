@@ -147,7 +147,8 @@ private:
     const float* moments,
     double* force,
     double* mforce,
-    double* virial);
+    double* virial,
+    const double* wide_radial);
   SpinForceFunction spin_force_jit_ = nullptr;
   void initialize_spin_compiled(const Spin_Parameters&);
   void initialize(Spin_Parameters&, int, int);

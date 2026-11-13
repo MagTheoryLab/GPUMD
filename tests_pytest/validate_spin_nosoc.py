@@ -251,6 +251,55 @@ def generate(directory):
         print(name,oracle.dim,len(cases),'FD consistency',fd_error,flush=True)
 
 
+def check_radial_cancellation(workdir, ref, model, text):
+    from spin_force_helpers import run_case
+    from validate_spin_model import execute, training_xyz
+    from validate_spin_training import columns
+
+    # Route only the g=j=0 scalar to the ANN. The first three radial channels
+    # contract to 2^-25; a projection of 2^25 gives a measurable force.
+    lines = model.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith('@ parameters')) + 1
+    scale = next(i for i, line in enumerate(lines) if line.startswith('@ q_scaler'))
+    params = [0.] * (scale - start)
+    dim, hidden = ref['dimension'], ref['neurons']
+    for t in range(3):
+        offset = t * hidden * (dim + 2)
+        params[offset + 32] = 1.
+        params[offset + hidden * (dim + 1)] = 1.
+    radial = 3 * hidden * (dim + 2) + 1
+    angular = radial + 9 * 5 * 9
+    for pair in range(9):
+        for channel in range(3):
+            params[angular + (pair * 5 + channel) * 9] = 1.
+    mix = angular + 9 * 5 * 9
+    params[mix:mix+3] = [1., 2.**-25, -1.]
+    params[mix+5] = 2.**25
+    lines[start:scale] = list(map(str, params))
+    lines[scale+1:] = ['1'] * dim
+    model = '\n'.join(lines) + '\n'
+    case = ref['cases'][0]
+    step = 1e-4
+    frames = [copy.deepcopy(case) for _ in range(3)]
+    for frame, delta in zip(frames, (0., step, -step)):
+        frame['positions'][0][0] += delta
+    def check(force, plus, minus):
+        fd = -(plus - minus) / (2 * step)
+        assert abs(fd) > .01 and abs(force - fd) < 2e-5, (force, fd)
+        return abs(force - fd)
+    md = [run_case(workdir, f'cancel-md-{i}', frame, model) for i, frame in enumerate(frames)]
+    errors = {'md': check(md[0]['force'][0][0], sum(md[1]['potential']), sum(md[2]['potential']))}
+    for jit in (0, 1):
+        path = workdir / f'cancel-nep-{jit}'
+        execute(path, text + f'prediction 1\nnep_compile {jit}\n',
+                ''.join(training_xyz(frame) for frame in frames), model)
+        if jit:
+            assert 'Spin aggregate JIT ready' in (path / 'stdout.log').read_text()
+        energies = [row[0] * len(case['types']) for row in columns(path / 'energy_train.out', 1)]
+        errors[f'jit{jit}'] = check(columns(path / 'force_train.out', 3)[0][0], *energies[1:])
+    return errors
+
+
 def validate(fixtures, workdir):
     from validate_spin_model import execute, training_xyz
     from spin_force_helpers import run_case, max_error, flatten
@@ -304,6 +353,7 @@ seed 3401
             assert all(math.isfinite(x) and x<1e-4 for x in errors.values()),(name,jit,errors)
             results[f'training_jit{jit}']=errors
         if (ref['C'], ref['L'], ref['S']) == (1, 4, 4):
+            results['radial_cancellation_fd'] = check_radial_cancellation(workdir, ref, model, text)
             for case in ref.get('wide_training_cases', []):
                 md = run_case(workdir, name+'-md-'+case['name'], case, model)
                 for field in ('energy', 'force', 'mforce', 'virial'):

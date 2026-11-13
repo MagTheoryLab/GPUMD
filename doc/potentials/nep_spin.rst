@@ -325,10 +325,11 @@ Both native and runtime-compiled NEP-spin training evaluate ANN dot products,
 activations, energy sums, and descriptor-gradient accumulation in double
 precision. This limits cancellation errors in small magnetic energy differences
 while keeping the energy and its derivatives on the same arithmetic path.
-Parameters, descriptors, geometry, and force-kernel interfaces retain their
-single-precision storage; descriptor gradients are converted at that interface.
-This does not make the full training pipeline double precision and does not
-change the ordinary NEP or molecular-dynamics ANN paths.
+Model parameters and ANN descriptor gradients are stored in single precision.
+The spin neighbor list uses the original double-precision positions and cell.
+For non-SOC models with spin angular rank four and spin order four, the spin
+descriptor and force kernels share double-precision contracted radial
+coefficients.
 
 Model formats and input
 =======================
@@ -358,6 +359,12 @@ magnetic moments through ``spin:R:3`` in :ref:`model.xyz <model_xyz>`.
 The ``nve`` and ``nvt_nhc`` ensembles evolve positions and velocities while
 keeping the magnetic moments fixed. Only one potential is allowed, and all
 three cell directions must be periodic.
+
+MD stores and integrates Cartesian positions in double precision. Most NEP-spin
+layouts convert relative displacements to single precision for descriptor and
+force evaluation. The non-SOC rank-four, order-four spin kernels evaluate
+these displacements in double precision. Use ``dump_xyz ... precision double``
+to retain coordinate precision in trajectory output.
 
 Atoms whose elements are absent from ``spin_type`` have zero effective spin.
 Their input spin values are ignored; they still contribute geometric

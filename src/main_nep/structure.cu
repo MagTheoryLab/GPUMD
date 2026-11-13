@@ -196,9 +196,9 @@ void NEP_Data_Reader::read_energy(
   }
 }
 
-// The six mechanical labels are conjugate to symmetric strain.
-static void read_symmetric_tensor(
-  const XYZ_Record& record, size_t first, size_t key_length, double scale, float* result)
+static void read_virial_tensor(
+  const XYZ_Record& record, size_t first, size_t key_length, int atoms,
+  const float* volume, bool symmetric, float* result)
 {
   double tensor[9];
   for (int i = 0; i < 9; ++i) {
@@ -208,6 +208,17 @@ static void read_symmetric_tensor(
       token.substr(start, token.size() - start - (i == 8)), record.filename.c_str(),
       record.comment_line_number);
   }
+  if (!symmetric) {
+    // Preserve ordinary NEP's component selection and FP32 normalization.
+    constexpr int index[6] = {0, 4, 8, 3, 7, 6};
+    for (int d = 0; d < 6; ++d) {
+      result[d] = static_cast<float>(tensor[index[d]]);
+      if (volume) result[d] *= -*volume / atoms;
+      else result[d] /= atoms;
+    }
+    return;
+  }
+  const double scale = volume ? -*volume / atoms : 1.0 / atoms;
   result[0] = tensor[0] * scale;
   result[1] = tensor[4] * scale;
   result[2] = tensor[8] * scale;
@@ -228,7 +239,8 @@ void NEP_Data_Reader::read_structure(const XYZ_Record& record, Structure& struct
     const std::string virial_string = "virial=";
     if (tokens[n].substr(0, virial_string.length()) == virial_string) {
       structure.has_virial = true;
-      read_symmetric_tensor(record, n, virial_string.size(), 1.0 / structure.num_atom, structure.virial);
+      read_virial_tensor(record, n, virial_string.size(), structure.num_atom, nullptr,
+                         para.model_name == "nep_spin", structure.virial);
     }
   }
   // if stresses are available, read them and convert them to per atom virials
@@ -239,8 +251,9 @@ void NEP_Data_Reader::read_structure(const XYZ_Record& record, Structure& struct
     if (tokens[n].substr(0, stress_string.length()) == stress_string) {
       has_stress = true;
       float volume = abs(get_det(structure.box_original));
-      read_symmetric_tensor(
-        record, n, stress_string.size(), -volume / structure.num_atom, virials_from_stress.data());
+      read_virial_tensor(
+        record, n, stress_string.size(), structure.num_atom, &volume,
+        para.model_name == "nep_spin", virials_from_stress.data());
     }
   }
   if (structure.has_virial && has_stress) {

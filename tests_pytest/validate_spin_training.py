@@ -546,7 +546,7 @@ def validate_shared_nep_io(root):
     """Guard the ordinary NEP callers of the shared writer and restart reader."""
     config = "\n".join(line for line in NEP_IN.splitlines()
         if not line.startswith(("spin_", "lambda_m", "lambda_tau"))) + "\n"
-    # In this four-atom frame the symmetric off-diagonals per atom are 1, 2, 3.
+    # Use asymmetric tensors to distinguish ordinary NEP and spin label conventions.
     xyz = TRAIN_XYZ.replace('virial="0 0 0 0 0 0 0 0 0"',
                             'virial="0 2 8 6 0 5 16 11 0"', 1)
     stress = " ".join(str(-v / 24**3) for v in (0, 2, 8, 6, 0, 5, 16, 11, 0))
@@ -567,12 +567,20 @@ def validate_shared_nep_io(root):
         raise RuntimeError(result.stdout + result.stderr)
     predictions = [(root / (name + "_train.out")).read_text() for name in ("energy", "force", "virial")]
     for row in columns(root / "virial_train.out", 12)[:2]:
-        assert row[6:] == [0, 0, 0, 1, 2, 3]
+        assert row[6:] == [0, 0, 0, 1.5, 2.75, 4]
     (root / "nep.in").write_text(config + "prediction 1\n")
     result = run(NEP, root)
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
     assert predictions == [(root / (name + "_train.out")).read_text() for name in ("energy", "force", "virial")]
+    spin = root / "spin"
+    write_case(spin, NEP_IN, xyz)
+    for settings in (NEP_IN, NEP_IN + "prediction 1\n"):
+        (spin / "nep.in").write_text(settings)
+        result = run(NEP, spin)
+        assert result.returncode == 0, result.stdout + result.stderr
+    for row in columns(spin / "virial_train.out", 12)[:2]:
+        assert row[6:] == [0, 0, 0, 1, 2, 3]
     return "training/restart/prediction passed"
 
 
