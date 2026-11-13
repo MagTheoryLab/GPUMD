@@ -1109,7 +1109,7 @@ void NEP_Spin::launch_spin_forces(
   const int plane = r12_plane_size ? r12_plane_size : static_cast<int>(data.NL_spin.size());
   auto launch = [&](auto layout, auto* radial) {
     if (decltype(layout)::edge_cached) layout.edge_radial = data.radial_edges.data();
-    nep_spin::forces<decltype(layout), true><<<(type.size()*model.spin_compress*decltype(layout)::tile+63)/64, 64>>>(
+    nep_spin::forces<decltype(layout), true, (decltype(layout)::tile > 1)><<<(type.size()*model.spin_compress*decltype(layout)::tile+63)/64, 64>>>(
       layout, static_cast<int>(type.size()), model.struct_descriptor_dim,
       model.num_types, model.n_max_angular, model.basis_size_angular, box,
       type.data(), data.spin_type_active.data(), position.data(), spin.data(),

@@ -4,6 +4,7 @@
 #include "force/nep_spin/spin_storage.cuh"
 #include "force/nep_spin/spin_warp.cuh"
 #include "utilities/nep_utilities.cuh"
+#include <type_traits>
 
 namespace nep_spin {
 // The generic and compiled layouts use the same arithmetic and output ordering.
@@ -240,13 +241,20 @@ static __global__ void descriptors(
   }
 }
 
-template<class Layout, bool CenterVirial = false, class Real = float>
+template<class Layout>
+__device__ __forceinline__ Term force_term(Layout v, int i, std::false_type) { return v.term(i); }
+template<class Layout>
+__device__ __forceinline__ Term force_term(Layout v, int i, std::true_type) { return v.quadratic_term(i); }
+
+template<class Layout, bool CenterVirial = false, bool Quadratic = false, class Real = float>
 static __global__ void forces(
   Layout v, int n, int structural_dim, int types, int na, int basis, Box box,
   const int* type, const int* active, const double* positions, const double* spins,
   const int* nn, const int* nl, const double* edges, int plane, const float* cutoffs,
   const Real* coefficients, const float* parameters, const float* moments, const float* fp,
   double* force, double* mforce, double* virial, bool neighbor_virial) {
+  static_assert(!Quadratic || (Layout::spin_capacity == 10 &&
+    Layout::harmonic_capacity == 9 && Layout::tile > 1), "quadratic MD layout required");
   const int work = (blockIdx.x*blockDim.x+threadIdx.x) / Layout::tile;
   const int lane = threadIdx.x % Layout::tile;
   const int i = work / v.channels, c = work % v.channels;
@@ -260,13 +268,15 @@ static __global__ void forces(
   SpinValue<Real> phi_i[Layout::spin_capacity];
   read_spin(n, i, type, active, spins, s);
   primitives_at(v, s, phi_i);
-  #pragma unroll
-  for (int k = 0; k < v.sector_count; ++k) {
-    Sector sector = v.sector(k);
-    Real derivative = 2*fp[(structural_dim+sector.norm_column+c)*n+i]/(sector.size);
-    for (int m = 0; m < sector.size; ++m)
-      pull[sector.offset+m] = derivative*moments[size_t(c*v.components+sector.offset+m)*n+i];
-    if (sector.scalar_column >= 0) pull[sector.offset] += fp[(structural_dim+sector.scalar_column+c)*n+i];
+  if (!Quadratic || lane == 0) {
+    #pragma unroll
+    for (int k = 0; k < v.sector_count; ++k) {
+      Sector sector = v.sector(k);
+      Real derivative = 2*fp[(structural_dim+sector.norm_column+c)*n+i]/(sector.size);
+      for (int m = 0; m < sector.size; ++m)
+        pull[sector.offset+m] = derivative*moments[size_t(c*v.components+sector.offset+m)*n+i];
+      if (sector.scalar_column >= 0) pull[sector.offset] += fp[(structural_dim+sector.scalar_column+c)*n+i];
+    }
   }
   const float* weights = parameters + (na+1)*v.channels;
   const float* center = weights + v.path_count*v.channels;
@@ -289,19 +299,58 @@ static __global__ void forces(
     }
   }
   const int geometry_count = (v.lmax+1)*(v.lmax+1);
-  Real density_pull[Layout::harmonic_capacity][Layout::spin_capacity] = {};
-  Real center_gradient[Layout::harmonic_capacity][3] = {}, geometry_sum[Layout::harmonic_capacity] = {};
-  for (int t = 0; t < v.term_count; ++t) {
-    const Term term = v.term(t);
-    const Real adjoint = pull[term.output]*weights[term.path*v.channels+c]*term.coefficient;
-    if (term.neighbor) {
-      density_pull[term.geometry][term.spin] += adjoint;
-    } else {
-      const SpinValue<Real> spin = phi_i[term.spin];
-      density_pull[term.geometry][0] += adjoint*spin.value;
-      for (int d = 0; d < 3; ++d)
-        center_gradient[term.geometry][d] += adjoint*spin.derivative[d];
+  Real density_pull[Quadratic ? 1 : Layout::harmonic_capacity][Quadratic ? 1 : Layout::spin_capacity] = {};
+  Real center_gradient[Quadratic ? 1 : Layout::harmonic_capacity][3] = {}, geometry_sum[Layout::harmonic_capacity] = {};
+  // The native/JIT force launch uses 64 threads; each MD tile shares one adjoint.
+  constexpr int groups = 64 / Layout::tile;
+  constexpr int neighbor_offset = 4*9, adjoint_size = neighbor_offset+9*9;
+  __shared__ volatile Real edge_pull[Quadratic ? adjoint_size * groups : 1];
+  const int group = threadIdx.x / Layout::tile;
+  if (Quadratic) {
+    for (int k = lane; k < adjoint_size; k += Layout::tile) edge_pull[k*groups+group] = 0;
+    __syncwarp(mask);
+  }
+  if (!Quadratic || lane == 0) {
+    constexpr int term_unroll = Quadratic ? 512 : 1;
+    #pragma unroll term_unroll
+    for (int t = 0; t < v.term_count; ++t) {
+      const Term term = force_term(v, t, std::integral_constant<bool, Quadratic>{});
+      const Real adjoint = pull[term.output]*weights[term.path*v.channels+c]*term.coefficient;
+      if (term.neighbor) {
+        if (Quadratic) edge_pull[(neighbor_offset+9*term.geometry+term.spin-1)*groups+group] += adjoint;
+        else density_pull[term.geometry][term.spin] += adjoint;
+      } else {
+        const SpinValue<Real> spin = phi_i[term.spin];
+        if (Quadratic) {
+          edge_pull[term.geometry*groups+group] += adjoint*spin.value;
+          for (int d = 0; d < 3; ++d)
+            edge_pull[((d+1)*9+term.geometry)*groups+group] += adjoint*spin.derivative[d];
+        } else {
+          density_pull[term.geometry][0] += adjoint*spin.value;
+          for (int d = 0; d < 3; ++d)
+            center_gradient[term.geometry][d] += adjoint*spin.derivative[d];
+        }
+      }
     }
+  }
+  if (Quadratic) {
+    __syncwarp(mask);
+    // phi[1..9] spans x,y,z,s2,xz,xy,Qyy,yz,Qzz-xx. Fold it to Cartesian form once.
+    for (int g = lane; g < 9; g += Layout::tile) {
+      const int base = neighbor_offset+9*g;
+      Real a[9];
+      #pragma unroll
+      for (int k = 0; k < 9; ++k) a[k] = edge_pull[(base+k)*groups+group];
+      const Real linear = v.harmonic(3).value, diagonal = v.harmonic(4).value;
+      const Real difference = v.harmonic(5).value, cross = v.harmonic(6).value;
+      const Real cartesian[9] = {
+        linear*a[0], linear*a[1], linear*a[2],
+        a[3]+diagonal*a[6]-difference*a[8], a[3]-2*diagonal*a[6],
+        a[3]+diagonal*a[6]+difference*a[8], cross*a[5], cross*a[4], cross*a[7]};
+      #pragma unroll
+      for (int k = 0; k < 9; ++k) edge_pull[(base+k)*groups+group] = cartesian[k];
+    }
+    __syncwarp(mask);
   }
   for (int neighbor = lane; neighbor < nn[i]; neighbor += Layout::tile) {
     int slot = neighbor*n+i, j = nl[slot], pair = type[i]*types+type[j];
@@ -313,27 +362,50 @@ static __global__ void forces(
     SpinValue<Real> y[Layout::harmonic_capacity], phi_j[Layout::spin_capacity];
     spherical(v, u, y);
     read_spin(n, j, type, active, spins, s);
-    primitives_at(v, s, phi_j);
+    if (!Quadratic) primitives_at(v, s, phi_j);
     Real weight, derivative;
     radial(v, slot, plane, c, v.channels, basis, pair, cutoffs[pair], distance, coefficients, weight, derivative);
     Real radial_pull = 0, angular_pull[3] = {}, neighbor_pull[3] = {};
-    Real spin_pull[Layout::spin_capacity] = {};
-    for (int g = 0; g < geometry_count; ++g) {
-      Real y_pull = density_pull[g][0];
-      const Real weighted_y = weight*y[g].value;
-      geometry_sum[g] += weighted_y;
+    if (Quadratic) {
       #pragma unroll
-      for (int a = 1; a < v.spin_components; ++a) {
-        y_pull += density_pull[g][a]*phi_j[a].value;
-        spin_pull[a] += weighted_y*density_pull[g][a];
+      for (int g = 0; g < 9; ++g) {
+        Real a[9];
+        #pragma unroll
+        for (int k = 0; k < 9; ++k) a[k] = edge_pull[(neighbor_offset+9*g+k)*groups+group];
+        const Real value = edge_pull[g*groups+group] +
+          s[0]*(a[0]+a[3]*s[0]+a[6]*s[1]+a[7]*s[2]) +
+          s[1]*(a[1]+a[4]*s[1]+a[8]*s[2]) + s[2]*(a[2]+a[5]*s[2]);
+        const Real gradient[3] = {
+          a[0]+2*a[3]*s[0]+a[6]*s[1]+a[7]*s[2],
+          a[1]+2*a[4]*s[1]+a[6]*s[0]+a[8]*s[2],
+          a[2]+2*a[5]*s[2]+a[7]*s[0]+a[8]*s[1]};
+        const Real weighted_y = weight*y[g].value;
+        geometry_sum[g] += weighted_y;
+        radial_pull += value*y[g].value;
+        for (int d = 0; d < 3; ++d) {
+          angular_pull[d] += (weight*value)*y[g].derivative[d];
+          neighbor_pull[d] += weighted_y*gradient[d];
+        }
       }
-      radial_pull += y_pull*y[g].value;
-      for (int d = 0; d < 3; ++d)
-        angular_pull[d] += (weight*y_pull)*y[g].derivative[d];
+    } else {
+      Real spin_pull[Layout::spin_capacity] = {};
+      for (int g = 0; g < geometry_count; ++g) {
+        Real y_pull = density_pull[g][0];
+        const Real weighted_y = weight*y[g].value;
+        geometry_sum[g] += weighted_y;
+        #pragma unroll
+        for (int a = 1; a < v.spin_components; ++a) {
+          y_pull += density_pull[g][a]*phi_j[a].value;
+          spin_pull[a] += weighted_y*density_pull[g][a];
+        }
+        radial_pull += y_pull*y[g].value;
+        for (int d = 0; d < 3; ++d)
+          angular_pull[d] += (weight*y_pull)*y[g].derivative[d];
+      }
+      for (int a = 1; a < v.spin_components; ++a)
+        for (int d = 0; d < 3; ++d)
+          neighbor_pull[d] += spin_pull[a]*phi_j[a].derivative[d];
     }
-    for (int a = 1; a < v.spin_components; ++a)
-      for (int d = 0; d < 3; ++d)
-        neighbor_pull[d] += spin_pull[a]*phi_j[a].derivative[d];
     Real longitudinal = 0;
     for (int d = 0; d < 3; ++d) longitudinal += angular_pull[d]*u[d];
     Real grad[3];
@@ -355,7 +427,8 @@ static __global__ void forces(
   }
   for (int g = 0; g < geometry_count; ++g)
     for (int d = 0; d < 3; ++d)
-      center_pull[d] += geometry_sum[g]*center_gradient[g][d];
+      center_pull[d] += geometry_sum[g]*(Quadratic
+        ? edge_pull[((d+1)*9+g)*groups+group] : center_gradient[g][d]);
   #pragma unroll
   for (int d = 0; d < 3; ++d) {
     #pragma unroll
