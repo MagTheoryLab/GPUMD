@@ -67,11 +67,23 @@ __global__ void project_force(
     sv += spin[j] * velocity[j];
     s2 += spin[j] * spin[j];
   }
+  const double magnitude = sqrt(s2);
+  double b2 = 0;
+  if (!fixed && magnitude == 0)
+    for (int c = 0; c < 3; ++c)
+      b2 += force[c * n + i] * force[c * n + i];
   for (int c = 0; c < 3; ++c) {
     const int j = c * n + i;
-    gradient[j] = fixed ? (radius[i] > 0 ? force[j] - spin[j] * sg / s2 : 0.0) : force[j];
-    if (fixed)
+    if (fixed) {
+      gradient[j] = radius[i] > 0 ? force[j] - spin[j] * sg / s2 : 0.0;
       velocity[j] = radius[i] > 0 ? velocity[j] - spin[j] * sv / s2 : 0.0;
+    } else {
+      const double unit = magnitude > 0 ? spin[j] / magnitude
+                                       : (b2 > 0 ? force[j] / sqrt(b2) : (c == 0 ? 1.0 : 0.0));
+      const double radial = magnitude > 0 ? sg / magnitude : sqrt(b2);
+      // Pack the unit-direction gradient rho*B_t and the magnitude gradient B_r.
+      gradient[j] = magnitude * (force[j] - radial * unit) + radial * unit;
+    }
   }
 }
 
@@ -88,7 +100,9 @@ __global__ void move_spins(
   double dt,
   double alpha,
   double ratio,
-  double max_step,
+  double radial_ratio,
+  double max_angle,
+  double max_magnitude_step,
   const double* radius,
   const double* gradient,
   double* velocity,
@@ -97,36 +111,56 @@ __global__ void move_spins(
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n || (fixed && radius[i] == 0))
     return;
+  double s2 = 0, g2 = 0;
+  for (int c = 0; c < 3; ++c) {
+    s2 += spin[c * n + i] * spin[c * n + i];
+    g2 += gradient[c * n + i] * gradient[c * n + i];
+  }
+  const double magnitude = sqrt(s2), length = sqrt(s2 > 0 ? s2 : g2);
+  double unit[3] = {1, 0, 0}, radial_gradient = 0, radial_velocity = 0;
+  for (int c = 0; c < 3; ++c) {
+    if (length > 0)
+      unit[c] = (s2 > 0 ? spin[c * n + i] : gradient[c * n + i]) / length;
+    if (!fixed) {
+      radial_gradient += unit[c] * gradient[c * n + i];
+      radial_velocity += unit[c] * velocity[c * n + i];
+    }
+  }
   double v[3], norm2 = 0;
   for (int c = 0; c < 3; ++c) {
-    v[c] = (1 - alpha) * velocity[c * n + i] + alpha * ratio * gradient[c * n + i];
+    v[c] = (1 - alpha) * (velocity[c * n + i] - radial_velocity * unit[c]) +
+           alpha * ratio * (gradient[c * n + i] - radial_gradient * unit[c]);
     norm2 += v[c] * v[c];
   }
-  const double norm = sqrt(norm2);
-  if (norm == 0)
-    return;
-  // Convert the angular limit to an arc length for fixed-magnitude spins.
-  const double limit = fixed ? max_step * radius[i] : max_step;
-  const double scale = fmin(1.0, limit / (dt * norm));
+  double next_radius = fixed ? radius[i] : magnitude;
   if (!fixed) {
-    for (int c = 0; c < 3; ++c) {
-      velocity[c * n + i] = v[c] * scale;
-      spin[c * n + i] += dt * v[c] * scale;
-    }
-    return;
+    const double w = (1 - alpha) * radial_velocity + alpha * radial_ratio * radial_gradient;
+    const double step = fmax(-max_magnitude_step, fmin(max_magnitude_step, dt * w));
+    next_radius = magnitude + step;
+    radial_velocity = step / dt;
   }
   // Sphere exponential map, with parallel transport of the fictitious velocity.
-  const double theta = dt * norm * scale / radius[i], co = cos(theta), si = sin(theta);
+  const double norm = sqrt(norm2), angular_scale = fixed ? radius[i] : 1.0;
+  const double theta = fmin(max_angle, dt * norm / angular_scale);
+  const double co = cos(theta), si = sin(theta);
   double next[3], next_norm2 = 0;
   for (int c = 0; c < 3; ++c) {
-    const double unit = spin[c * n + i] / radius[i], direction = v[c] / norm;
-    next[c] = co * unit + si * direction;
+    const double direction = norm > 0 ? v[c] / norm : 0.0;
+    next[c] = co * unit[c] + si * direction;
     next_norm2 += next[c] * next[c];
-    velocity[c * n + i] = norm * scale * (co * direction - si * unit);
+    velocity[c * n + i] = theta * angular_scale / dt * (co * direction - si * unit[c]);
   }
-  const double rescale = radius[i] / sqrt(next_norm2);
-  for (int c = 0; c < 3; ++c)
-    spin[c * n + i] = next[c] * rescale;
+  const double rescale = 1.0 / sqrt(next_norm2);
+  for (int c = 0; c < 3; ++c) {
+    next[c] *= rescale;
+    spin[c * n + i] = next_radius * next[c];
+    // A radial crossing reflects the polar chart instead of pinning a moment at zero.
+    if (next_radius < 0)
+      velocity[c * n + i] = -velocity[c * n + i];
+    velocity[c * n + i] += radial_velocity * next[c];
+    if (!fixed && next_radius == 0)
+      velocity[c * n + i] = 0;
+  }
 }
 
 __global__ void move_atoms(
@@ -298,9 +332,11 @@ void Minimizer_Spin_FIRE::compute(
       velocity.data());
     GPU_CHECK_KERNEL
   };
+  double spin_stats[3] = {}, mechanical_g2 = 0, mechanical_v2 = 0;
   auto measure = [&]() {
     auto start = profile ? Clock::now() : Clock::time_point{};
     collect_stats<<<stats_blocks, BLOCK>>>(
+      fixed_magnitude_,
       n,
       atom.spin_per_atom.data(),
       atom.mforce_per_atom.data(),
@@ -311,11 +347,15 @@ void Minimizer_Spin_FIRE::compute(
       stats_blocks > 1 ? stats_partial.data() : stats_gpu.data());
     GPU_CHECK_KERNEL
     if (stats_blocks > 1) {
-      reduce_partials<NUM_STATS, 4, NUM_STATS><<<1, BLOCK>>>(
+      reduce_partials<NUM_STATS, 4, 7><<<1, BLOCK>>>(
         stats_blocks, stats_partial.data(), stats_gpu.data());
       GPU_CHECK_KERNEL
     }
     stats_gpu.copy_to_host(stats);
+    for (int k = 0; k < 3; ++k) {
+      spin_stats[k] = stats[k + 1];
+      stats[k + 1] += stats[k + 7];
+    }
     if (profile) {
       spin_stats_ms += milliseconds(start);
       ++statistics_calls;
@@ -337,6 +377,8 @@ void Minimizer_Spin_FIRE::compute(
         GPU_CHECK_KERNEL
       }
       lattice_stats_gpu.copy_to_host(lattice_stats);
+      mechanical_g2 = lattice_stats[0];
+      mechanical_v2 = lattice_stats[1];
       if (profile) lattice_stats_ms += milliseconds(start);
       for (double value : lattice_stats)
         if (!std::isfinite(value))
@@ -364,6 +406,8 @@ void Minimizer_Spin_FIRE::compute(
           cell_force[k] = w / cell_scale;
           stats[1] += cell_force[k] * cell_force[k];
           stats[2] += cell_velocity[k] * cell_velocity[k];
+          mechanical_g2 += cell_force[k] * cell_force[k];
+          mechanical_v2 += cell_velocity[k] * cell_velocity[k];
           stats[3] += cell_force[k] * cell_velocity[k];
           stats[6] = std::max(
             stats[6],
@@ -464,7 +508,8 @@ void Minimizer_Spin_FIRE::compute(
       positive = 0;
       ++power_resets;
     } else {
-      const double ratio = sqrt(stats[2] / stats[1]);
+      // Each coordinate block keeps its own velocity norm during FIRE mixing.
+      const double ratio = mechanical_g2 > 0 ? sqrt(mechanical_v2 / mechanical_g2) : 0.0;
       if (relax_atoms_) {
         double strain[9] = {}, strain2 = 0;
         if (box_change_) {
@@ -505,8 +550,10 @@ void Minimizer_Spin_FIRE::compute(
         fixed_magnitude_,
         dt,
         alpha,
-        sqrt(stats[2] / stats[1]),
-        fixed_magnitude_ ? max_spin_angle : max_spin_displacement,
+        spin_stats[0] > 0 ? sqrt(spin_stats[1] / spin_stats[0]) : 0.0,
+        stats[7] > 0 ? sqrt(stats[8] / stats[7]) : 0.0,
+        max_spin_angle,
+        max_spin_displacement,
         radius.data(),
         gradient.data(),
         velocity.data(),

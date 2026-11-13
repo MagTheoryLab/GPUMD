@@ -4,10 +4,12 @@
 
 namespace spin_fire_stats {
 constexpr int BLOCK = 256;
-// E, |g|^2, |v|^2, g.v, max_i |g_i|^2, invalid state, relative spin update.
-constexpr int NUM_STATS = 7;
+// E, angular g^2/v^2/g.v, physical residual^2, invalid, relative update,
+// then radial g^2/v^2/g.v (zero for fixed magnitudes).
+constexpr int NUM_STATS = 10;
 
 static __global__ void collect_stats(
+  bool fixed,
   int n,
   const double* spin,
   const double* force,
@@ -20,24 +22,45 @@ static __global__ void collect_stats(
   __shared__ double sums[NUM_STATS][BLOCK];
   const int t = threadIdx.x;
   double e = 0, g2 = 0, v2 = 0, power = 0, gmax2 = 0, invalid = 0, change = 0;
+  double radial_g2 = 0, radial_v2 = 0, radial_power = 0;
   for (int i = blockIdx.x * BLOCK + t; i < n; i += gridDim.x * BLOCK) {
     e += energy[i];
     if (!isfinite(energy[i]))
       invalid = 1;
-    double gi2 = 0;
+    double unit[3] = {1, 0, 0}, gr = 0, vr = 0;
+    if (!fixed) {
+      double s2 = 0, gradient2 = 0;
+      for (int c = 0; c < 3; ++c) {
+        s2 += spin[c * n + i] * spin[c * n + i];
+        gradient2 += gradient[c * n + i] * gradient[c * n + i];
+      }
+      const double length = sqrt(s2 > 0 ? s2 : gradient2);
+      for (int c = 0; c < 3; ++c) {
+        const int j = c * n + i;
+        if (length > 0)
+          unit[c] = (s2 > 0 ? spin[j] : gradient[j]) / length;
+        gr += unit[c] * gradient[j];
+        vr += unit[c] * velocity[j];
+      }
+      radial_g2 += gr * gr;
+      radial_v2 += vr * vr;
+      radial_power += gr * vr;
+    }
+    double gi2 = 0, physical2 = 0;
     for (int c = 0; c < 3; ++c) {
       const int j = c * n + i;
-      const double g = gradient[j], v = velocity[j];
-      if (!isfinite(spin[j]) || !isfinite(force[j]) || !isfinite(g) || !isfinite(v))
+      const double g = gradient[j] - gr * unit[c], v = velocity[j] - vr * unit[c];
+      if (!isfinite(spin[j]) || !isfinite(force[j]) || !isfinite(gradient[j]) || !isfinite(velocity[j]))
         invalid = 1;
       gi2 += g * g;
+      physical2 += fixed ? gradient[j] * gradient[j] : force[j] * force[j];
       v2 += v * v;
       power += g * v;
       const double scale = fmax(1.0, fmax(fabs(spin[j]), fabs(previous_spin[j])));
       change = fmax(change, fabs(spin[j] - previous_spin[j]) / scale);
     }
     g2 += gi2;
-    gmax2 = fmax(gmax2, gi2);
+    gmax2 = fmax(gmax2, physical2);
   }
   sums[0][t] = e;
   sums[1][t] = g2;
@@ -46,13 +69,15 @@ static __global__ void collect_stats(
   sums[4][t] = gmax2;
   sums[5][t] = invalid;
   sums[6][t] = change;
+  sums[7][t] = radial_g2;
+  sums[8][t] = radial_v2;
+  sums[9][t] = radial_power;
   __syncthreads();
   for (int offset = BLOCK / 2; offset > 0; offset /= 2) {
     if (t < offset) {
-      for (int k = 0; k < 4; ++k)
-        sums[k][t] += sums[k][t + offset];
-      for (int k = 4; k < NUM_STATS; ++k)
-        sums[k][t] = fmax(sums[k][t], sums[k][t + offset]);
+      for (int k = 0; k < NUM_STATS; ++k)
+        sums[k][t] = (k >= 4 && k < 7) ? fmax(sums[k][t], sums[k][t + offset])
+                                      : sums[k][t] + sums[k][t + offset];
     }
     __syncthreads();
   }

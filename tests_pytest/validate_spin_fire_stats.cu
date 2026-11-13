@@ -17,13 +17,14 @@
 #define FIRE_CHECK(call) do { auto e = (call); if (e != gpuSuccess) { \
   std::fprintf(stderr, "%s\n", gpuGetErrorString(e)); std::exit(1); } } while (0)
 
-void check(int n, int invalid_plane = -1, bool infinite = false) {
+void check(int n, int invalid_plane = -1, bool infinite = false, bool fixed = true) {
   using namespace spin_fire_stats;
   const int blocks = std::max(1, std::min((n+BLOCK-1)/BLOCK, 320));
   double *data, *partial, *out;
   FIRE_CHECK(gpuMallocManaged(&data, 31*std::max(1,n)*sizeof(double)));
   FIRE_CHECK(gpuMallocManaged(&partial, 15*blocks*sizeof(double)));
-  FIRE_CHECK(gpuMallocManaged(&out, 44*sizeof(double)));
+  constexpr int count = NUM_STATS + 15;
+  FIRE_CHECK(gpuMallocManaged(&out, 2*count*sizeof(double)));
   double *spin=data, *force=data+3*n, *gradient=data+6*n, *velocity=data+9*n;
   double *previous_spin=data+12*n, *position=data+15*n, *previous=data+18*n;
   double *virial=data+21*n, *energy=data+30*n;
@@ -32,6 +33,7 @@ void check(int n, int invalid_plane = -1, bool infinite = false) {
     for (int c=0; c<3; ++c) {
       const int j=c*n+i;
       spin[j]=.7*std::sin(.13*i+c);
+      if (!fixed && i%13==0) spin[j]=0;
       gradient[j]=.3*std::cos(.17*i+c);
       force[j]=.6*std::sin(.19*i+c);
       velocity[j]=(i%2 ? -1 : 1)*.25*gradient[j];
@@ -68,22 +70,48 @@ void check(int n, int invalid_plane = -1, bool infinite = false) {
       if (!std::isfinite(virial[c*n+i])) ref[11]=1;
     }
   }
-  collect_stats<<<1,BLOCK>>>(n,spin,force,energy,gradient,velocity,previous_spin,out);
-  collect_lattice_stats<<<1,BLOCK>>>(n,position,previous,force,velocity,virial,out+7);
-  collect_stats<<<blocks,BLOCK>>>(n,spin,force,energy,gradient,velocity,previous_spin,partial);
-  reduce_partials<7,4,7><<<1,BLOCK>>>(blocks,partial,out+22);
+  long double expected[count]={};
+  for (int k=0;k<7;++k) expected[k]=ref[k];
+  for (int k=0;k<15;++k) expected[NUM_STATS+k]=ref[7+k];
+  if (!fixed) {
+    for (int k=1;k<=4;++k) expected[k]=0;
+    for (int i=0;i<n;++i) {
+      long double s2=0,g2=0,gr=0,vr=0,physical2=0,unit[3]={1,0,0};
+      for (int c=0;c<3;++c) {
+        s2+=(long double)spin[c*n+i]*spin[c*n+i];
+        g2+=(long double)gradient[c*n+i]*gradient[c*n+i];
+      }
+      const long double length=std::sqrt(s2>0 ? s2 : g2);
+      for (int c=0;c<3;++c) {
+        const int j=c*n+i;
+        if (length>0) unit[c]=(s2>0 ? spin[j] : gradient[j])/length;
+        gr+=unit[c]*gradient[j];vr+=unit[c]*velocity[j];
+        physical2+=(long double)force[j]*force[j];
+      }
+      expected[4]=std::fmax(expected[4],physical2);
+      expected[7]+=gr*gr;expected[8]+=vr*vr;expected[9]+=gr*vr;
+      for (int c=0;c<3;++c) {
+        const long double g=gradient[c*n+i]-gr*unit[c],v=velocity[c*n+i]-vr*unit[c];
+        expected[1]+=g*g;expected[2]+=v*v;expected[3]+=g*v;
+      }
+    }
+  }
+  collect_stats<<<1,BLOCK>>>(fixed,n,spin,force,energy,gradient,velocity,previous_spin,out);
+  collect_lattice_stats<<<1,BLOCK>>>(n,position,previous,force,velocity,virial,out+NUM_STATS);
+  collect_stats<<<blocks,BLOCK>>>(fixed,n,spin,force,energy,gradient,velocity,previous_spin,partial);
+  reduce_partials<NUM_STATS,4,7><<<1,BLOCK>>>(blocks,partial,out+count);
   collect_lattice_stats<<<blocks,BLOCK>>>(n,position,previous,force,velocity,virial,partial);
-  reduce_partials<15,3,6><<<1,BLOCK>>>(blocks,partial,out+29);
+  reduce_partials<15,3,6><<<1,BLOCK>>>(blocks,partial,out+count+NUM_STATS);
   FIRE_CHECK(gpuGetLastError()); FIRE_CHECK(gpuDeviceSynchronize());
   for (int version=0; version<2; ++version)
-    for (int k=0; k<22; ++k) {
-      const double got=out[version*22+k];
-      bool pass=std::isnan(ref[k]) ? std::isnan(got) : std::isinf(ref[k]) ? got==ref[k]
-        : std::fabs(got-ref[k])<=1e-10L+3e-12L*std::fabs(ref[k]);
-      if (k==5 || k==11) pass=got==ref[k];
+    for (int k=0; k<count; ++k) {
+      const double got=out[version*count+k];
+      bool pass=std::isnan(expected[k]) ? std::isnan(got) : std::isinf(expected[k]) ? got==expected[k]
+        : std::fabs(got-expected[k])<=1e-10L+3e-12L*std::fabs(expected[k]);
+      if (k==5 || k==NUM_STATS+4) pass=got==expected[k];
       if (!pass) {
         std::fprintf(stderr,"FAIL n=%d plane=%d version=%d field=%d ref=%.18Lg got=%.18g\n",
-          n,invalid_plane,version,k,ref[k],got);
+          n,invalid_plane,version,k,expected[k],got);
         std::exit(2);
       }
     }
@@ -94,5 +122,6 @@ void check(int n, int invalid_plane = -1, bool infinite = false) {
 int main() {
   for (int n : {0,1,255,256,257,4095,4096,4097,100013}) check(n);
   for (int plane : {0,3,6,9,15,21,30}) check(257,plane);
+  for (int n : {0,1,257,100013}) check(n,-1,false,false);
   check(257,6,true); check(257,30,true);
 }
