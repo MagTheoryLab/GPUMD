@@ -11,7 +11,9 @@ struct Storage {
   GPU_Vector<Center> centers;
   GPU_Vector<Harmonic> harmonic_data;
   View view{};
+  bool aggregate_order2 = false;
   void initialize(int c, int l, int s, int soc) {
+    aggregate_order2 = soc && c == 3 && s == 2 && (l == 3 || l == 4);
     Layout layout(c, l, s, soc);
     primitives.resize(layout.primitives.size());
     primitives.copy_from_host(layout.primitives.data());

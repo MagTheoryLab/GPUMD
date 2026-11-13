@@ -17,6 +17,14 @@ def main():
     template = (FIXTURE/'c3l2s2.nep').read_text().split('@ parameters')[0]
     cases = json.loads((FIXTURE/'c3l2s2.json').read_text())['cases']
     xyz = ''.join(training_xyz(case) for case in cases.values())
+    # FP64 autograd reference for the seeded models below: E/atom, first Fe
+    # force and magnetic force, then the six symmetric virial components/atom.
+    triclinic_reference = {
+        3: [-.093570807, .006894585, .004953089, .004489590, .070759494, -.035416741,
+            .097256480, -.014927060, -.011665854, -.003631408, .005918129, .004268369, .000251857],
+        4: [-.067485760, .013377681, -.010326244, .001702646, -.042160576, .021577156,
+            -.058922727, .017591940, .000237735, .012242427, -.000468419, -.000441563, .001200707],
+    }
     report = {}
     # L3/order2 and L4/order2 exceed the 512-term spin specialization limit.
     for C,L,S,response,projection,dispatch in [
@@ -49,6 +57,16 @@ def main():
             error = maximum_error(a, b)
             assert error < 1e-4, (C,L,S,file,error)
             errors[file] = error
+        if C == 3 and S == 2:
+            frame = list(cases).index('triclinic')
+            atom = sum(len(case['types']) for case in list(cases.values())[:frame])
+            actual = []
+            for field, row, width in [('energy',frame,1), ('force',atom,3),
+                                      ('mforce',atom,3), ('virial',frame,6)]:
+                lines = (dirs[0]/f'{field}_train.out').read_text().splitlines()
+                actual.extend(map(float, lines[row].split()[:width]))
+            errors['triclinic_FP64'] = maximum_error(actual, triclinic_reference[L])
+            assert errors['triclinic_FP64'] < 2e-6, (L, actual)
         report[f'c{C}l{L}s{S}'] = errors
     (args.workdir/'report.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))

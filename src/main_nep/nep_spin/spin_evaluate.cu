@@ -70,7 +70,9 @@ void NEP_Spin_Model::find_additional_descriptors(Spin_Parameters& para, Dataset&
         data.spin_cutoff_pair.data(), data.radial_coefficients.data(),
         projection, data.spin_moments.data(), nep_data[device_id].descriptors.data());
     };
-    if (data.spin_layout.view.components <= 100)
+    if (data.spin_layout.aggregate_order2)
+      launch(nep_spin::AggregateOrder2(data.spin_layout.view));
+    else if (data.spin_layout.view.components <= 100)
       launch(nep_spin::DynamicLayout(data.spin_layout.view));
     else
       launch(nep_spin::WideLayout(data.spin_layout.view));
@@ -126,7 +128,9 @@ void NEP_Spin_Model::find_additional_force(Spin_Parameters& para, Dataset& datas
         projection, data.spin_moments.data(), nep_data[device_id].Fp.data(), data.force.data(),
         data.mforce.data(), data.virial.data(), true);
     };
-    if (data.spin_layout.view.components <= 100)
+    if (data.spin_layout.aggregate_order2)
+      launch(nep_spin::AggregateOrder2(data.spin_layout.view));
+    else if (data.spin_layout.view.components <= 100)
       launch(nep_spin::DynamicLayout(data.spin_layout.view));
     else
       launch(nep_spin::WideLayout(data.spin_layout.view));

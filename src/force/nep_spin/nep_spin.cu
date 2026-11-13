@@ -1065,7 +1065,9 @@ void NEP_Spin::launch_spin_descriptors(
       if (model.spin_soc) launch(nep_spin::MDLayoutSOC<4>());
       else launch(nep_spin::MDLayoutNoSOC<4>());
     }
-  } else if (data.spin_layout.view.components <= 100)
+  } else if (data.spin_layout.aggregate_order2)
+    launch(nep_spin::AggregateOrder2(data.spin_layout.view));
+  else if (data.spin_layout.view.components <= 100)
     launch(nep_spin::DynamicLayout(data.spin_layout.view));
   else
     launch(nep_spin::WideLayout(data.spin_layout.view));
@@ -1109,7 +1111,9 @@ void NEP_Spin::launch_spin_forces(
       if (model.spin_soc) launch(nep_spin::MDLayoutSOC<4>());
       else launch(nep_spin::MDLayoutNoSOC<4>());
     }
-  } else if (data.spin_layout.view.components <= 100)
+  } else if (data.spin_layout.aggregate_order2)
+    launch(nep_spin::AggregateOrder2(data.spin_layout.view));
+  else if (data.spin_layout.view.components <= 100)
     launch(nep_spin::DynamicLayout(data.spin_layout.view));
   else
     launch(nep_spin::WideLayout(data.spin_layout.view));
