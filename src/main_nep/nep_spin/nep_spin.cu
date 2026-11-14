@@ -578,7 +578,7 @@ void NEP_Spin_Model::report_error(const TrainingReport& report)
       mv,
       tv);
     if (para.split_mforce_loss)
-      fprintf(file, " %.8e %.8e %.8e %.8e", mp_train, mt_train, mp_test, mt_test);
+      fprintf(file, " %.5f %.5f %.5f %.5f", mp_train, mt_train, mp_test, mt_test);
     if (para.has_ediff_combinations)
       fprintf(file, " %.5f %.5f", train.ediff, test.ediff);
     fprintf(file, "\n");
