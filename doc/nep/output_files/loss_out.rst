@@ -1,11 +1,11 @@
 .. _loss_out:
 .. index::
-   single: loss.txt (output file)
+   single: loss.out (output file)
 
 ``loss.out``
 ============
 
-This files contains the terms that enter the :ref:`loss function <nep_loss_function>`, written every :ref:`output_interval <kw_output_interval>` generations (100 by default).
+This file contains the terms that enter the :ref:`loss function <nep_loss_function>`, written every :ref:`output_interval <kw_output_interval>` generations (100 by default).
 
 File format
 -----------
@@ -90,10 +90,6 @@ Here, :attr:`rmse_mforce` is the Cartesian magnetic-force RMSE in eV/muB and
 Only structures containing magnetic-force labels contribute to these two
 terms. The grouped magnetic-response loss, when enabled, contributes to
 :attr:`total` but currently has no separate output column.
-
-Spin training prints all real-valued loss columns with five digits after the
-decimal point, in both ``loss.out`` and standard output. The generation remains
-an integer; column names and ordering are unchanged.
 
 With :ref:`independent magnetic losses <kw_lambda_m_parallel>`, four additional
 columns precede any energy-difference columns::

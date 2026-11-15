@@ -4,6 +4,10 @@
 Output files
 ============
 
+Output files are created by the commands listed below.
+**Append** keeps existing data and adds new results; **Overwrite** replaces existing contents.
+A file page describes its columns, units, and any headers or blocks needed to separate runs.
+
 .. list-table::
    :header-rows: 1
    :width: 100%
@@ -99,7 +103,7 @@ Output files
      - Append
    * - :ref:`dpdt.out <dpdt_out>`
      - :ref:`compute_dpdt <kw_compute_dpdt>`
-     - time derivative of the polarizability and its time integration
+     - Total dipole-moment derivative and its time integral
      - Append
    * - :ref:`sdc.out <sdc_out>`
      - :ref:`compute_sdc <kw_compute_sdc>`
@@ -123,11 +127,11 @@ Output files
      - Overwrite
    * - :ref:`omega2.out <omega2_out>`
      - :ref:`compute_phonon <kw_compute_phonon>`
-     - Phonon frequency squared :math:`\omega^2(\boldsymbol{k})` for the input :math:`\boldsymbol{k}`-points
+     - Phonon angular frequency squared :math:`\omega^2(\boldsymbol{k})` for the input :math:`\boldsymbol{k}`-points
      - Overwrite
    * - :ref:`viscosity.out <viscosity_out>`
      - :ref:`compute_viscosity <kw_compute_viscosity>`
-     - Viscosity and stress auto-correlation function
+     - Viscosity and stress autocorrelation function
      - Append
    * - :ref:`onsager.out <onsager_out>`
      - :ref:`compute_hnemdec <kw_compute_hnemdec>`
@@ -183,9 +187,9 @@ Output files
      - One file per sub-run
 
 .. toctree::
-   :maxdepth: 0
+   :maxdepth: 1
    :caption: Contents
-   
+
    cohesive_out
    compute_out
    ttm_electron_temperature_out
@@ -222,3 +226,66 @@ Output files
    lsqt_sigma_out
    angular_rdf_out
    orientorder_out
+
+.. _replica_output_files:
+
+Replica dynamics
+----------------
+
+Runs with :ref:`multi_replica <kw_multi_replica>` automatically write the diagnostics below.
+Trajectories require :ref:`replica trajectory output <replica_kw_dump_xyz>`.
+Fresh runs overwrite diagnostics and trajectories; resumed runs append.
+Temperature ladders, ladder reports, and restart files are overwritten.
+
+.. list-table::
+   :header-rows: 1
+   :widths: auto
+
+   * - File name
+     - Generating keyword
+     - Brief description
+     - Output mode
+   * - :ref:`remd_temps.in <replica_remd_temps>`
+     - :ref:`multi_replica remd <replica_remd>`
+     - Temperature ladder
+     - Overwrite
+   * - :ref:`remd_exchange.out <replica_remd_exchange>`
+     - :ref:`multi_replica remd <replica_remd>`
+     - Exchange attempts
+     - Append on resume
+   * - :ref:`remd_temperature_status.out <replica_remd_status>`
+     - :ref:`multi_replica remd <replica_remd>`
+     - Replica-to-temperature mapping
+     - Append on resume
+   * - :ref:`remd_thermo.out <replica_remd_thermo>`
+     - :ref:`multi_replica remd <replica_remd>`
+     - Target temperatures, energies, and volumes
+     - Append on resume
+   * - :ref:`remd_ladder.out <replica_remd_ladder>`
+     - :ref:`multi_replica remd <replica_remd>`
+     - Acceptance statistics
+     - Overwrite
+   * - :ref:`prd_events.out <replica_prd_events>`
+     - :ref:`multi_replica prd <replica_prd>`
+     - Transitions and physical clock
+     - Append on resume
+   * - :ref:`Replica trajectory files <replica_trajectory>`
+     - :ref:`dump_xyz <replica_kw_dump_xyz>`
+     - Atomic configurations
+     - Append on resume
+   * - :ref:`Replica restart files <replica_restart>`
+     - :ref:`multi_replica <kw_multi_replica>`
+     - State for continuing a run
+     - Overwrite
+
+.. toctree::
+   :maxdepth: 1
+
+   remd_temps
+   remd_exchange
+   remd_status
+   remd_thermo
+   remd_ladder
+   prd_events
+   replica_trajectory
+   replica_restart

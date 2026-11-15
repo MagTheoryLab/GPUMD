@@ -5,8 +5,19 @@
 ``viscosity.out``
 =================
 
-This file contains the stress auto-correlation function and the running viscosity from the Green-Kubo method.
+This file contains the stress autocorrelation function and the running viscosity from the Green-Kubo method.
 It is produced when invoking the :ref:`compute_viscosity keyword <kw_compute_viscosity>` in the :ref:`run.in input file <run_in>`.
+
+The correlation functions use fluctuations of the volume-integrated pressure tensor, including both kinetic and virial contributions:
+
+.. math::
+
+   Q_{\alpha\beta}(t) &= \sum_i \left[m_i v_{i\alpha}(t)v_{i\beta}(t) + W_{i,\alpha\beta}(t)\right], \\
+   S_{\alpha\beta}(t) &= Q_{\alpha\beta}(t) - \overline{Q}_{\alpha\beta}.
+
+Here, :math:`W_{i,\alpha\beta}` is the per-atom virial tensor and :math:`\overline{Q}_{\alpha\beta}` is the average over the sampled trajectory.
+Both :math:`Q_{\alpha\beta}` and :math:`S_{\alpha\beta}` have units of eV.
+The quantities :math:`S_{\alpha\beta}` in the formulas below therefore already have their mean removed.
 
 File format
 -----------
@@ -38,4 +49,3 @@ Note:
 * The longitudinal viscosity can be calculated as :math:`\eta_{\rm L} = \frac{1}{3} \left( \eta_{xx} + \eta_{yy} + \eta_{zz} \right)`.
 * The bulk viscosity :math:`\eta_{\rm B}` can be calculated from :math:`\eta_{\rm B} + \frac{4}{3} \eta_{\rm S} = \eta_{\rm L}`.
 * We have the following symmetric property, :math:`\eta_{\alpha\beta} = \eta_{\beta\alpha}`, which should be confirmed by the output data.
-

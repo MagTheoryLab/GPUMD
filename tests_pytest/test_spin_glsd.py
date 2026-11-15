@@ -7,8 +7,7 @@ import subprocess
 import numpy as np
 import pytest
 
-from spin_analytic_model import analytic_model, structure
-from spin_fixtures import FIXTURE
+from spin_analytic_model import REFERENCE_MODEL, analytic_model, structure
 from validate_spin_glsd_runtime import damping
 from validate_spin_multigpu import frame
 
@@ -110,7 +109,7 @@ def test_glsd_default_four_corrections_accepts_last_finite_update(tmp_path):
 
 
 def test_glsd_nep_energy_error_decreases_with_timestep(tmp_path):
-    model = (FIXTURE / "c3l2s2_fege.nep").read_text().replace("spin_type Fe\n", "spin_type Fe Ge\n")
+    model = REFERENCE_MODEL.read_text().replace("spin_type Fe\n", "spin_type Fe Ge\n")
     initial, result = run(tmp_path, "initial", INITIAL, "nve", 1, 0, model=model)
     assert result.returncode == 0, result.stdout + result.stderr
     energy = np.sum(frame(initial / "state.xyz")["potential"])

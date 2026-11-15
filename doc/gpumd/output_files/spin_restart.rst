@@ -1,7 +1,9 @@
 .. _spin_restart:
 
-Spin restart
-============
+``restart.xyz`` (spin)
+======================
+
+See :ref:`restart_xyz` for the general restart instructions.
 
 Use ``dump_restart <interval>`` to save the current cell and per-atom state.
 To start another simulation, copy ``restart.xyz`` to ``model.xyz``, provide the

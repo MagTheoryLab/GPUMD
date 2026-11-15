@@ -5,28 +5,39 @@
 :attr:`spin_cutoff`
 ====================
 
-This keyword sets the spin cutoff distance in Å::
+This keyword sets the magnetic cutoff distance in Å.
+
+Syntax
+------
+
+::
 
   spin_cutoff <cutoff>
   spin_cutoff <cutoff_type_1> ... <cutoff_type_N>
 
-Use either one value of at least 3 Å, which is broadcast to all atom types, or exactly
-one value of at least 3 Å for every type in the order declared by :ref:`type
+Parameters
+----------
+
+Set the :ref:`type keyword <kw_type>` before this keyword.
+
+Use either one positive value, which is broadcast to all atom types, or exactly
+one positive value for every type in the order declared by :ref:`type
 <kw_type>`. If this keyword is absent, the largest ordinary radial
 :ref:`cutoff <kw_cutoff>` is broadcast.
 
-Each value must be finite and at least 3 Å, matching the lower bound of the
-ordinary angular cutoff. This restriction applies to both training inputs and
-model files, including each entry in the per-type form.
-Models with a magnetic cutoff below 3 Å are rejected.
+Each value must be finite, at least 3 Å, and no larger than the ordinary radial cutoff.
+The same bounds apply when reading a model file. To use a larger magnetic cutoff, increase the ordinary radial cutoff as well.
 
-Every value must be less than or equal to the largest ordinary radial cutoff
-(``rc_radial_max``). The same restriction applies when reading a model
-file. To use a larger magnetic cutoff, increase the ordinary radial cutoff
-as well.
-
-For an edge between types :math:`a` and :math:`b`, spin uses the arithmetic mean
+For an edge between types :math:`a` and :math:`b`, the model uses the arithmetic mean
 :math:`(r_a^\mathrm{spin}+r_b^\mathrm{spin})/2`.
+
+Output
+------
+
+None.
+
+Examples
+--------
 
 For example, with ``type 2 Fe Ge``::
 
@@ -35,3 +46,8 @@ For example, with ``type 2 Fe Ge``::
 
 uses 4, 5, and 6 Å for Fe--Fe, Fe--Ge, and Ge--Ge magnetic edges. The ``spin_cutoff``
 line does not change the ordinary structural NEP cutoffs.
+
+Notes
+-----
+
+None.

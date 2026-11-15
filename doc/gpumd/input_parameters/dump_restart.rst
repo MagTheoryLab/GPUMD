@@ -5,31 +5,42 @@
 :attr:`dump_restart`
 ====================
 
-Write a restart file.
+Write the current configuration, including atomic velocities, to :ref:`restart.xyz <restart_xyz>` for continuing a simulation.
 
 Syntax
 ------
 
-This keyword only requires a single parameter, which is the output interval (number of steps) of updating the restart file::
+::
 
   dump_restart <interval>
 
-Example
--------
+Parameters
+----------
+
+``interval`` is a positive integer giving the number of MD steps between updates.
+
+Output
+------
+
+The current configuration is written to :ref:`restart.xyz <restart_xyz>`.
+
+Examples
+--------
 
 To update the restart file every 100000 steps for a run, one can add::
 
   dump_restart 100000
 
 before the :ref:`run keyword <kw_run>`.
+Each update overwrites the file.
+To save the configuration at the final step, choose a run length that is a multiple of the output interval.
 
+Notes
+-----
 
-Caveats
--------
-This keyword is not propagating.
-That means, its effect will not be passed from one run to the next.
+Repeat this command before each run that needs this output.
 
 NEP-spin models also save the per-atom Cartesian ``spin:R:3`` values.
 
-For Spin velocity and the state preserved when starting another run,
+For the additional Spin data,
 see :ref:`Spin restart <spin_restart>`.
