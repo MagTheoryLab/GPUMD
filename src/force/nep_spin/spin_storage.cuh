@@ -18,22 +18,88 @@
 
 namespace nep_spin
 {
+struct ProjectionView {
+  const ProjectionRow* rows;
+  const ProjectionTerm* terms;
+  const float* neighbor_weights;
+};
+struct ProjectionStorage {
+  GPU_Vector<ProjectionRow> rows;
+  GPU_Vector<ProjectionTerm> terms;
+  GPU_Vector<float> neighbor_weights;
+  bool has_pairs = false;
+  bool single_term_rows = false;
+
+  void initialize(const Layout& layout, const float* weights, bool transpose, bool paired = false)
+  {
+    SpinProjection projection(layout, weights, transpose, paired);
+    has_pairs = paired;
+    single_term_rows = paired && std::all_of(projection.rows.begin(), projection.rows.end(),
+                                             [](const ProjectionRow& row) { return row.count == 1; });
+    if (!single_term_rows) {
+      rows.resize(projection.rows.size());
+      rows.copy_from_host(projection.rows.data());
+    }
+    terms.resize(projection.packed.size());
+    terms.copy_from_host(projection.packed.data());
+    if (paired) {
+      neighbor_weights.resize(projection.neighbor_weights.size());
+      neighbor_weights.copy_from_host(projection.neighbor_weights.data());
+    }
+  }
+
+  bool paired() const { return has_pairs; }
+
+  ProjectionView view() const
+  {
+    // Equally sized one-term rows stay in their original order and need no index table.
+    return {single_term_rows ? nullptr : rows.data(), terms.data(),
+            has_pairs ? neighbor_weights.data() : nullptr};
+  }
+};
+
 struct Storage {
   GPU_Vector<Primitive> primitives;
   GPU_Vector<Sector> sectors;
   GPU_Vector<Term> terms;
+  GPU_Vector<int> adjoint_order;
+  ProjectionStorage forward, transpose;
   GPU_Vector<Center> centers;
   GPU_Vector<Harmonic> harmonic_data;
   View view{};
-  void initialize(int c, int l, int s, int soc)
+  void initialize(
+    int c, int l, int s, int soc, int adjoint_lanes = 1, const float* fixed_weights = nullptr,
+    bool project_forward = true, bool paired = false)
   {
     Layout layout(c, l, s, soc);
+    const int elements = (l + 1) * (l + 1) * layout.spin_components;
+    if (compact_fused_rows(adjoint_lanes, elements, c > 1) && layout.terms.size() <= size_t(2 * elements))
+      paired = false;
     primitives.resize(layout.primitives.size());
     primitives.copy_from_host(layout.primitives.data());
     sectors.resize(layout.sectors.size());
     sectors.copy_from_host(layout.sectors.data());
     terms.resize(layout.terms.size());
     terms.copy_from_host(layout.terms.data());
+    if (!paired && adjoint_lanes > 1 && adjoint_lanes != SpinProjection::width) {
+      // Offsets followed by term indices. Each geometry row has one writer, in model order.
+      std::vector<int> order(adjoint_lanes + 1);
+      for (int lane = 0; lane < adjoint_lanes; ++lane) {
+        order[lane] = static_cast<int>(order.size());
+        for (int t = 0; t < static_cast<int>(layout.terms.size()); ++t)
+          if (layout.terms[t].geometry % adjoint_lanes == lane)
+            order.push_back(t);
+      }
+      order[adjoint_lanes] = static_cast<int>(order.size());
+      adjoint_order.resize(order.size());
+      adjoint_order.copy_from_host(order.data());
+    }
+    if (fixed_weights) {
+      if (project_forward)
+        forward.initialize(layout, fixed_weights, false);
+      if (paired || adjoint_lanes == SpinProjection::width)
+        transpose.initialize(layout, fixed_weights, true, paired);
+    }
     centers.resize(layout.centers.size());
     if (!layout.centers.empty())
       centers.copy_from_host(layout.centers.data());
