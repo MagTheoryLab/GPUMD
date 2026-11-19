@@ -19,6 +19,7 @@ magnetic forces, and virials.
 
 Contributors:
 Chengbing Chen, 1747193328@qq.com
+  Shared channel contractions and radial caching for spin MD.
 
 References:
 Zheyong Fan et al., Neuroevolution machine learning potentials:
@@ -1065,7 +1066,8 @@ struct MDPolynomialLayout : nep_spin::View {
     primitive_count = nep_spin::PrimitiveBasis(L, Order).count,
     spin_capacity = spin_components,
     // SOC has at most four parity sectors per rank; no-SOC has the full product.
-    component_capacity = harmonic_capacity *
+    component_capacity =
+      harmonic_capacity *
       ((spin_lmax + 1) * (spin_lmax + 1) > 4 ? (spin_lmax + 1) * (spin_lmax + 1) : 4),
     tile = md_force_lanes(L, Order),
     edge_cached = false
@@ -1087,17 +1089,27 @@ struct MDPolynomialLayout : nep_spin::View {
 // One full warp writes and consumes different moment components of the same center.
 template <int L, int Order>
 struct nep_spin::CenterMomentRows<MDPolynomialLayout<L, Order>>
-  : std::integral_constant<bool, MDPolynomialLayout<L, Order>::tile == 32> {};
+  : std::integral_constant<bool, MDPolynomialLayout<L, Order>::tile == 32> {
+};
 
 template <int L, class Launch>
 static void launch_md_order(nep_spin::View v, Launch launch)
 {
   switch (v.order) {
-    case 1: launch(MDPolynomialLayout<L, 1>(v), std::false_type{}); break;
-    case 2: launch(MDPolynomialLayout<L, 2>(v), std::integral_constant<bool, (L >= 2)>{}); break;
-    case 3: launch(MDPolynomialLayout<L, 3>(v), std::false_type{}); break;
-    case 4: launch(MDPolynomialLayout<L, 4>(v), std::false_type{}); break;
-    default: PRINT_INPUT_ERROR("Unsupported spin order for MD.");
+    case 1:
+      launch(MDPolynomialLayout<L, 1>(v), std::false_type{});
+      break;
+    case 2:
+      launch(MDPolynomialLayout<L, 2>(v), std::integral_constant<bool, (L >= 2)>{});
+      break;
+    case 3:
+      launch(MDPolynomialLayout<L, 3>(v), std::false_type{});
+      break;
+    case 4:
+      launch(MDPolynomialLayout<L, 4>(v), std::false_type{});
+      break;
+    default:
+      PRINT_INPUT_ERROR("Unsupported spin order for MD.");
   }
 }
 
@@ -1136,12 +1148,23 @@ static void launch_md_layout(nep_spin::View v, bool soc, Launch launch)
       quadratic(nep_spin::MDLayoutNoSOC<2>());
   } else {
     switch (v.lmax) {
-      case 0: launch_md_order<0>(v, launch); break;
-      case 1: launch_md_order<1>(v, launch); break;
-      case 2: launch_md_order<2>(v, launch); break;
-      case 3: launch_md_order<3>(v, launch); break;
-      case 4: launch_md_order<4>(v, launch); break;
-      default: PRINT_INPUT_ERROR("Unsupported spin angular rank for MD.");
+      case 0:
+        launch_md_order<0>(v, launch);
+        break;
+      case 1:
+        launch_md_order<1>(v, launch);
+        break;
+      case 2:
+        launch_md_order<2>(v, launch);
+        break;
+      case 3:
+        launch_md_order<3>(v, launch);
+        break;
+      case 4:
+        launch_md_order<4>(v, launch);
+        break;
+      default:
+        PRINT_INPUT_ERROR("Unsupported spin angular rank for MD.");
     }
   }
 }
@@ -1197,7 +1220,8 @@ void NEP_Spin::launch_spin_descriptors(
     using Layout = decltype(layout);
     using Real = typename std::remove_pointer<decltype(radial)>::type;
     using Edge = nep_spin::RadialEdge<Real>;
-    const int neighbors = slot_r12 ? plane / static_cast<int>(type.size()) : neighbor_.occupied_slots();
+    const int neighbors =
+      slot_r12 ? plane / static_cast<int>(type.size()) : neighbor_.occupied_slots();
     const size_t tiles = (size_t(neighbors) + Layout::tile - 1) / Layout::tile;
     const size_t count = tiles * Layout::tile * type.size() * layout.channels;
     data.radial_edges.reserve(count * sizeof(Edge));
@@ -1206,35 +1230,34 @@ void NEP_Spin::launch_spin_descriptors(
                                   md_warp_density(Layout::harmonic_capacity, Layout::spin_capacity);
     constexpr int lanes = warp_density ? 32 : Layout::tile;
     dispatch_radial_cache(edges != nullptr, [&](auto cached) {
-      nep_spin::descriptors<warp_density, decltype(cached)::value><<<
-        (type.size() * model.spin_compress * lanes + 63) / 64,
-        64,
-        0,
-        stream>>>(
-        layout,
-        static_cast<int>(type.size()),
-        offset,
-        model.num_types,
-        model.n_max_angular,
-        model.basis_size_angular,
-        box,
-        type.data(),
-        data.spin_type_active.data(),
-        position.data(),
-        spin.data(),
-        data.NN_spin.data(),
-        data.NL_spin.data(),
-        slot_r12,
-        plane,
-        data.spin_cutoff_pair.data(),
-        radial,
-        data.parameters.data() + model.model_parameter_count - model.spin_projection_parameter_count,
-        data.spin_moments.data(),
-        output,
-        warp_density ? data.spin_layout.forward.view() : nep_spin::ProjectionView{},
-        data.spin_layout.transpose.paired()
-          ? data.spin_moments.data() + size_t(type.size()) * layout.channels * layout.components : nullptr,
-        edges);
+      nep_spin::descriptors<warp_density, decltype(cached)::value>
+        <<<(type.size() * model.spin_compress * lanes + 63) / 64, 64, 0, stream>>>(
+          layout,
+          static_cast<int>(type.size()),
+          offset,
+          model.num_types,
+          model.n_max_angular,
+          model.basis_size_angular,
+          box,
+          type.data(),
+          data.spin_type_active.data(),
+          position.data(),
+          spin.data(),
+          data.NN_spin.data(),
+          data.NL_spin.data(),
+          slot_r12,
+          plane,
+          data.spin_cutoff_pair.data(),
+          radial,
+          data.parameters.data() + model.model_parameter_count -
+            model.spin_projection_parameter_count,
+          data.spin_moments.data(),
+          output,
+          warp_density ? data.spin_layout.forward.view() : nep_spin::ProjectionView{},
+          data.spin_layout.transpose.paired()
+            ? data.spin_moments.data() + size_t(type.size()) * layout.channels * layout.components
+            : nullptr,
+          edges);
     });
   };
   if (data.wide_spin_descriptors.size()) {
@@ -1268,52 +1291,66 @@ void NEP_Spin::launch_spin_forces(
   int r12_plane_size)
 {
   const int plane = r12_plane_size;
-  auto launch_batch = [&](auto layout, auto* radial, auto* edges, auto read_edges, auto quadratic, auto fused) {
-    constexpr int batch = decltype(fused)::value ? 3 : 1;
-    const int batches = (model.spin_compress + batch - 1) / batch;
-    using Real = typename std::remove_pointer<decltype(radial)>::type;
-    constexpr bool cache_rows = md_cache_rows(decltype(layout)::tile, decltype(quadratic)::value,
-                                              std::is_same<Real, float>::value);
-    constexpr bool compact = nep_spin::compact_fused_rows(decltype(layout)::tile,
-      decltype(layout)::harmonic_capacity * decltype(layout)::spin_capacity, decltype(fused)::value);
-    auto dispatch = [&](auto cached) {
-      nep_spin::forces<decltype(layout), true, decltype(quadratic)::value, decltype(fused)::value, decltype(cached)::value, decltype(read_edges)::value>
-        <<<(type.size() * batches * decltype(layout)::tile + 63) / 64, 64>>>(
-          layout,
-          static_cast<int>(type.size()),
-          model.struct_descriptor_dim,
-          model.num_types,
-          model.n_max_angular,
-          model.basis_size_angular,
-          box,
-          type.data(),
-          data.spin_type_active.data(),
-          position.data(),
-          spin.data(),
-          data.NN_spin.data(),
-          data.NL_spin.data(),
-          slot_r12,
-          plane,
-          data.spin_cutoff_pair.data(),
-          radial,
-          data.parameters.data() + model.model_parameter_count -
-            model.spin_projection_parameter_count,
-          data.spin_moments.data(),
-          data.Fp.data(),
-          force.data(),
-          mforce.data(),
-          virial.data(),
-          false,
-          !decltype(cached)::value && decltype(layout)::tile > 1 && decltype(layout)::tile != nep_spin::SpinProjection::width
-            ? data.spin_layout.adjoint_order.data() : nullptr,
-          decltype(cached)::value || (!decltype(quadratic)::value && decltype(layout)::tile == nep_spin::SpinProjection::width)
-            ? data.spin_layout.transpose.view() : nep_spin::ProjectionView{}, edges);
+  auto launch_batch =
+    [&](auto layout, auto* radial, auto* edges, auto read_edges, auto quadratic, auto fused) {
+      constexpr int batch = decltype(fused)::value ? 3 : 1;
+      const int batches = (model.spin_compress + batch - 1) / batch;
+      using Real = typename std::remove_pointer<decltype(radial)>::type;
+      constexpr bool cache_rows = md_cache_rows(
+        decltype(layout)::tile, decltype(quadratic)::value, std::is_same<Real, float>::value);
+      constexpr bool compact = nep_spin::compact_fused_rows(
+        decltype(layout)::tile,
+        decltype(layout)::harmonic_capacity * decltype(layout)::spin_capacity,
+        decltype(fused)::value);
+      auto dispatch = [&](auto cached) {
+        nep_spin::forces<
+          decltype(layout),
+          true,
+          decltype(quadratic)::value,
+          decltype(fused)::value,
+          decltype(cached)::value,
+          decltype(read_edges)::value>
+          <<<(type.size() * batches * decltype(layout)::tile + 63) / 64, 64>>>(
+            layout,
+            static_cast<int>(type.size()),
+            model.struct_descriptor_dim,
+            model.num_types,
+            model.n_max_angular,
+            model.basis_size_angular,
+            box,
+            type.data(),
+            data.spin_type_active.data(),
+            position.data(),
+            spin.data(),
+            data.NN_spin.data(),
+            data.NL_spin.data(),
+            slot_r12,
+            plane,
+            data.spin_cutoff_pair.data(),
+            radial,
+            data.parameters.data() + model.model_parameter_count -
+              model.spin_projection_parameter_count,
+            data.spin_moments.data(),
+            data.Fp.data(),
+            force.data(),
+            mforce.data(),
+            virial.data(),
+            false,
+            !decltype(cached)::value && decltype(layout)::tile > 1 &&
+                decltype(layout)::tile != nep_spin::SpinProjection::width
+              ? data.spin_layout.adjoint_order.data()
+              : nullptr,
+            decltype(cached)::value || (!decltype(quadratic)::value &&
+                                        decltype(layout)::tile == nep_spin::SpinProjection::width)
+              ? data.spin_layout.transpose.view()
+              : nep_spin::ProjectionView{},
+            edges);
+      };
+      if (compact && !data.spin_layout.transpose.paired())
+        dispatch(std::integral_constant < bool, cache_rows && !compact > {});
+      else
+        dispatch(std::integral_constant<bool, cache_rows>{});
     };
-    if (compact && !data.spin_layout.transpose.paired())
-      dispatch(std::integral_constant<bool, cache_rows && !compact>{});
-    else
-      dispatch(std::integral_constant<bool, cache_rows>{});
-  };
   auto launch = [&](auto layout, auto* radial, auto quadratic) {
     using Real = typename std::remove_pointer<decltype(radial)>::type;
     // Medium-sized matrices fit the narrow tile better when it owns just one channel.
@@ -1323,18 +1360,19 @@ void NEP_Spin::launch_spin_forces(
     auto* edges = static_cast<nep_spin::RadialEdge<Real>*>(data.radial_edges.storage.get());
     dispatch_radial_cache(edges != nullptr, [&](auto read_edges) {
       if (can_fuse && model.spin_compress > 1)
-        launch_batch(layout, radial, edges, read_edges, quadratic, std::integral_constant<bool, can_fuse>{});
+        launch_batch(
+          layout, radial, edges, read_edges, quadratic, std::integral_constant<bool, can_fuse>{});
       else
         launch_batch(layout, radial, edges, read_edges, quadratic, std::false_type{});
     });
   };
   if (data.wide_radial.size())
-    launch(MDPolynomialLayout<4, 4>(data.spin_layout.view), data.wide_radial.data(), std::false_type{});
+    launch(
+      MDPolynomialLayout<4, 4>(data.spin_layout.view), data.wide_radial.data(), std::false_type{});
   else
-    launch_md_layout(
-      data.spin_layout.view, model.spin_soc, [&](auto layout, auto quadratic) {
-        launch(layout, data.radial_coefficients.data(), quadratic);
-      });
+    launch_md_layout(data.spin_layout.view, model.spin_soc, [&](auto layout, auto quadratic) {
+      launch(layout, data.radial_coefficients.data(), quadratic);
+    });
   GPU_CHECK_KERNEL
 }
 
@@ -1508,12 +1546,21 @@ void NEP_Spin::read_model(const char* file_potential)
   const int spins = nep_spin::PrimitiveBasis(l, file.spin_order).components;
   const int lanes = md_force_lanes(l, file.spin_order);
   const bool warp_density = md_warp_density(harmonics, spins);
-  const bool cache_rows = md_cache_rows(lanes, l >= 2 && file.spin_order == 2,
-                                        !nep_spin::needs_wide_forward(model_.spin_soc, l, file.spin_order));
-  const float* projection = file.parameters.data() + file.parameters.size() - file.projection_parameter_count;
+  const bool cache_rows = md_cache_rows(
+    lanes,
+    l >= 2 && file.spin_order == 2,
+    !nep_spin::needs_wide_forward(model_.spin_soc, l, file.spin_order));
+  const float* projection =
+    file.parameters.data() + file.parameters.size() - file.projection_parameter_count;
   data_.spin_layout.initialize(
-    model_.spin_compress, l, model_.spin_order, model_.spin_soc, lanes,
-    projection + (file.n_max[1] + 1) * file.spin_compress, warp_density, cache_rows);
+    model_.spin_compress,
+    l,
+    model_.spin_order,
+    model_.spin_soc,
+    lanes,
+    projection + (file.n_max[1] + 1) * file.spin_compress,
+    warp_density,
+    cache_rows);
   model_.spin_moment_count = data_.spin_layout.view.components * model_.spin_compress;
   zbl_.enabled = file.enable_zbl;
   zbl_.num_types = model_.num_types;

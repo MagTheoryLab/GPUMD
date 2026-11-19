@@ -13,6 +13,8 @@
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+// Chengbing Chen: device workspace for the specialized spin evaluation.
+
 #include "main_nep/dataset.cuh"
 #include "model/box.cuh"
 #include "nep_spin.cuh"
@@ -47,12 +49,19 @@ void NEP_Spin_Model::initialize_spin(Spin_Parameters& para, int N, int device_co
     }
     data.spin_cutoff_pair.resize(spin_cutoff_pair.size());
     data.spin_cutoff_pair.copy_from_host(spin_cutoff_pair.data(), spin_cutoff_pair.size());
-    const bool fused = para.nep_compile && nep_spin::fused_training_adjoint(
-      para.spin_compress, para.spin_l_max, para.spin_order, para.spin_soc);
+    const bool fused =
+      spin_force_jit_ && nep_spin::fused_training_adjoint(
+                           para.spin_compress, para.spin_l_max, para.spin_order, para.spin_soc);
     data.spin_layout.initialize(
-      para.spin_compress, para.spin_l_max, para.spin_order, para.spin_soc,
-      fused ? int(nep_spin::SpinProjection::width) : 1, nullptr,
-      para.nep_compile && nep_spin::warp_training_forward(para.spin_l_max, para.spin_order, para.spin_soc), fused);
+      para.spin_compress,
+      para.spin_l_max,
+      para.spin_order,
+      para.spin_soc,
+      fused ? int(nep_spin::SpinProjection::width) : 1,
+      nullptr,
+      spin_descriptor_jit_ &&
+        nep_spin::warp_training_forward(para.spin_l_max, para.spin_order, para.spin_soc),
+      fused);
     if (nep_spin::needs_wide_forward(para.spin_soc, para.spin_l_max, para.spin_order)) {
       data.wide_spin_descriptors.resize(size_t(N) * para.dim_spin);
       data.wide_radial.resize(
@@ -60,7 +69,8 @@ void NEP_Spin_Model::initialize_spin(Spin_Parameters& para, int N, int device_co
     }
     const int harmonics = (para.spin_l_max + 1) * (para.spin_l_max + 1);
     data.spin_moments.resize(
-      size_t(N) * para.spin_compress * (data.spin_layout.view.components + (fused ? harmonics : 0)));
+      size_t(N) * para.spin_compress *
+      (data.spin_layout.view.components + (fused ? harmonics : 0)));
 
     data.force.resize(3 * N);
     data.mforce.resize(3 * N);
@@ -154,7 +164,8 @@ void NEP_Spin_Model::find_additional_descriptors(
     nep_data[device_id].descriptors.data(),
     data.wide_spin_descriptors.size() ? data.wide_spin_descriptors.data() : nullptr,
     data.wide_radial.size() ? data.wide_radial.data() : nullptr,
-    data.spin_layout.forward.paths.size() ? data.spin_layout.forward.view() : nep_spin::ProjectionView{});
+    data.spin_layout.forward.paths.size() ? data.spin_layout.forward.view()
+                                          : nep_spin::ProjectionView{});
 }
 
 void NEP_Spin_Model::initialize_additional_outputs(Dataset& dataset, int device_id)
@@ -241,7 +252,8 @@ void NEP_Spin_Model::find_additional_force(Spin_Parameters& para, Dataset& datas
     data.mforce.data(),
     data.virial.data(),
     data.wide_radial.size() ? data.wide_radial.data() : nullptr,
-    data.spin_layout.transpose.paths.size() ? data.spin_layout.transpose.view() : nep_spin::ProjectionView{});
+    data.spin_layout.transpose.paths.size() ? data.spin_layout.transpose.view()
+                                            : nep_spin::ProjectionView{});
 
   add_spin_training_outputs<<<grid_size, block_size>>>(
     dataset.N,

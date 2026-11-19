@@ -12,6 +12,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
+
+// Chengbing Chen: tiled density construction and shared neighbor adjoints.
 #pragma once
 #include "force/nep_spin/spin_storage.cuh"
 #include "force/nep_spin/spin_warp.cuh"
@@ -101,8 +103,8 @@ __device__ __forceinline__ void add_harmonic(int lmax, const Real* x, SpinValue<
 }
 
 template <class Real, size_t... I>
-__device__ __forceinline__ void spherical_terms(
-  int lmax, const Real* x, SpinValue<Real>* y, std::index_sequence<I...>)
+__device__ __forceinline__ void
+spherical_terms(int lmax, const Real* x, SpinValue<Real>* y, std::index_sequence<I...>)
 {
   int ordered[] = {0, (add_harmonic<I>(lmax, x, y), 0)...};
   (void)ordered;
@@ -117,8 +119,8 @@ __device__ __forceinline__ void spherical(Layout v, const Real* x, SpinValue<Rea
   spherical_terms(v.lmax, x, y, std::make_index_sequence<sizeof(harmonics) / sizeof(Harmonic)>{});
 }
 template <size_t I, int H, class Real>
-__device__ __forceinline__ void apply_harmonic_gradient(
-  const Real* coeff, const Real* y, Real* grad)
+__device__ __forceinline__ void
+apply_harmonic_gradient(const Real* coeff, const Real* y, Real* grad)
 {
   constexpr auto t = harmonic_derivatives[I];
   if (t.output < H)
@@ -126,8 +128,8 @@ __device__ __forceinline__ void apply_harmonic_gradient(
 }
 
 template <int H, class Real, size_t... I>
-__device__ __forceinline__ void harmonic_pull(
-  const Real* coeff, const Real* y, Real* grad, std::index_sequence<I...>)
+__device__ __forceinline__ void
+harmonic_pull(const Real* coeff, const Real* y, Real* grad, std::index_sequence<I...>)
 {
   int ordered[] = {0, (apply_harmonic_gradient<I, H>(coeff, y, grad), 0)...};
   (void)ordered;
@@ -158,8 +160,8 @@ __device__ __forceinline__ void primitives_at(Layout v, const Real* s, SpinValue
 }
 // Reverse the radial spin powers before applying the solid-harmonic derivative.
 template <class Layout, class Real>
-__device__ __forceinline__ void primitive_pull(
-  Layout v, const Real* s, const SpinValue<Real>* phi, const Real* beta, Real* grad)
+__device__ __forceinline__ void
+primitive_pull(Layout v, const Real* s, const SpinValue<Real>* phi, const Real* beta, Real* grad)
 {
   Real coeff[Layout::harmonic_capacity] = {}, value[Layout::harmonic_capacity] = {};
   const Real s2 = s[0] * s[0] + s[1] * s[1] + s[2] * s[2];
@@ -314,7 +316,9 @@ __device__ inline void radial(
   }
 }
 
-template <class Layout> struct CenterMomentRows : std::false_type {};
+template <class Layout>
+struct CenterMomentRows : std::false_type {
+};
 
 template <class Layout>
 static __device__ __forceinline__ size_t moment_index(Layout const& v, int n, int i, int c, int m)
@@ -323,7 +327,13 @@ static __device__ __forceinline__ size_t moment_index(Layout const& v, int n, in
                                          : size_t(c * v.components + m) * n + i;
 }
 
-template <bool WarpDensity = false, bool StoreRadial = false, bool CandidateWeights = false, class Layout, class Real = float, class Output = float>
+template <
+  bool WarpDensity = false,
+  bool StoreRadial = false,
+  bool CandidateWeights = false,
+  class Layout,
+  class Real = float,
+  class Output = float>
 static __global__ void descriptors(
   Layout v,
   int n,
@@ -412,7 +422,8 @@ static __global__ void descriptors(
       weight,
       derivative);
     if (StoreRadial)
-      radial_edges[radial_edge_index<Layout::tile>(n, v.channels, i, c, neighbor)] = {weight, derivative};
+      radial_edges[radial_edge_index<Layout::tile>(n, v.channels, i, c, neighbor)] = {
+        weight, derivative};
     return true;
   };
   const int count = nn[i];
@@ -420,7 +431,8 @@ static __global__ void descriptors(
     SpinValue<Real> y[geometry], phi_j[spin];
     Real weight;
     const int neighbor = base + lane;
-    const bool inside = (!WarpDensity || neighbor < count) && edge_basis(neighbor, y, phi_j, weight);
+    const bool inside =
+      (!WarpDensity || neighbor < count) && edge_basis(neighbor, y, phi_j, weight);
     if (WarpDensity) {
       // Load one edge per lane, then distribute the density matrix over registers.
 #pragma unroll
@@ -458,13 +470,15 @@ static __global__ void descriptors(
     __syncwarp(mask);
     if (geometry_moments) {
       for (int g = lane; g < geometry; g += lanes)
-        geometry_moments[(size_t(i) * v.channels + c) * geometry + g] = tile.result.density[g * spin];
+        geometry_moments[(size_t(i) * v.channels + c) * geometry + g] =
+          tile.result.density[g * spin];
     }
     for (int m = lane; m < v.components; m += lanes) {
       const ProjectionRow row = projection.rows[m];
       Real value = 0;
       for (int j = 0; j < row.count; ++j) {
-        const ProjectionTerm term = projection.term<CandidateWeights>(row, j, c, v.channels, weights);
+        const ProjectionTerm term =
+          projection.term<CandidateWeights>(row, j, c, v.channels, weights);
         Real product = tile.result.density[term.input];
         if (term.center_spin >= 0)
           product *= phi_i[term.center_spin].value;
@@ -556,6 +570,7 @@ template <
   bool FuseChannels = false,
   bool CacheRows = false,
   bool ReadRadial = false,
+  bool CandidateWeights = false,
   class Real = float>
 static __global__ void forces(
   Layout v,
@@ -587,28 +602,27 @@ static __global__ void forces(
   const RadialEdge<Real>* radial_edges = nullptr)
 {
   static_assert(
-    !Quadratic ||
-      (Layout::spin_capacity == 10 && Layout::tile > 1),
+    !Quadratic || (Layout::spin_capacity == 10 && Layout::tile > 1),
     "quadratic tiled layout required");
   // A single channel reuses less geometry; cap its live density matrix at 2 KiB.
   constexpr bool single_pull = Layout::tile == SpinProjection::width &&
                                Layout::harmonic_capacity * Layout::spin_capacity <= 512;
   constexpr bool direct_pull = !Quadratic && std::is_same<Real, float>::value &&
                                (FuseChannels || (CenterVirial && single_pull));
-  static_assert(!FuseChannels || Quadratic || direct_pull,
-                "channel fusion requires a tiled adjoint");
+  static_assert(
+    !FuseChannels || Quadratic || direct_pull, "channel fusion requires a tiled adjoint");
   constexpr int channels = FuseChannels ? 3 : 1;
   const int work = (blockIdx.x * blockDim.x + threadIdx.x) / Layout::tile;
   const int lane = threadIdx.x % Layout::tile;
   const int batches = (v.channels + channels - 1) / channels;
   const int i = work / batches;
   const int first_channel = (work % batches) * channels;
-  const int channel_count = FuseChannels && first_channel + channels > v.channels
-    ? v.channels - first_channel : channels;
+  const int channel_count =
+    FuseChannels && first_channel + channels > v.channels ? v.channels - first_channel : channels;
   // Capture participation before divergent neighbor loops. An activemask taken
   // at a reduction can omit lanes still processing their last neighbor.
-  const WarpMask mask = direct_pull ? tile_mask(Layout::tile) :
-                                  (Layout::tile > 1 ? warp_ballot(i < n) : 0);
+  const WarpMask mask =
+    direct_pull ? tile_mask(Layout::tile) : (Layout::tile > 1 ? warp_ballot(i < n) : 0);
   if (i >= n)
     return;
   Real s[3], center_pull[3] = {};
@@ -623,25 +637,31 @@ static __global__ void forces(
   constexpr int row_size = Layout::spin_capacity + (use_geometry ? 0 : 3);
   constexpr int density_size = Layout::harmonic_capacity * row_size;
   // Reuse the center adjoint when a full block fits in static shared memory.
-  constexpr bool shared_density = (CenterVirial || direct_pull) && !Quadratic && Layout::tile > 1 &&
-                                  density_size * groups * channels * sizeof(Real) + sizeof(Real) <= 48 * 1024;
+  constexpr bool shared_density =
+    (CenterVirial || direct_pull) && !Quadratic && Layout::tile > 1 &&
+    density_size * groups * channels * sizeof(Real) + sizeof(Real) <= 48 * 1024;
   Real private_density[Quadratic || shared_density ? 1 : density_size * channels] = {};
   __shared__ Real tile_density[shared_density ? density_size * groups * channels : 1];
   const int group = threadIdx.x / Layout::tile;
-  Real* group_density = shared_density ? tile_density + group * density_size * channels : private_density;
-  constexpr bool projected = shared_density && (Layout::tile == SpinProjection::width || use_geometry);
+  Real* group_density =
+    shared_density ? tile_density + group * density_size * channels : private_density;
+  constexpr bool projected =
+    shared_density && (Layout::tile == SpinProjection::width || use_geometry);
   static_assert(!use_geometry || projected, "cached geometry requires projected density rows");
   if (shared_density && !projected) {
     for (int k = lane; k < density_size * channels; k += Layout::tile)
       group_density[k] = 0;
     __syncwarp(mask);
   }
-  Real geometry_sum[direct_pull || use_geometry ? 1 : channels][direct_pull || use_geometry ? 1 : Layout::harmonic_capacity] = {};
+  Real geometry_sum[direct_pull || use_geometry ? 1 : channels]
+                   [direct_pull || use_geometry ? 1 : Layout::harmonic_capacity] = {};
   constexpr int harmonics_per_channel = Layout::harmonic_capacity;
   // Large quadratic matrices amortize a single Cartesian pull across all harmonic rows.
   constexpr bool quadratic_pull = Quadratic && CenterVirial && harmonics_per_channel > 16;
-  // Staging bounds register use when a medium quadratic matrix also needs all Cartesian derivatives.
-  constexpr bool stage_radial = Quadratic && CenterVirial && harmonics_per_channel >= 16 && !quadratic_pull;
+  // Staging bounds register use when a medium quadratic matrix also needs all Cartesian
+  // derivatives.
+  constexpr bool stage_radial =
+    Quadratic && CenterVirial && harmonics_per_channel >= 16 && !quadratic_pull;
   constexpr int neighbor_offset = 4 * harmonics_per_channel;
   constexpr int adjoint_size = neighbor_offset + 9 * harmonics_per_channel;
   __shared__ volatile Real edge_pull[Quadratic ? adjoint_size * groups * channels : 1];
@@ -700,28 +720,13 @@ static __global__ void forces(
         __shared__ Real center_coeff[CacheRows ? groups * elements : 1];
         Real* center_row = center_coeff + group * elements;
         for (int m = lane; m < elements; m += Layout::tile) {
-          int output = m;
           Real local = 0, neighbor = 0;
-          auto accumulate = [&](int index) {
-            const ProjectionTerm term = transpose.terms[index];
-            const Real adjoint = pull[term.input];
-            Real center_weight = term.weight, neighbor_weight = transpose.neighbor_weights[index];
-            if (!CenterVirial) {
-              center_weight *= weights[transpose.paths[2 * index] * v.channels + c];
-              neighbor_weight *= weights[transpose.paths[2 * index + 1] * v.channels + c];
-            }
-            local += adjoint * center_weight;
-            neighbor += adjoint * neighbor_weight;
-          };
-          if (transpose.rows) {
-            const ProjectionRow row = transpose.rows[m];
-            output = row.output;
-            for (int j = 0; j < row.count; ++j)
-              accumulate(row.begin + (CenterVirial ? j * v.channels + c : j) * SpinProjection::width);
-          } else {
-            constexpr int width = SpinProjection::width;
-            accumulate(CenterVirial ? (m / width * v.channels + c) * width + m % width : m);
-          }
+          const int output = transpose.for_each_pair<CandidateWeights>(
+            m, c, v.channels, weights, [&](int input, float center_weight, float neighbor_weight) {
+              const Real adjoint = pull[input];
+              local += adjoint * center_weight;
+              neighbor += adjoint * neighbor_weight;
+            });
           const int g = output / spin, a = output % spin;
           center_row[output] = local;
           density[g * row_size + a] = neighbor;
@@ -749,7 +754,7 @@ static __global__ void forces(
           Real value = 0, gradient[3] = {};
           for (int j = 0; j < row.count; ++j) {
             const ProjectionTerm term =
-              transpose.term<!CenterVirial>(row, j, c, v.channels, weights);
+              transpose.term<CandidateWeights>(row, j, c, v.channels, weights);
             const Real adjoint = pull[term.input] * term.weight;
             if (term.center_spin < 0) {
               value += adjoint;
@@ -800,7 +805,8 @@ static __global__ void forces(
       }
     }
     if (direct_pull)
-      __syncwarp(mask); // All consumers finish before the next channel reuses the component derivatives.
+      __syncwarp(
+        mask); // All consumers finish before the next channel reuses the component derivatives.
     if (Quadratic) {
       __syncwarp(mask);
       // phi[1..9] spans x,y,z,s2,xz,xy,Qyy,yz,Qzz-xx. Fold it to Cartesian form once.
@@ -853,7 +859,8 @@ static __global__ void forces(
       Real weights[channels] = {}, derivatives[channels] = {};
       if (ReadRadial) {
         for (int c = 0; c < channel_count; ++c) {
-          const auto edge = radial_edges[radial_edge_index<Layout::tile>(n, v.channels, i, first_channel + c, neighbor)];
+          const auto edge = radial_edges[radial_edge_index<Layout::tile>(
+            n, v.channels, i, first_channel + c, neighbor)];
           weights[c] = edge.value;
           derivatives[c] = edge.derivative;
         }
@@ -863,7 +870,8 @@ static __global__ void forces(
         find_fc_and_fcp(Real(cutoffs[pair]), inv, distance, fc, fcp);
         for_each_radial_basis(basis, inv, distance, fc, fcp, [&](int k, Real f, Real df) {
           for (int c = 0; c < channel_count; ++c) {
-            const Real mix = coefficients[(pair * v.channels + first_channel + c) * (basis + 1) + k];
+            const Real mix =
+              coefficients[(pair * v.channels + first_channel + c) * (basis + 1) + k];
             weights[c] += f * mix;
             derivatives[c] += df * mix;
           }
@@ -910,10 +918,12 @@ static __global__ void forces(
       for (int channel = 0; channel < channel_count; ++channel) {
         const Real* density = group_density;
         const int c = first_channel + channel;
-        const volatile Real* channel_pull = edge_pull + (Quadratic ? channel * adjoint_size * groups : 0);
+        const volatile Real* channel_pull =
+          edge_pull + (Quadratic ? channel * adjoint_size * groups : 0);
         Real weight, derivative;
         if (ReadRadial) {
-          const auto edge = radial_edges[radial_edge_index<Layout::tile>(n, v.channels, i, c, neighbor)];
+          const auto edge =
+            radial_edges[radial_edge_index<Layout::tile>(n, v.channels, i, c, neighbor)];
           weight = edge.value;
           derivative = edge.derivative;
         } else {
@@ -966,7 +976,8 @@ static __global__ void forces(
             }
           }
           if (quadratic_pull) {
-            harmonic_pull<harmonics_per_channel>(coeff, values, angular_pull, HarmonicDerivativeIndices{});
+            harmonic_pull<harmonics_per_channel>(
+              coeff, values, angular_pull, HarmonicDerivativeIndices{});
             quadratic_gradient(spin_coeff, s, neighbor_pull);
           }
         } else {
@@ -1023,7 +1034,8 @@ static __global__ void forces(
   }
   for (int channel = 0; channel < (direct_pull || use_geometry ? 0 : channel_count); ++channel) {
     const Real* density = group_density;
-    const volatile Real* channel_pull = edge_pull + (Quadratic ? channel * adjoint_size * groups : 0);
+    const volatile Real* channel_pull =
+      edge_pull + (Quadratic ? channel * adjoint_size * groups : 0);
     for (int g = 0; g < geometry_count; ++g)
       for (int d = 0; d < 3; ++d)
         center_pull[d] +=

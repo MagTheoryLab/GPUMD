@@ -12,6 +12,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
+
+// Chengbing Chen: packed forward and transposed spin projections.
 #pragma once
 #include "spin_tables.cuh"
 #include <algorithm>
@@ -35,7 +37,8 @@ template <int Tile>
 #if defined(__CUDACC__) || defined(__HIPCC__)
 __host__ __device__
 #endif
-constexpr size_t radial_edge_index(int atoms, int channels, int atom, int channel, int neighbor)
+  constexpr size_t
+  radial_edge_index(int atoms, int channels, int atom, int channel, int neighbor)
 {
   return ((size_t(neighbor / Tile) * atoms + atom) * channels + channel) * Tile + neighbor % Tile;
 }
@@ -50,7 +53,7 @@ struct PrimitiveBasis {
 #if defined(__CUDACC__) || defined(__HIPCC__)
   __host__ __device__
 #endif
-  constexpr PrimitiveBasis(int lmax, int order)
+    constexpr PrimitiveBasis(int lmax, int order)
   {
     for (int d = 0; d <= order; ++d)
       for (int j = d % 2; j <= d && j <= lmax; j += 2) {
@@ -237,7 +240,8 @@ struct SpinProjection {
     std::vector<std::vector<int>> by_output(outputs);
     for (int t = 0; t < static_cast<int>(layout.terms.size()); ++t) {
       const Term& term = layout.terms[t];
-      const int density = paired ? term.geometry * layout.spin_components + term.spin : density_index(term);
+      const int density =
+        paired ? term.geometry * layout.spin_components + term.spin : density_index(term);
       by_output[transpose ? density : term.output].push_back(t);
     }
     // Center and neighbor couplings for a given (geometry, spin, output) use the same moment.
@@ -267,9 +271,8 @@ struct SpinProjection {
     for (int m = 0; m < outputs; ++m)
       rows.push_back({m, 0, static_cast<int>(by_output[m].size())});
     // Group similar-length rows so lanes read adjacent entries and finish together.
-    std::stable_sort(rows.begin(), rows.end(), [](ProjectionRow a, ProjectionRow b) {
-      return a.count > b.count;
-    });
+    std::stable_sort(
+      rows.begin(), rows.end(), [](ProjectionRow a, ProjectionRow b) { return a.count > b.count; });
     const int channels = weights ? layout.channels : 1;
     for (int base = 0; base < outputs; base += width) {
       const int start = static_cast<int>(packed.size());

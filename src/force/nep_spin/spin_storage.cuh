@@ -12,6 +12,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
+
+// Chengbing Chen: GPU storage and indexing for packed spin projections.
 #pragma once
 #include "spin_layout.cuh"
 #include "utilities/gpu_vector.cuh"
@@ -25,14 +27,46 @@ struct ProjectionView {
   const int* paths;
 
   template <bool CandidateWeights>
-  __device__ __forceinline__ ProjectionTerm term(
-    ProjectionRow row, int j, int c, int channels, const float* weights) const
+  __device__ __forceinline__ static int term_index(int begin, int j, int c, int channels)
   {
-    const int index = row.begin + (CandidateWeights ? j : j * channels + c) * SpinProjection::width;
+    return begin + (CandidateWeights ? j : j * channels + c) * SpinProjection::width;
+  }
+
+  template <bool CandidateWeights>
+  __device__ __forceinline__ ProjectionTerm
+  term(ProjectionRow row, int j, int c, int channels, const float* weights) const
+  {
+    const int index = term_index<CandidateWeights>(row.begin, j, c, channels);
     ProjectionTerm entry = terms[index];
     if (CandidateWeights)
       entry.weight *= weights[paths[index] * channels + c];
     return entry;
+  }
+
+  // Paired rows share one adjoint input between the center and neighbor couplings.
+  template <bool CandidateWeights, class Consume>
+  __device__ __forceinline__ int
+  for_each_pair(int m, int c, int channels, const float* weights, Consume consume) const
+  {
+    auto visit = [&](int index) {
+      const ProjectionTerm entry = terms[index];
+      float center = entry.weight;
+      float neighbor = neighbor_weights[index];
+      if (CandidateWeights) {
+        center *= weights[paths[2 * index] * channels + c];
+        neighbor *= weights[paths[2 * index + 1] * channels + c];
+      }
+      consume(entry.input, center, neighbor);
+    };
+    if (rows) {
+      const ProjectionRow row = rows[m];
+      for (int j = 0; j < row.count; ++j)
+        visit(term_index<CandidateWeights>(row.begin, j, c, channels));
+      return row.output;
+    }
+    constexpr int width = SpinProjection::width;
+    visit(CandidateWeights ? m : (m / width * channels + c) * width + m % width);
+    return m;
   }
 };
 struct ProjectionStorage {
@@ -47,8 +81,11 @@ struct ProjectionStorage {
   {
     SpinProjection projection(layout, weights, transpose, paired);
     has_pairs = paired;
-    single_term_rows = paired && std::all_of(projection.rows.begin(), projection.rows.end(),
-                                             [](const ProjectionRow& row) { return row.count == 1; });
+    single_term_rows =
+      paired &&
+      std::all_of(projection.rows.begin(), projection.rows.end(), [](const ProjectionRow& row) {
+        return row.count == 1;
+      });
     if (!single_term_rows) {
       rows.resize(projection.rows.size());
       rows.copy_from_host(projection.rows.data());
@@ -70,8 +107,11 @@ struct ProjectionStorage {
   ProjectionView view() const
   {
     // Equally sized one-term rows stay in their original order and need no index table.
-    return {single_term_rows ? nullptr : rows.data(), terms.data(),
-            has_pairs ? neighbor_weights.data() : nullptr, paths.size() ? paths.data() : nullptr};
+    return {
+      single_term_rows ? nullptr : rows.data(),
+      terms.data(),
+      has_pairs ? neighbor_weights.data() : nullptr,
+      paths.size() ? paths.data() : nullptr};
   }
 };
 
@@ -85,12 +125,20 @@ struct Storage {
   GPU_Vector<Harmonic> harmonic_data;
   View view{};
   void initialize(
-    int c, int l, int s, int soc, int adjoint_lanes = 1, const float* fixed_weights = nullptr,
-    bool project_forward = false, bool paired = false)
+    int c,
+    int l,
+    int s,
+    int soc,
+    int adjoint_lanes = 1,
+    const float* fixed_weights = nullptr,
+    bool project_forward = false,
+    bool paired = false)
   {
     Layout layout(c, l, s, soc);
     const int elements = (l + 1) * (l + 1) * layout.spin_components;
-    if (fixed_weights && compact_fused_rows(adjoint_lanes, elements, c > 1) && layout.terms.size() <= size_t(2 * elements))
+    if (
+      fixed_weights && compact_fused_rows(adjoint_lanes, elements, c > 1) &&
+      layout.terms.size() <= size_t(2 * elements))
       paired = false;
     primitives.resize(layout.primitives.size());
     primitives.copy_from_host(layout.primitives.data());

@@ -13,6 +13,8 @@
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+// Chengbing Chen: reuse of forward geometry in the specialized training adjoint.
+
 #ifdef NEP_SPECIALIZED_RUNTIME_BUILD
 #include "force/nep_spin/spin_kernels.cuh"
 #include "force/nep_spin/spin_layout.cuh"
@@ -33,13 +35,15 @@ using QuadraticForceLayout = typename std::conditional<
   nep_spin::MDLayoutSOC<4, true>,
   nep_spin::MDLayoutNoSOC<4, true>>::type;
 using Compiled = nep_spin::CompiledLayout;
-constexpr bool fused_polynomial =
-  nep_spin::fused_training_adjoint(Compiled::channels, Compiled::lmax, Compiled::order, Compiled::soc);
+constexpr bool fused_polynomial = nep_spin::fused_training_adjoint(
+  Compiled::channels, Compiled::lmax, Compiled::order, Compiled::soc);
 struct WarpForceLayout : Compiled {
   enum { tile = nep_spin::SpinProjection::width };
 };
-using PolynomialForceLayout = typename std::conditional<fused_polynomial, WarpForceLayout, Compiled>::type;
-using ForceLayout = typename std::conditional<quadratic_training, QuadraticForceLayout, PolynomialForceLayout>::type;
+using PolynomialForceLayout =
+  typename std::conditional<fused_polynomial, WarpForceLayout, Compiled>::type;
+using ForceLayout =
+  typename std::conditional<quadratic_training, QuadraticForceLayout, PolynomialForceLayout>::type;
 } // namespace
 
 extern "C" void nep_spin_launch_descriptor_v4(
@@ -89,33 +93,34 @@ extern "C" void nep_spin_launch_descriptor_v4(
   auto* radial = descriptor_coefficients;
   auto* q = descriptors;
 #endif
-  constexpr bool warp = nep_spin::warp_training_forward(Compiled::lmax, Compiled::order, Compiled::soc);
+  constexpr bool warp =
+    nep_spin::warp_training_forward(Compiled::lmax, Compiled::order, Compiled::soc);
   constexpr int lanes = warp ? int(nep_spin::SpinProjection::width) : int(Compiled::tile);
-  nep_spin::descriptors<warp, false, warp><<<
-    (atom_count * Compiled::channels * lanes + 63) / 64,
-    64>>>(
-    layout,
-    atom_count,
-    struct_dim,
-    NUM_TYPES_JIT,
-    N_MAX_ANGULAR_JIT,
-    BASIS_SIZE_ANGULAR_JIT,
-    Box{},
-    type,
-    spin_type_active,
-    position,
-    spin,
-    NN_spin,
-    NL_spin,
-    r12_spin,
-    r12_plane_size,
-    spin_cutoff_pair,
-    radial,
-    projection,
-    moments,
-    q,
-    forward,
-    fused_polynomial ? moments + size_t(atom_count) * Compiled::channels * Compiled::components : nullptr);
+  nep_spin::descriptors<warp, false, warp>
+    <<<(atom_count * Compiled::channels * lanes + 63) / 64, 64>>>(
+      layout,
+      atom_count,
+      struct_dim,
+      NUM_TYPES_JIT,
+      N_MAX_ANGULAR_JIT,
+      BASIS_SIZE_ANGULAR_JIT,
+      Box{},
+      type,
+      spin_type_active,
+      position,
+      spin,
+      NN_spin,
+      NL_spin,
+      r12_spin,
+      r12_plane_size,
+      spin_cutoff_pair,
+      radial,
+      projection,
+      moments,
+      q,
+      forward,
+      fused_polynomial ? moments + size_t(atom_count) * Compiled::channels * Compiled::components
+                       : nullptr);
   GPU_CHECK_KERNEL
 }
 
@@ -153,35 +158,34 @@ extern "C" void nep_spin_launch_force_v5(
   // Retain training's neighbor-owned virial while sharing the MD polynomial adjoint.
   constexpr bool fuse = quadratic_training || fused_polynomial;
   constexpr int batches = fuse ? (Compiled::channels + 2) / 3 : int(Compiled::channels);
-  nep_spin::forces<ForceLayout, false, quadratic_training, fuse, fused_polynomial><<<
-    (atom_count * batches * ForceLayout::tile + 63) / 64,
-    64>>>(
-    layout,
-    atom_count,
-    struct_dim,
-    NUM_TYPES_JIT,
-    N_MAX_ANGULAR_JIT,
-    BASIS_SIZE_ANGULAR_JIT,
-    Box{},
-    type,
-    spin_type_active,
-    position,
-    spin,
-    NN_spin,
-    NL_spin,
-    r12_spin,
-    r12_plane_size,
-    spin_cutoff_pair,
-    radial,
-    projection,
-    moments,
-    Fp,
-    force,
-    mforce,
-    virial,
-    true,
-    nullptr,
-    transpose);
+  nep_spin::forces<ForceLayout, false, quadratic_training, fuse, fused_polynomial, false, true>
+    <<<(atom_count * batches * ForceLayout::tile + 63) / 64, 64>>>(
+      layout,
+      atom_count,
+      struct_dim,
+      NUM_TYPES_JIT,
+      N_MAX_ANGULAR_JIT,
+      BASIS_SIZE_ANGULAR_JIT,
+      Box{},
+      type,
+      spin_type_active,
+      position,
+      spin,
+      NN_spin,
+      NL_spin,
+      r12_spin,
+      r12_plane_size,
+      spin_cutoff_pair,
+      radial,
+      projection,
+      moments,
+      Fp,
+      force,
+      mforce,
+      virial,
+      true,
+      nullptr,
+      transpose);
   GPU_CHECK_KERNEL
 }
 

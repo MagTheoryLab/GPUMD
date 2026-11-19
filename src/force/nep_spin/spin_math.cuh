@@ -13,6 +13,8 @@
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+// Chengbing Chen: streaming evaluation of the radial basis and its derivatives.
+
 #pragma once
 #ifdef USE_HIP
 #include <hip/hip_runtime.h>
@@ -53,8 +55,10 @@ static __device__ __host__ __forceinline__ void for_each_radial_basis(
   consume(0, fc12, fcp12);
   if (n_max == 0)
     return;
-  consume(1, (x + 1.0f) * 0.5f * fc12,
-          2.0f * (d12_mul_rcinv - 1.0f) * rcinv * fc12 + (x + 1.0f) * 0.5f * fcp12);
+  consume(
+    1,
+    (x + 1.0f) * 0.5f * fc12,
+    2.0f * (d12_mul_rcinv - 1.0f) * rcinv * fc12 + (x + 1.0f) * 0.5f * fcp12);
   Real u0 = 1.0f;
   Real u1 = 2.0f * x;
   Real u2;
@@ -70,8 +74,8 @@ static __device__ __host__ __forceinline__ void for_each_radial_basis(
     u1 = u2;
 
     Real fn_tmp2 = (fn_tmp1 + 1.0f) * 0.5f;
-    consume(m, fn_tmp2 * fc12,
-            (fnp_tmp * 2.0f * (d12 * rcinv - 1.0f) * rcinv) * fc12 + fn_tmp2 * fcp12);
+    consume(
+      m, fn_tmp2 * fc12, (fnp_tmp * 2.0f * (d12 * rcinv - 1.0f) * rcinv) * fc12 + fn_tmp2 * fcp12);
   }
 }
 
