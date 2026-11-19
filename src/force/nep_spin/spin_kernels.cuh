@@ -323,7 +323,7 @@ static __device__ __forceinline__ size_t moment_index(Layout const& v, int n, in
                                          : size_t(c * v.components + m) * n + i;
 }
 
-template <bool WarpDensity = false, bool StoreRadial = false, class Layout, class Real = float, class Output = float>
+template <bool WarpDensity = false, bool StoreRadial = false, bool CandidateWeights = false, class Layout, class Real = float, class Output = float>
 static __global__ void descriptors(
   Layout v,
   int n,
@@ -464,7 +464,7 @@ static __global__ void descriptors(
       const ProjectionRow row = projection.rows[m];
       Real value = 0;
       for (int j = 0; j < row.count; ++j) {
-        const ProjectionTerm term = projection.terms[row.begin + (j * v.channels + c) * lanes];
+        const ProjectionTerm term = projection.term<CandidateWeights>(row, j, c, v.channels, weights);
         Real product = tile.result.density[term.input];
         if (term.center_spin >= 0)
           product *= phi_i[term.center_spin].value;
@@ -593,8 +593,8 @@ static __global__ void forces(
   // A single channel reuses less geometry; cap its live density matrix at 2 KiB.
   constexpr bool single_pull = Layout::tile == SpinProjection::width &&
                                Layout::harmonic_capacity * Layout::spin_capacity <= 512;
-  constexpr bool direct_pull = CenterVirial && !Quadratic && std::is_same<Real, float>::value &&
-                               (FuseChannels || single_pull);
+  constexpr bool direct_pull = !Quadratic && std::is_same<Real, float>::value &&
+                               (FuseChannels || (CenterVirial && single_pull));
   static_assert(!FuseChannels || Quadratic || direct_pull,
                 "channel fusion requires a tiled adjoint");
   constexpr int channels = FuseChannels ? 3 : 1;
@@ -603,7 +603,7 @@ static __global__ void forces(
   const int batches = (v.channels + channels - 1) / channels;
   const int i = work / batches;
   const int first_channel = (work % batches) * channels;
-  const int channel_count = FuseChannels && CenterVirial && first_channel + channels > v.channels
+  const int channel_count = FuseChannels && first_channel + channels > v.channels
     ? v.channels - first_channel : channels;
   // Capture participation before divergent neighbor loops. An activemask taken
   // at a reduction can omit lanes still processing their last neighbor.
@@ -623,7 +623,7 @@ static __global__ void forces(
   constexpr int row_size = Layout::spin_capacity + (use_geometry ? 0 : 3);
   constexpr int density_size = Layout::harmonic_capacity * row_size;
   // Reuse the center adjoint when a full block fits in static shared memory.
-  constexpr bool shared_density = CenterVirial && !Quadratic && Layout::tile > 1 &&
+  constexpr bool shared_density = (CenterVirial || direct_pull) && !Quadratic && Layout::tile > 1 &&
                                   density_size * groups * channels * sizeof(Real) + sizeof(Real) <= 48 * 1024;
   Real private_density[Quadratic || shared_density ? 1 : density_size * channels] = {};
   __shared__ Real tile_density[shared_density ? density_size * groups * channels : 1];
@@ -705,17 +705,22 @@ static __global__ void forces(
           auto accumulate = [&](int index) {
             const ProjectionTerm term = transpose.terms[index];
             const Real adjoint = pull[term.input];
-            local += adjoint * term.weight;
-            neighbor += adjoint * transpose.neighbor_weights[index];
+            Real center_weight = term.weight, neighbor_weight = transpose.neighbor_weights[index];
+            if (!CenterVirial) {
+              center_weight *= weights[transpose.paths[2 * index] * v.channels + c];
+              neighbor_weight *= weights[transpose.paths[2 * index + 1] * v.channels + c];
+            }
+            local += adjoint * center_weight;
+            neighbor += adjoint * neighbor_weight;
           };
           if (transpose.rows) {
             const ProjectionRow row = transpose.rows[m];
             output = row.output;
             for (int j = 0; j < row.count; ++j)
-              accumulate(row.begin + (j * v.channels + c) * SpinProjection::width);
+              accumulate(row.begin + (CenterVirial ? j * v.channels + c : j) * SpinProjection::width);
           } else {
             constexpr int width = SpinProjection::width;
-            accumulate((m / width * v.channels + c) * width + m % width);
+            accumulate(CenterVirial ? (m / width * v.channels + c) * width + m % width : m);
           }
           const int g = output / spin, a = output % spin;
           center_row[output] = local;
@@ -744,7 +749,7 @@ static __global__ void forces(
           Real value = 0, gradient[3] = {};
           for (int j = 0; j < row.count; ++j) {
             const ProjectionTerm term =
-              transpose.terms[row.begin + (j * v.channels + c) * Layout::tile];
+              transpose.term<!CenterVirial>(row, j, c, v.channels, weights);
             const Real adjoint = pull[term.input] * term.weight;
             if (term.center_spin < 0) {
               value += adjoint;

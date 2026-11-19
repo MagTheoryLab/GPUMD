@@ -1049,9 +1049,8 @@ static constexpr bool md_cache_rows(int lanes, bool quadratic, bool fp32)
 
 static constexpr int md_force_lanes(int l, int order)
 {
-  const int density_size = (l + 1) * (l + 1) * nep_spin::PrimitiveBasis(l, order).components;
   // The adjoint needs more work per group than the forward contraction to fill a warp.
-  return l == 0 ? 1 : (order > 2 && density_size >= 256 ? 32 : 4);
+  return l == 0 ? 1 : (nep_spin::large_polynomial_density(l, order) ? 32 : 4);
 }
 
 // Specialize only the two polynomial ranks. Channel count and SOC coupling

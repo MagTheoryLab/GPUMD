@@ -22,11 +22,24 @@ struct ProjectionView {
   const ProjectionRow* rows;
   const ProjectionTerm* terms;
   const float* neighbor_weights;
+  const int* paths;
+
+  template <bool CandidateWeights>
+  __device__ __forceinline__ ProjectionTerm term(
+    ProjectionRow row, int j, int c, int channels, const float* weights) const
+  {
+    const int index = row.begin + (CandidateWeights ? j : j * channels + c) * SpinProjection::width;
+    ProjectionTerm entry = terms[index];
+    if (CandidateWeights)
+      entry.weight *= weights[paths[index] * channels + c];
+    return entry;
+  }
 };
 struct ProjectionStorage {
   GPU_Vector<ProjectionRow> rows;
   GPU_Vector<ProjectionTerm> terms;
   GPU_Vector<float> neighbor_weights;
+  GPU_Vector<int> paths;
   bool has_pairs = false;
   bool single_term_rows = false;
 
@@ -42,6 +55,10 @@ struct ProjectionStorage {
     }
     terms.resize(projection.packed.size());
     terms.copy_from_host(projection.packed.data());
+    if (!projection.paths.empty()) {
+      paths.resize(projection.paths.size());
+      paths.copy_from_host(projection.paths.data());
+    }
     if (paired) {
       neighbor_weights.resize(projection.neighbor_weights.size());
       neighbor_weights.copy_from_host(projection.neighbor_weights.data());
@@ -54,7 +71,7 @@ struct ProjectionStorage {
   {
     // Equally sized one-term rows stay in their original order and need no index table.
     return {single_term_rows ? nullptr : rows.data(), terms.data(),
-            has_pairs ? neighbor_weights.data() : nullptr};
+            has_pairs ? neighbor_weights.data() : nullptr, paths.size() ? paths.data() : nullptr};
   }
 };
 
@@ -69,11 +86,11 @@ struct Storage {
   View view{};
   void initialize(
     int c, int l, int s, int soc, int adjoint_lanes = 1, const float* fixed_weights = nullptr,
-    bool project_forward = true, bool paired = false)
+    bool project_forward = false, bool paired = false)
   {
     Layout layout(c, l, s, soc);
     const int elements = (l + 1) * (l + 1) * layout.spin_components;
-    if (compact_fused_rows(adjoint_lanes, elements, c > 1) && layout.terms.size() <= size_t(2 * elements))
+    if (fixed_weights && compact_fused_rows(adjoint_lanes, elements, c > 1) && layout.terms.size() <= size_t(2 * elements))
       paired = false;
     primitives.resize(layout.primitives.size());
     primitives.copy_from_host(layout.primitives.data());
@@ -94,12 +111,10 @@ struct Storage {
       adjoint_order.resize(order.size());
       adjoint_order.copy_from_host(order.data());
     }
-    if (fixed_weights) {
-      if (project_forward)
-        forward.initialize(layout, fixed_weights, false);
-      if (paired || adjoint_lanes == SpinProjection::width)
-        transpose.initialize(layout, fixed_weights, true, paired);
-    }
+    if (project_forward)
+      forward.initialize(layout, fixed_weights, false);
+    if (paired || adjoint_lanes == SpinProjection::width)
+      transpose.initialize(layout, fixed_weights, true, paired);
     centers.resize(layout.centers.size());
     if (!layout.centers.empty())
       centers.copy_from_host(layout.centers.data());

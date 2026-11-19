@@ -24,11 +24,11 @@ SOURCE = r'''
 #include <cmath>
 #include <iostream>
 #include <sstream>
-void check_projection(const nep_spin::Layout& layout, bool transpose, bool paired = false) {
+void check_projection(const nep_spin::Layout& layout, bool transpose, bool paired = false, bool candidate = false) {
   const int channels = layout.channels;
   std::vector<float> weights(layout.path_count * channels);
   for (size_t i = 0; i < weights.size(); ++i) weights[i] = 0.25f + i;
-  nep_spin::SpinProjection projection(layout, weights.data(), transpose, paired);
+  nep_spin::SpinProjection projection(layout, candidate ? nullptr : weights.data(), transpose, paired);
   const int harmonics = (layout.lmax + 1) * (layout.lmax + 1);
   const int outputs = transpose ? harmonics * layout.spin_components : layout.components;
   std::vector<std::vector<nep_spin::Term>> expected(outputs);
@@ -41,7 +41,7 @@ void check_projection(const nep_spin::Layout& layout, bool transpose, bool paire
     if (std::all_of(rows.begin(), rows.end(), [](const nep_spin::ProjectionRow& row) { return row.count == 1; })) {
       for (int m = 0; m < outputs; ++m) {
         assert(rows[m].output == m);
-        assert(rows[m].begin == (m / projection.width) * channels * projection.width + m % projection.width);
+        assert(rows[m].begin == (candidate ? m : (m / projection.width) * channels * projection.width + m % projection.width));
       }
     }
     // Multiply the packed and original tables by the same adjoint, separately for each site.
@@ -58,10 +58,15 @@ void check_projection(const nep_spin::Layout& layout, bool transpose, bool paire
       }
       for (auto row : projection.rows) {
         for (int k = 0; k < row.count; ++k) {
-          const auto index = row.begin + (k * channels + c) * projection.width;
+          const auto index = row.begin + (candidate ? k : k * channels + c) * projection.width;
           const auto term = projection.packed.at(index);
-          actual[0][row.output] += double(term.weight) * (1 + term.input);
-          actual[1][row.output] += double(projection.neighbor_weights.at(index)) * (1 + term.input);
+          float center = term.weight, neighbor = projection.neighbor_weights.at(index);
+          if (candidate) {
+            center *= weights.at(projection.paths.at(2 * index) * channels + c);
+            neighbor *= weights.at(projection.paths.at(2 * index + 1) * channels + c);
+          }
+          actual[0][row.output] += double(center) * (1 + term.input);
+          actual[1][row.output] += double(neighbor) * (1 + term.input);
         }
       }
       for (int site = 0; site < 2; ++site)
@@ -75,12 +80,17 @@ void check_projection(const nep_spin::Layout& layout, bool transpose, bool paire
     const auto& terms = expected.at(row.output);
     assert(++visits[row.output] == 1 && row.count == int(terms.size()));
     for (int k = 0; k < row.count; ++k) for (int c = 0; c < channels; ++c) {
-      auto packed = projection.packed.at(row.begin + (k * channels + c) * projection.width);
+      const int index = row.begin + (candidate ? k : k * channels + c) * projection.width;
+      auto packed = projection.packed.at(index);
       auto term = terms[k];
       const int density = term.geometry * layout.spin_components + (term.neighbor ? term.spin : 0);
       assert(packed.input == (transpose ? term.output : density));
       assert(packed.center_spin == (term.neighbor ? -1 : term.spin));
-      assert(packed.weight == weights[term.path * channels + c] * term.coefficient);
+      if (candidate) {
+        assert(projection.paths.at(index) == term.path && packed.weight == term.coefficient);
+      } else {
+        assert(packed.weight == weights[term.path * channels + c] * term.coefficient);
+      }
     }
   }
   assert(std::count(visits.begin(), visits.end(), 1) == outputs);
@@ -130,8 +140,11 @@ int main() {
   for(int o=1;o<=4;o++) for(int soc=0;soc<=1;soc++) {
     nep_spin::Layout v(c,l,o,soc);
     check_projection(v, false);
+    check_projection(v, false, false, true);
     check_projection(v, true);
+    check_projection(v, true, false, true);
     check_projection(v, true, true);
+    check_projection(v, true, true, true);
     for(auto t:v.terms) {
       assert(t.geometry>=0 && t.geometry<(l+1)*(l+1));
       assert(t.spin>=0 && t.spin<v.spin_components);

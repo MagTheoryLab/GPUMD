@@ -431,7 +431,8 @@ def validate_native_compiled_checkpoint(root):
     xyz = "\n".join(expanded) + "\n"
     report = {}
     layouts = ((1, 3, 2, 1), (2, 3, 2, 1), (3, 3, 2, 1), (3, 2, 2, 0), (8, 1, 2, 1),
-               (2, 2, 1, 0), (2, 3, 0, 0), (2, 2, 2, 1))
+               (2, 2, 1, 0), (2, 3, 0, 0), (2, 2, 2, 1),
+               (4, 3, 4, 1), (5, 3, 4, 0))
     for channels, order, lmax, soc in layouts:
         layout = f"o{order}c{channels}l{lmax}s{soc}"
         config = NEP_IN.replace("spin_compress 2", f"spin_compress {channels}")

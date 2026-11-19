@@ -21,7 +21,7 @@
 
 namespace nep_spin
 {
-inline bool needs_wide_forward(int soc, int lmax, int order)
+constexpr bool needs_wide_forward(int soc, int lmax, int order)
 {
   return !soc && lmax == 4 && order == 4;
 }
@@ -191,6 +191,21 @@ struct Layout {
   }
 };
 
+constexpr bool large_polynomial_density(int l, int order)
+{
+  return order > 2 && (l + 1) * (l + 1) * PrimitiveBasis(l, order).components >= 256;
+}
+
+constexpr bool warp_training_forward(int l, int order, int soc)
+{
+  return large_polynomial_density(l, order) && !needs_wide_forward(soc, l, order);
+}
+
+constexpr bool fused_training_adjoint(int c, int l, int order, int soc)
+{
+  return c > 1 && warp_training_forward(l, order, soc);
+}
+
 struct ProjectionRow {
   int output, begin, count;
 };
@@ -211,6 +226,7 @@ struct SpinProjection {
   std::vector<ProjectionRow> rows;
   std::vector<ProjectionTerm> packed;
   std::vector<float> neighbor_weights;
+  std::vector<int> paths; // One candidate-weight index per term, or a center/neighbor pair.
   SpinProjection(const Layout& layout, const float* weights, bool transpose, bool paired = false)
   {
     const int harmonics = (layout.lmax + 1) * (layout.lmax + 1);
@@ -254,9 +270,12 @@ struct SpinProjection {
     std::stable_sort(rows.begin(), rows.end(), [](ProjectionRow a, ProjectionRow b) {
       return a.count > b.count;
     });
+    const int channels = weights ? layout.channels : 1;
     for (int base = 0; base < outputs; base += width) {
       const int start = static_cast<int>(packed.size());
-      packed.resize(start + width * rows[base].count * layout.channels);
+      packed.resize(start + width * rows[base].count * channels);
+      if (!weights)
+        paths.resize(packed.size() * (paired ? 2 : 1));
       if (paired)
         neighbor_weights.resize(packed.size());
       for (int lane = 0; lane < width && base + lane < outputs; ++lane) {
@@ -266,15 +285,24 @@ struct SpinProjection {
           const int t = by_output[row.output][k];
           const Term& term = layout.terms[t];
           const int input = transpose ? term.output : density_index(term);
-          for (int c = 0; c < layout.channels; ++c) {
-            const int offset = row.begin + (k * layout.channels + c) * width;
+          for (int c = 0; c < channels; ++c) {
+            const int offset = row.begin + (k * channels + c) * width;
+            float weight = term.coefficient;
+            if (weights)
+              weight *= weights[term.path * channels + c];
+            else
+              paths[offset * (paired ? 2 : 1)] = term.path;
             packed[offset] = {
               static_cast<unsigned short>(input),
               static_cast<short>(term.neighbor ? -1 : term.spin),
-              (paired && term.neighbor) ? 0.0f : weights[term.path * layout.channels + c] * term.coefficient};
+              (paired && term.neighbor) ? 0.0f : weight};
             if (paired && partner[t] >= 0) {
               const auto& neighbor = layout.terms[partner[t]];
-              neighbor_weights[offset] = weights[neighbor.path * layout.channels + c] * neighbor.coefficient;
+              neighbor_weights[offset] = neighbor.coefficient;
+              if (weights)
+                neighbor_weights[offset] *= weights[neighbor.path * channels + c];
+              else
+                paths[2 * offset + 1] = neighbor.path;
             }
           }
         }
