@@ -13,6 +13,8 @@
     along with GPUMD.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+// OpenAI Codex: longitudinal walls in native and specialized evaluation outputs.
+
 #include "force/nep_spin/spin_warp.cuh"
 #include "main_nep/common/nep_init.cuh"
 #include "main_nep/common/nep_io.cuh"
@@ -356,6 +358,14 @@ void NEP_Spin_Model::find_force(
       add_nep_zbl(zbl, dataset[device_id], neighbor[device_id]);
     }
     find_additional_force(para, dataset[device_id], device_id);
+    const auto& walls = spin_data_[device_id].spin_walls;
+    if (walls.size()) {
+      auto& spin = magnetic(data);
+      add_spin_wall<<<(data.N + 127) / 128, 128>>>(
+        data.N, data.type.data(), spin.spin.data(), walls.data(), data.energy.data(),
+        spin.mforce.data());
+      GPU_CHECK_KERNEL
+    }
   }
 }
 

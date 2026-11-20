@@ -23,9 +23,10 @@ other GPUs. Use a fresh build after changing compiler flags. All GPU checks
 run the actual executable through its input files and exported results.
 
 ```sh
-make -C src -j8 CUDA_ARCH=-arch=sm_70 nep
+make -C src -j8 CUDA_ARCH=-arch=sm_70 nep gpumd
 python tests_pytest/validate_main_nep_spin3_training.py --check-jit
 python tests_pytest/validate_spin_training_lifecycle.py
+python -m pytest --noconftest -q tests_pytest/test_spin_wall_runtime.py
 python tests_pytest/validate_response_file_runtime.py
 python tests_pytest/validate_spin_mforce_split.py --devices 1 \
   --output "$RESULTS/split-single"
@@ -34,6 +35,8 @@ python tests_pytest/validate_spin_mforce_split.py --devices 1 \
 Expose one allocated GPU for this section. `--check-jit` requires Linux/CUDA with
 `nvcc` available and successful structural and Spin layout specialization; a
 fallback is a failure. Omit that flag for native-only checks.
+The wall tests also require CUDA JIT for one prediction case; they check native
+and JIT prediction, both MD box paths, and auto bounds at export and restart.
 
 The main validator checks model IO, defaults, fixed-parameter energy, force,
 magnetic force and virial against 24 frozen FP64 cases. Universal ZBL remains
